@@ -1,0 +1,11 @@
+# Aurora image generation provider configuration.
+# API keys must never be committed. Set OPENAI_API_KEY in your shell.
+
+provider: openai
+model: gpt-image-1
+size: 1024x1024
+quality: standard
+background: transparent
+output_format: png
+number_of_images: 8
+prompt_version: openai-gpt-image-v1

@@ -18,6 +18,9 @@ class ImageResult:
     warnings: tuple[str, ...] = field(default_factory=tuple)
     errors: tuple[str, ...] = field(default_factory=tuple)
     metadata: dict[str, Any] = field(default_factory=dict)
+    estimated_cost: float | None = None
+    image_paths: tuple[str, ...] = field(default_factory=tuple)
+    prompt_version: str = "v1"
 
     def __post_init__(self) -> None:
         if not self.status.strip():
@@ -28,6 +31,8 @@ class ImageResult:
             raise ValueError("Generation time cannot be negative.")
         if self.cost_estimate < 0:
             raise ValueError("Cost estimate cannot be negative.")
+        if self.estimated_cost is not None and self.estimated_cost < 0:
+            raise ValueError("Estimated cost cannot be negative.")
 
         object.__setattr__(self, "status", self.status.strip().upper())
         object.__setattr__(self, "provider", self.provider.strip())
@@ -35,3 +40,9 @@ class ImageResult:
         object.__setattr__(self, "warnings", tuple(self.warnings))
         object.__setattr__(self, "errors", tuple(self.errors))
         object.__setattr__(self, "metadata", dict(self.metadata))
+        if self.estimated_cost is None:
+            object.__setattr__(self, "estimated_cost", self.cost_estimate)
+        if not self.image_paths:
+            object.__setattr__(self, "image_paths", tuple(self.generated_files))
+        else:
+            object.__setattr__(self, "image_paths", tuple(self.image_paths))

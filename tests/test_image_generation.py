@@ -116,7 +116,7 @@ class ImageGenerationTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             engine.select_provider("missing")
 
-    def test_openai_provider_is_placeholder_only(self) -> None:
+    def test_openai_provider_requires_configuration(self) -> None:
         provider = OpenAIImageProvider()
         request = ImageGenerationEngine.create_request(
             prompt_package=make_prompt_package(),
@@ -128,7 +128,8 @@ class ImageGenerationTest(unittest.TestCase):
             transparent_background=True,
         )
 
-        with self.assertRaises(NotImplementedError):
+        self.assertFalse(provider.health_check())
+        with self.assertRaises(RuntimeError):
             provider.generate_image(request)
 
     def test_image_generation_engine_saves_result_to_memory(self) -> None:
