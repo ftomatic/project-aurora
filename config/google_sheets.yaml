@@ -1,0 +1,13 @@
+# Aurora Command Center Google Sheets configuration.
+# Credentials are intentionally not committed.
+#
+# Set AURORA_GOOGLE_SERVICE_ACCOUNT_FILE to a local ignored JSON credentials file,
+# or set credentials_file below to an ignored local path such as:
+# config/google_credentials.local.json
+#
+# Set spreadsheet_id after the first workbook is created if you want Aurora to
+# reuse the same spreadsheet instead of creating a new one.
+
+workbook_name: Aurora Command Center
+spreadsheet_id:
+credentials_file:

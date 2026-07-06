@@ -46,6 +46,7 @@ class MemoryManager:
     IMAGE_RESULT_COLLECTION = "image_results"
     IMAGE_QA_COLLECTION = "image_qa"
     SEO_COLLECTION = "seo"
+    LISTING_COLLECTION = "listings"
 
     def __init__(self, storage: StorageInterface | None = None) -> None:
         self._storage = storage or CSVStorage()
@@ -201,6 +202,14 @@ class MemoryManager:
     ) -> dict[str, Any]:
         """Load an SEO package record."""
         return self._storage.load(self.SEO_COLLECTION, package_id)
+
+    def list_records(self, collection: str) -> tuple[str, ...]:
+        """Return stored record keys for a memory collection."""
+        return self._storage.list(collection)
+
+    def load_record(self, collection: str, record_id: str) -> dict[str, Any]:
+        """Load a stored record from any memory collection."""
+        return self._storage.load(collection, record_id)
 
     def memory_summary(self) -> MemorySummary:
         """Return a summary of stored Aurora memory."""

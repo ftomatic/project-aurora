@@ -29,6 +29,10 @@ logs/
 # Environment
 # ===========================
 .env
+config/google_credentials*.json
+config/google_token*.json
+config/service_account*.json
+credentials/
 
 # ===========================
 # Build
