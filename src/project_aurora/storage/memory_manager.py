@@ -45,6 +45,7 @@ class MemoryManager:
     PROMPT_PACKAGE_COLLECTION = "prompt_packages"
     IMAGE_RESULT_COLLECTION = "image_results"
     IMAGE_QA_COLLECTION = "image_qa"
+    SEO_COLLECTION = "seo"
 
     def __init__(self, storage: StorageInterface | None = None) -> None:
         self._storage = storage or CSVStorage()
@@ -180,6 +181,26 @@ class MemoryManager:
     ) -> dict[str, Any]:
         """Load image QA result records."""
         return self._storage.load(self.IMAGE_QA_COLLECTION, result_id)
+
+    def save_seo_package(
+        self,
+        seo_package: Any,
+        package_id: str = "latest",
+    ) -> str:
+        """Save an SEO package record."""
+        self._storage.save(
+            self.SEO_COLLECTION,
+            package_id,
+            self._to_record(seo_package),
+        )
+        return package_id
+
+    def load_seo_package(
+        self,
+        package_id: str = "latest",
+    ) -> dict[str, Any]:
+        """Load an SEO package record."""
+        return self._storage.load(self.SEO_COLLECTION, package_id)
 
     def memory_summary(self) -> MemorySummary:
         """Return a summary of stored Aurora memory."""
