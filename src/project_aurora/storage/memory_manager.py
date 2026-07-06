@@ -1,0 +1,177 @@
+"""Central memory manager for Aurora agents."""
+
+from __future__ import annotations
+
+from dataclasses import dataclass, fields, is_dataclass
+from datetime import datetime
+from pathlib import Path
+from typing import Any, Mapping
+
+from project_aurora.core.agent_result import AgentResult
+from project_aurora.storage.csv_storage import CSVStorage
+from project_aurora.storage.storage_interface import StorageInterface
+
+
+@dataclass(frozen=True, slots=True)
+class MemorySummary:
+    """Summary of Aurora's current local memory state."""
+
+    research_reports_stored: int
+    production_plans: int
+    last_production: str
+    memory_health: str
+
+    def render(self) -> str:
+        """Return a plain-text memory summary."""
+        return "\n\n".join(
+            (
+                "AURORA MEMORY",
+                "Research Reports Stored\n"
+                f"{self.research_reports_stored}",
+                f"Production Plans\n{self.production_plans}",
+                f"Last Production\n{self.last_production}",
+                f"Memory Health\n{self.memory_health}",
+            )
+        )
+
+
+class MemoryManager:
+    """Single entry point for Aurora operational reads and writes."""
+
+    RESEARCH_COLLECTION = "research_reports"
+    STRATEGY_COLLECTION = "production_plans"
+    AGENT_RESULT_COLLECTION = "agent_results"
+    PRODUCTION_QUEUE_COLLECTION = "production_queue"
+
+    def __init__(self, storage: StorageInterface | None = None) -> None:
+        self._storage = storage or CSVStorage()
+
+    def save_agent_result(
+        self,
+        result: AgentResult,
+        result_id: str | None = None,
+    ) -> str:
+        """Save an orchestrated agent result and return its memory key."""
+        key = result_id or self._timestamped_key(result.agent_name)
+        self._storage.save(
+            self.AGENT_RESULT_COLLECTION,
+            key,
+            self._to_record(result),
+        )
+        return key
+
+    def save_research(
+        self,
+        research: Any,
+        report_id: str = "latest",
+    ) -> str:
+        """Save a Morning Research output record."""
+        self._storage.save(
+            self.RESEARCH_COLLECTION,
+            report_id,
+            self._to_record(research),
+        )
+        return report_id
+
+    def load_research(self, report_id: str = "latest") -> dict[str, Any]:
+        """Load a stored Morning Research output record."""
+        return self._storage.load(self.RESEARCH_COLLECTION, report_id)
+
+    def save_strategy(
+        self,
+        strategy: Any,
+        plan_id: str = "latest",
+    ) -> str:
+        """Save a Product Strategy output record."""
+        self._storage.save(
+            self.STRATEGY_COLLECTION,
+            plan_id,
+            self._to_record(strategy),
+        )
+        return plan_id
+
+    def load_strategy(self, plan_id: str = "latest") -> dict[str, Any]:
+        """Load a stored Product Strategy output record."""
+        return self._storage.load(self.STRATEGY_COLLECTION, plan_id)
+
+    def save_production_queue(
+        self,
+        queue_items: tuple[str, ...] | list[str],
+        queue_id: str = "latest",
+    ) -> str:
+        """Save the current production queue."""
+        self._storage.save(
+            self.PRODUCTION_QUEUE_COLLECTION,
+            queue_id,
+            {"items": list(queue_items)},
+        )
+        return queue_id
+
+    def load_production_queue(
+        self,
+        queue_id: str = "latest",
+    ) -> dict[str, Any]:
+        """Load the current production queue."""
+        return self._storage.load(self.PRODUCTION_QUEUE_COLLECTION, queue_id)
+
+    def memory_summary(self) -> MemorySummary:
+        """Return a summary of stored Aurora memory."""
+        research_count = len(self._storage.list(self.RESEARCH_COLLECTION))
+        plan_count = len(self._storage.list(self.STRATEGY_COLLECTION))
+        last_production = self._last_production_name()
+        memory_health = "Healthy"
+        if research_count == 0 or plan_count == 0:
+            memory_health = "Needs Data"
+
+        return MemorySummary(
+            research_reports_stored=research_count,
+            production_plans=plan_count,
+            last_production=last_production,
+            memory_health=memory_health,
+        )
+
+    def _last_production_name(self) -> str:
+        if not self._storage.exists(self.STRATEGY_COLLECTION, "latest"):
+            return "None"
+
+        latest_strategy = self.load_strategy()
+        collection_name = latest_strategy.get("collection_name")
+        if isinstance(collection_name, str) and collection_name:
+            return collection_name
+        selected_product = latest_strategy.get("selected_product")
+        if isinstance(selected_product, str) and selected_product:
+            return selected_product
+        return "Unknown"
+
+    @classmethod
+    def _timestamped_key(cls, name: str) -> str:
+        normalized_name = name.casefold().replace(" ", "_")
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+        return f"{normalized_name}_{timestamp}"
+
+    @classmethod
+    def _to_record(cls, value: Any) -> dict[str, Any]:
+        plain_value = cls._to_plain_data(value)
+        if isinstance(plain_value, dict):
+            return plain_value
+        return {"value": plain_value}
+
+    @classmethod
+    def _to_plain_data(cls, value: Any) -> Any:
+        if is_dataclass(value) and not isinstance(value, type):
+            return {
+                field.name: cls._to_plain_data(getattr(value, field.name))
+                for field in fields(value)
+            }
+        if isinstance(value, Mapping):
+            return {
+                str(key): cls._to_plain_data(item)
+                for key, item in value.items()
+            }
+        if isinstance(value, tuple | list | set | frozenset):
+            return [cls._to_plain_data(item) for item in value]
+        if isinstance(value, datetime):
+            return value.isoformat()
+        if isinstance(value, Path):
+            return str(value)
+        return value
