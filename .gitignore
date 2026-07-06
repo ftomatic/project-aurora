@@ -36,3 +36,8 @@ logs/
 dist/
 build/
 *.egg-info/
+
+# ===========================
+# Aurora runtime data
+# ===========================
+data/aurora/**/*.json
