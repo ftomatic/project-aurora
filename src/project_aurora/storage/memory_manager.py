@@ -42,6 +42,7 @@ class MemoryManager:
     STRATEGY_COLLECTION = "production_plans"
     AGENT_RESULT_COLLECTION = "agent_results"
     PRODUCTION_QUEUE_COLLECTION = "production_queue"
+    PROMPT_PACKAGE_COLLECTION = "prompt_packages"
 
     def __init__(self, storage: StorageInterface | None = None) -> None:
         self._storage = storage or CSVStorage()
@@ -113,6 +114,30 @@ class MemoryManager:
     ) -> dict[str, Any]:
         """Load the current production queue."""
         return self._storage.load(self.PRODUCTION_QUEUE_COLLECTION, queue_id)
+
+    def save_prompt_package(
+        self,
+        prompt_package: Any,
+        package_id: str = "latest",
+    ) -> str:
+        """Save a prompt package record."""
+        self._storage.save(
+            self.PROMPT_PACKAGE_COLLECTION,
+            package_id,
+            self._to_record(prompt_package),
+        )
+        return package_id
+
+    def load_prompt_package(
+        self,
+        package_id: str = "latest",
+    ) -> dict[str, Any]:
+        """Load a prompt package record."""
+        return self._storage.load(self.PROMPT_PACKAGE_COLLECTION, package_id)
+
+    def list_prompt_packages(self) -> tuple[str, ...]:
+        """Return stored prompt package keys."""
+        return self._storage.list(self.PROMPT_PACKAGE_COLLECTION)
 
     def memory_summary(self) -> MemorySummary:
         """Return a summary of stored Aurora memory."""
