@@ -32,6 +32,8 @@ logs/
 config/google_credentials*.json
 config/google_token*.json
 config/service_account*.json
+config/etsy_credentials*.json
+config/etsy_token*.json
 credentials/
 
 # ===========================

@@ -1,0 +1,18 @@
+# Aurora Etsy draft integration configuration.
+# Secrets must never be committed.
+# Use environment variables:
+# ETSY_SHOP_ID
+# ETSY_CLIENT_ID
+# ETSY_ACCESS_TOKEN
+#
+# Sprint 16 defaults to mock mode so the Etsy API is not called locally.
+
+mode: mock
+shop_id:
+client_id:
+access_token:
+api_base_url: https://openapi.etsy.com/v3/application
+default_price: 7.99
+default_quantity: 999
+taxonomy_id:
+processing_profile_id:
