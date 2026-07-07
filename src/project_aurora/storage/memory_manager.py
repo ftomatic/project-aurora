@@ -43,6 +43,7 @@ class MemoryManager:
     AGENT_RESULT_COLLECTION = "agent_results"
     PRODUCTION_QUEUE_COLLECTION = "production_queue"
     PROMPT_PACKAGE_COLLECTION = "prompt_packages"
+    PROMPT_RECIPE_COLLECTION = "prompt_recipes"
     IMAGE_RESULT_COLLECTION = "image_results"
     IMAGE_QA_COLLECTION = "image_qa"
     SEO_COLLECTION = "seo"
@@ -143,6 +144,26 @@ class MemoryManager:
     def list_prompt_packages(self) -> tuple[str, ...]:
         """Return stored prompt package keys."""
         return self._storage.list(self.PROMPT_PACKAGE_COLLECTION)
+
+    def save_prompt_recipe(
+        self,
+        prompt_recipe: Any,
+        recipe_id: str = "latest",
+    ) -> str:
+        """Save a Prompt Factory 2.0 recipe record."""
+        self._storage.save(
+            self.PROMPT_RECIPE_COLLECTION,
+            recipe_id,
+            self._to_record(prompt_recipe),
+        )
+        return recipe_id
+
+    def load_prompt_recipe(
+        self,
+        recipe_id: str = "latest",
+    ) -> dict[str, Any]:
+        """Load a Prompt Factory 2.0 recipe record."""
+        return self._storage.load(self.PROMPT_RECIPE_COLLECTION, recipe_id)
 
     def save_image_result(
         self,
