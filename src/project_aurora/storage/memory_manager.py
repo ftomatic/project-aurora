@@ -44,6 +44,7 @@ class MemoryManager:
     PRODUCTION_QUEUE_COLLECTION = "production_queue"
     PROMPT_PACKAGE_COLLECTION = "prompt_packages"
     PROMPT_RECIPE_COLLECTION = "prompt_recipes"
+    STYLE_PROFILE_COLLECTION = "style_profiles"
     IMAGE_RESULT_COLLECTION = "image_results"
     IMAGE_QA_COLLECTION = "image_qa"
     SEO_COLLECTION = "seo"
@@ -164,6 +165,27 @@ class MemoryManager:
     ) -> dict[str, Any]:
         """Load a Prompt Factory 2.0 recipe record."""
         return self._storage.load(self.PROMPT_RECIPE_COLLECTION, recipe_id)
+
+    def save_style_profile(
+        self,
+        style_profile: Any,
+        style_id: str,
+    ) -> str:
+        """Save a reusable style profile."""
+        self._storage.save(
+            self.STYLE_PROFILE_COLLECTION,
+            style_id,
+            self._to_record(style_profile),
+        )
+        return style_id
+
+    def load_style_profile(self, style_id: str) -> dict[str, Any]:
+        """Load a reusable style profile."""
+        return self._storage.load(self.STYLE_PROFILE_COLLECTION, style_id)
+
+    def list_style_profiles(self) -> tuple[str, ...]:
+        """Return stored style profile ids."""
+        return self._storage.list(self.STYLE_PROFILE_COLLECTION)
 
     def save_image_result(
         self,
