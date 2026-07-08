@@ -37,14 +37,14 @@ class EtsyClient:
                 },
             )
 
-        missing = self._config.validate_for_api()
+        missing = self._config.validate_for_api(is_digital=payload.is_digital)
         if missing:
             return EtsyDraftResult(
                 status="CONFIGURATION_REQUIRED",
                 etsy_listing_id=None,
                 draft_url=None,
                 errors=(f"Missing Etsy configuration: {', '.join(missing)}.",),
-                metadata={"api_called": False},
+                metadata={"api_called": False, "missing": missing},
             )
 
         return self._post_draft_listing(payload)

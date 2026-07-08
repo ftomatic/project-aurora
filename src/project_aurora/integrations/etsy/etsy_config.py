@@ -48,9 +48,12 @@ class EtsyConfig:
             ),
             default_price=float(values.get("default_price", "7.99")),
             default_quantity=int(values.get("default_quantity", "999")),
-            taxonomy_id=_optional_int(values.get("taxonomy_id")),
+            taxonomy_id=_optional_int(
+                os.getenv("ETSY_TAXONOMY_ID") or values.get("taxonomy_id")
+            ),
             processing_profile_id=_optional_int(
-                values.get("processing_profile_id")
+                os.getenv("ETSY_PROCESSING_PROFILE_ID")
+                or values.get("processing_profile_id")
             ),
         )
 
@@ -59,7 +62,7 @@ class EtsyConfig:
         """Return whether Etsy API calls should be skipped."""
         return self.mode.casefold() in {"mock", "sandbox"}
 
-    def validate_for_api(self) -> tuple[str, ...]:
+    def validate_for_api(self, is_digital: bool = True) -> tuple[str, ...]:
         """Return missing configuration fields for real Etsy API calls."""
         missing: list[str] = []
         if not self.shop_id:
@@ -68,6 +71,10 @@ class EtsyConfig:
             missing.append("ETSY_CLIENT_ID")
         if not self.access_token:
             missing.append("ETSY_ACCESS_TOKEN")
+        if self.taxonomy_id is None:
+            missing.append("taxonomy_id")
+        if not is_digital and self.processing_profile_id is None:
+            missing.append("processing_profile_id")
         return tuple(missing)
 
 

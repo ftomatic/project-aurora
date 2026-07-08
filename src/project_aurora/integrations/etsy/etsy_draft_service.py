@@ -65,6 +65,28 @@ class EtsyDraftService:
             self._save_result(result)
             return result
 
+        if not self._config.is_mock_mode:
+            missing = self._config.validate_for_api(
+                is_digital=payload.is_digital
+            )
+            if missing:
+                result = EtsyDraftResult(
+                    status="CONFIGURATION_REQUIRED",
+                    etsy_listing_id=None,
+                    draft_url=None,
+                    errors=(
+                        "Missing Etsy configuration: "
+                        f"{', '.join(missing)}.",
+                    ),
+                    metadata={
+                        "api_called": False,
+                        "missing": missing,
+                        "mode": self._config.mode,
+                    },
+                )
+                self._save_result(result)
+                return result
+
         result = self._client.create_draft_listing(payload)
         self._save_result(result)
         return result

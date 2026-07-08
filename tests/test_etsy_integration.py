@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 import sys
 import tempfile
 import unittest
@@ -132,6 +133,71 @@ class EtsyIntegrationTest(unittest.TestCase):
         self.assertEqual(result.status, "CONFIGURATION_REQUIRED")
         self.assertTrue(result.errors)
         self.assertFalse(result.metadata["api_called"])
+        self.assertIn("taxonomy_id", result.metadata["missing"])
+
+    def test_live_digital_listing_does_not_require_processing_profile(self) -> None:
+        config = EtsyConfig(
+            mode="live",
+            shop_id="shop",
+            client_id="client",
+            access_token="token",
+            taxonomy_id=123,
+            processing_profile_id=None,
+        )
+
+        self.assertEqual(config.validate_for_api(is_digital=True), ())
+
+    def test_live_physical_listing_requires_processing_profile(self) -> None:
+        config = EtsyConfig(
+            mode="live",
+            shop_id="shop",
+            client_id="client",
+            access_token="token",
+            taxonomy_id=123,
+            processing_profile_id=None,
+        )
+
+        self.assertEqual(
+            config.validate_for_api(is_digital=False),
+            ("processing_profile_id",),
+        )
+
+    def test_draft_service_stops_before_client_when_live_config_missing(self) -> None:
+        class ExplodingClient(EtsyClient):
+            def create_draft_listing(self, payload):  # type: ignore[no-untyped-def]
+                raise AssertionError("Etsy client should not be called.")
+
+        result = EtsyDraftService(
+            config=EtsyConfig(mode="live"),
+            memory=self.memory,
+            client=ExplodingClient(EtsyConfig(mode="live")),
+        ).create_draft(
+            listing_package=make_listing_package(),
+            seo_package=self.seo_package,
+        )
+
+        self.assertEqual(result.status, "CONFIGURATION_REQUIRED")
+        self.assertFalse(result.metadata["api_called"])
+
+    def test_physical_payload_validation_requires_processing_profile(self) -> None:
+        config = EtsyConfig(
+            mode="live",
+            shop_id="shop",
+            client_id="client",
+            access_token="token",
+            taxonomy_id=123,
+        )
+        payload = EtsyListingMapper().map_to_draft(
+            listing_package=make_listing_package(),
+            seo_package=self.seo_package,
+            config=config,
+        )
+        physical_payload = replace(payload, is_digital=False)
+
+        self.assertEqual(
+            config.validate_for_api(is_digital=physical_payload.is_digital),
+            ("processing_profile_id",),
+        )
 
 
 if __name__ == "__main__":

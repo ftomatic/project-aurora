@@ -51,11 +51,24 @@ def main() -> None:
     )
     api_called = bool(result.metadata.get("api_called"))
     validation = "PASS" if not result.errors else "FAIL"
+    missing = tuple(result.metadata.get("missing", ()))
 
     print("ETSY DRAFT SERVICE")
     print("")
     print("Mode")
-    print("Mock" if config.is_mock_mode else "Live Draft")
+    print("Mock" if config.is_mock_mode else "Live")
+    if result.status == "CONFIGURATION_REQUIRED" and not config.is_mock_mode:
+        print("")
+        print("Status")
+        print(result.status)
+        print("")
+        print("Missing")
+        for field_name in missing:
+            print(field_name)
+        print("")
+        print("Etsy API")
+        print("Not called")
+        return
     print("")
     print("Listing")
     print(listing_package.product_name)
