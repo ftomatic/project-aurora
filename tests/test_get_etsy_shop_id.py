@@ -17,6 +17,7 @@ from scripts.get_etsy_shop_id import (  # noqa: E402
     get_authenticated_shop,
     load_credentials,
 )
+from project_aurora.integrations.etsy.etsy_config import EtsyConfig  # noqa: E402
 
 
 class FakeResponse:
@@ -39,11 +40,23 @@ class EtsyShopLookupTest(unittest.TestCase):
             os.environ,
             {
                 "ETSY_CLIENT_ID": "client",
+                "ETSY_SHARED_SECRET": "secret",
                 "ETSY_ACCESS_TOKEN": "token",
             },
             clear=True,
         ):
-            self.assertEqual(load_credentials(), ("client", "token"))
+            self.assertEqual(
+                load_credentials(),
+                EtsyConfig(
+                    mode="live",
+                    client_id="client",
+                    shared_secret="secret",
+                    access_token="token",
+                    api_base_url=(
+                        "https://openapi.etsy.com/v3/application"
+                    ),
+                ),
+            )
 
     def test_missing_credentials_raise_clear_error(self) -> None:
         with patch.dict(os.environ, {}, clear=True):
@@ -51,6 +64,7 @@ class EtsyShopLookupTest(unittest.TestCase):
                 load_credentials()
 
         self.assertIn("ETSY_CLIENT_ID", str(context.exception))
+        self.assertIn("ETSY_SHARED_SECRET", str(context.exception))
         self.assertIn("ETSY_ACCESS_TOKEN", str(context.exception))
 
     def test_get_authenticated_shop_from_user_then_shop_endpoint(self) -> None:
@@ -75,6 +89,7 @@ class EtsyShopLookupTest(unittest.TestCase):
 
         shop = get_authenticated_shop(
             client_id="client",
+            shared_secret="secret",
             access_token="token",
             api_base_url="https://example.test/v3/application",
             urlopen=fake_urlopen,
@@ -87,7 +102,7 @@ class EtsyShopLookupTest(unittest.TestCase):
         self.assertEqual(len(calls), 2)
         self.assertIn("/users/me", calls[0][0].full_url)
         self.assertIn("/users/123/shops", calls[1][0].full_url)
-        self.assertEqual(calls[0][0].headers["X-api-key"], "client")
+        self.assertEqual(calls[0][0].headers["X-api-key"], "client:secret")
         self.assertEqual(calls[0][0].headers["Authorization"], "Bearer token")
 
     def test_get_authenticated_shop_direct_payload(self) -> None:
@@ -101,6 +116,7 @@ class EtsyShopLookupTest(unittest.TestCase):
 
         shop = get_authenticated_shop(
             client_id="client",
+            shared_secret="secret",
             access_token="token",
             urlopen=fake_urlopen,
         )

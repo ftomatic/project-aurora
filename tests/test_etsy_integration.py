@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from dataclasses import replace
 import sys
 import tempfile
@@ -37,6 +38,20 @@ PRODUCT_DATA = {
     "product_type": "Party Printable Bundle",
     "target_buyer": "Parents planning girls' summer birthday parties",
 }
+
+
+class FakeResponse:
+    def __init__(self, payload: dict[str, object]) -> None:
+        self._payload = payload
+
+    def __enter__(self) -> "FakeResponse":
+        return self
+
+    def __exit__(self, *args: object) -> None:
+        return None
+
+    def read(self) -> bytes:
+        return json.dumps(self._payload).encode("utf-8")
 
 
 def make_listing_package() -> ListingPackage:
@@ -133,6 +148,7 @@ class EtsyIntegrationTest(unittest.TestCase):
         self.assertEqual(result.status, "CONFIGURATION_REQUIRED")
         self.assertTrue(result.errors)
         self.assertFalse(result.metadata["api_called"])
+        self.assertIn("ETSY_SHARED_SECRET", result.metadata["missing"])
         self.assertIn("taxonomy_id", result.metadata["missing"])
 
     def test_live_digital_listing_does_not_require_processing_profile(self) -> None:
@@ -140,6 +156,7 @@ class EtsyIntegrationTest(unittest.TestCase):
             mode="live",
             shop_id="shop",
             client_id="client",
+            shared_secret="secret",
             access_token="token",
             taxonomy_id=123,
             processing_profile_id=None,
@@ -152,6 +169,7 @@ class EtsyIntegrationTest(unittest.TestCase):
             mode="live",
             shop_id="shop",
             client_id="client",
+            shared_secret="secret",
             access_token="token",
             taxonomy_id=123,
             processing_profile_id=None,
@@ -184,6 +202,7 @@ class EtsyIntegrationTest(unittest.TestCase):
             mode="live",
             shop_id="shop",
             client_id="client",
+            shared_secret="secret",
             access_token="token",
             taxonomy_id=123,
         )
@@ -198,6 +217,45 @@ class EtsyIntegrationTest(unittest.TestCase):
             config.validate_for_api(is_digital=physical_payload.is_digital),
             ("processing_profile_id",),
         )
+
+    def test_live_client_sends_keystring_and_shared_secret_header(self) -> None:
+        config = EtsyConfig(
+            mode="live",
+            shop_id="shop",
+            client_id="fake_keystring",
+            shared_secret="fake_shared_secret",
+            access_token="fake_access_token",
+            taxonomy_id=123,
+            api_base_url="https://example.test/v3/application",
+        )
+        payload = EtsyListingMapper().map_to_draft(
+            listing_package=make_listing_package(),
+            seo_package=self.seo_package,
+            config=config,
+        )
+        calls = []
+
+        def fake_urlopen(api_request, timeout: int):  # type: ignore[no-untyped-def]
+            calls.append((api_request, timeout))
+            return FakeResponse({"listing_id": 987654})
+
+        result = EtsyClient(
+            config=config,
+            urlopen=fake_urlopen,
+        ).create_draft_listing(payload)
+
+        self.assertEqual(result.status, "DRAFT_CREATED")
+        self.assertEqual(len(calls), 1)
+        headers = calls[0][0].headers
+        self.assertEqual(
+            headers["X-api-key"],
+            "fake_keystring:fake_shared_secret",
+        )
+        self.assertEqual(
+            headers["Authorization"],
+            "Bearer fake_access_token",
+        )
+        self.assertIn("/shops/shop/listings", calls[0][0].full_url)
 
 
 if __name__ == "__main__":

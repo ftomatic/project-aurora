@@ -14,6 +14,7 @@ class EtsyConfig:
     mode: str = "mock"
     shop_id: str | None = None
     client_id: str | None = None
+    shared_secret: str | None = None
     access_token: str | None = None
     api_base_url: str = "https://openapi.etsy.com/v3/application"
     default_price: float = 7.99
@@ -38,6 +39,9 @@ class EtsyConfig:
             shop_id=os.getenv("ETSY_SHOP_ID") or values.get("shop_id") or None,
             client_id=os.getenv("ETSY_CLIENT_ID")
             or values.get("client_id")
+            or None,
+            shared_secret=os.getenv("ETSY_SHARED_SECRET")
+            or values.get("shared_secret")
             or None,
             access_token=os.getenv("ETSY_ACCESS_TOKEN")
             or values.get("access_token")
@@ -69,6 +73,8 @@ class EtsyConfig:
             missing.append("ETSY_SHOP_ID")
         if not self.client_id:
             missing.append("ETSY_CLIENT_ID")
+        if not self.shared_secret:
+            missing.append("ETSY_SHARED_SECRET")
         if not self.access_token:
             missing.append("ETSY_ACCESS_TOKEN")
         if self.taxonomy_id is None:

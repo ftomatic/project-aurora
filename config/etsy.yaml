@@ -3,6 +3,7 @@
 # Use environment variables:
 # ETSY_SHOP_ID
 # ETSY_CLIENT_ID
+# ETSY_SHARED_SECRET
 # ETSY_ACCESS_TOKEN
 #
 # Sprint 16 defaults to mock mode so the Etsy API is not called locally.
@@ -10,6 +11,7 @@
 mode: mock
 shop_id:
 client_id:
+shared_secret:
 access_token:
 api_base_url: https://openapi.etsy.com/v3/application
 default_price: 7.99

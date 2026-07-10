@@ -2,14 +2,19 @@
 
 from __future__ import annotations
 
-import json
 import os
 import sys
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Callable
 from urllib import request
-from urllib.error import HTTPError, URLError
 
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+SRC_PATH = PROJECT_ROOT / "src"
+sys.path.insert(0, str(SRC_PATH))
+
+from project_aurora.integrations.etsy.etsy_client import EtsyClient  # noqa: E402
+from project_aurora.integrations.etsy.etsy_config import EtsyConfig  # noqa: E402
 
 API_BASE_URL = "https://openapi.etsy.com/v3/application"
 
@@ -22,35 +27,48 @@ class EtsyShop:
     shop_id: int
 
 
-def load_credentials() -> tuple[str, str]:
+def load_credentials() -> EtsyConfig:
     """Load Etsy credentials from environment variables."""
     client_id = os.getenv("ETSY_CLIENT_ID")
+    shared_secret = os.getenv("ETSY_SHARED_SECRET")
     access_token = os.getenv("ETSY_ACCESS_TOKEN")
     missing = []
     if not client_id:
         missing.append("ETSY_CLIENT_ID")
+    if not shared_secret:
+        missing.append("ETSY_SHARED_SECRET")
     if not access_token:
         missing.append("ETSY_ACCESS_TOKEN")
     if missing:
         raise RuntimeError(
             "Missing required environment variables: " + ", ".join(missing)
         )
-    return str(client_id), str(access_token)
+    return EtsyConfig(
+        mode="live",
+        client_id=str(client_id),
+        shared_secret=str(shared_secret),
+        access_token=str(access_token),
+        api_base_url=API_BASE_URL,
+    )
 
 
 def get_authenticated_shop(
     client_id: str,
+    shared_secret: str,
     access_token: str,
     api_base_url: str = API_BASE_URL,
     urlopen: Callable[..., Any] = request.urlopen,
 ) -> EtsyShop:
     """Return the shop owned by the authenticated Etsy user."""
-    me = _get_json(
-        url=f"{api_base_url}/users/me",
+    config = EtsyConfig(
+        mode="live",
         client_id=client_id,
+        shared_secret=shared_secret,
         access_token=access_token,
-        urlopen=urlopen,
+        api_base_url=api_base_url,
     )
+    client = EtsyClient(config=config, urlopen=urlopen)
+    me = client.get_json("/users/me")
     direct_shop = _shop_from_payload(me)
     if direct_shop is not None:
         return direct_shop
@@ -59,47 +77,11 @@ def get_authenticated_shop(
     if user_id is None:
         raise RuntimeError("Etsy user response did not include user_id.")
 
-    shop_payload = _get_json(
-        url=f"{api_base_url}/users/{user_id}/shops",
-        client_id=client_id,
-        access_token=access_token,
-        urlopen=urlopen,
-    )
+    shop_payload = client.get_json(f"/users/{user_id}/shops")
     shop = _shop_from_payload(shop_payload)
     if shop is None:
         raise RuntimeError("Etsy shop response did not include a shop.")
     return shop
-
-
-def _get_json(
-    url: str,
-    client_id: str,
-    access_token: str,
-    urlopen: Callable[..., Any],
-) -> dict[str, Any]:
-    api_request = request.Request(
-        url,
-        headers={
-            "x-api-key": client_id,
-            "Authorization": f"Bearer {access_token}",
-        },
-        method="GET",
-    )
-    try:
-        with urlopen(api_request, timeout=30) as response:
-            raw_body = response.read().decode("utf-8")
-    except HTTPError as error:
-        detail = error.read().decode("utf-8", errors="replace")
-        raise RuntimeError(
-            f"Etsy API request failed with HTTP {error.code}: {detail}"
-        ) from error
-    except URLError as error:
-        raise RuntimeError(f"Etsy API request failed: {error.reason}") from error
-
-    payload = json.loads(raw_body)
-    if not isinstance(payload, dict):
-        raise RuntimeError("Etsy API response was not a JSON object.")
-    return payload
 
 
 def _shop_from_payload(payload: dict[str, Any]) -> EtsyShop | None:
@@ -125,11 +107,20 @@ def _shop_from_payload(payload: dict[str, Any]) -> EtsyShop | None:
 def main() -> None:
     """Print the authenticated user's Etsy shop name and id."""
     try:
-        client_id, access_token = load_credentials()
-        shop = get_authenticated_shop(
-            client_id=client_id,
-            access_token=access_token,
-        )
+        config = load_credentials()
+        client = EtsyClient(config=config)
+        me = client.get_json("/users/me")
+        shop = _shop_from_payload(me)
+        if shop is None:
+            user_id = me.get("user_id") or me.get("userId")
+            if user_id is None:
+                raise RuntimeError(
+                    "Etsy user response did not include user_id."
+                )
+            shop_payload = client.get_json(f"/users/{user_id}/shops")
+            shop = _shop_from_payload(shop_payload)
+        if shop is None:
+            raise RuntimeError("Etsy shop response did not include a shop.")
     except RuntimeError as error:
         print("Error")
         print(error)
