@@ -108,15 +108,23 @@ def exchange_code_for_token(
     access_token = token_data.get("access_token")
     if not isinstance(access_token, str) or not access_token:
         raise RuntimeError("Etsy token response did not include access_token.")
+    refresh_token = token_data.get("refresh_token")
+    if not isinstance(refresh_token, str) or not refresh_token:
+        raise RuntimeError("Etsy token response did not include refresh_token.")
     return token_data
 
 
-def print_export_commands(client_id: str, access_token: str) -> None:
+def print_export_commands(
+    client_id: str,
+    access_token: str,
+    refresh_token: str,
+) -> None:
     """Print shell export commands without writing secrets to disk."""
     print("")
     print("Environment exports")
     print("-------------------")
     print(f'export ETSY_ACCESS_TOKEN="{access_token}"')
+    print(f'export ETSY_REFRESH_TOKEN="{refresh_token}"')
     print(f'export ETSY_CLIENT_ID="{client_id}"')
 
 
@@ -184,6 +192,7 @@ def main() -> None:
     print_export_commands(
         client_id=config.client_id,
         access_token=str(token_data["access_token"]),
+        refresh_token=str(token_data["refresh_token"]),
     )
 
 

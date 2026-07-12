@@ -5,6 +5,8 @@ from __future__ import annotations
 import json
 import sys
 import unittest
+from contextlib import redirect_stdout
+from io import StringIO
 from pathlib import Path
 from urllib import parse
 
@@ -16,6 +18,7 @@ from scripts.etsy_oauth_helper import (  # noqa: E402
     build_authorization_url,
     exchange_code_for_token,
     generate_pkce_pair,
+    print_export_commands,
 )
 
 
@@ -77,6 +80,7 @@ class EtsyOAuthHelperTest(unittest.TestCase):
         )
 
         self.assertEqual(token_data["access_token"], "token")
+        self.assertEqual(token_data["refresh_token"], "refresh")
         self.assertEqual(len(calls), 1)
         request_body = calls[0][0].data.decode("utf-8")
         parsed_body = parse.parse_qs(request_body)
@@ -98,6 +102,38 @@ class EtsyOAuthHelperTest(unittest.TestCase):
                 code_verifier="verifier",
                 urlopen=fake_urlopen,
             )
+
+    def test_exchange_requires_refresh_token(self) -> None:
+        def fake_urlopen(token_request, timeout: int):  # type: ignore[no-untyped-def]
+            return FakeResponse({"access_token": "token"})
+
+        with self.assertRaises(RuntimeError) as context:
+            exchange_code_for_token(
+                config=EtsyOAuthConfig(
+                    client_id="client-id",
+                    redirect_uri="http://localhost:8080/callback",
+                ),
+                code="auth-code",
+                code_verifier="verifier",
+                urlopen=fake_urlopen,
+            )
+
+        self.assertIn("refresh_token", str(context.exception))
+
+    def test_print_export_commands_includes_refresh_token(self) -> None:
+        output = StringIO()
+
+        with redirect_stdout(output):
+            print_export_commands(
+                client_id="client-id",
+                access_token="access-token",
+                refresh_token="refresh-token",
+            )
+
+        lines = output.getvalue().splitlines()
+        self.assertIn('export ETSY_ACCESS_TOKEN="access-token"', lines)
+        self.assertIn('export ETSY_REFRESH_TOKEN="refresh-token"', lines)
+        self.assertIn('export ETSY_CLIENT_ID="client-id"', lines)
 
 
 if __name__ == "__main__":
