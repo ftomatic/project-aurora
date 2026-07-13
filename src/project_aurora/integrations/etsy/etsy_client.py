@@ -81,9 +81,10 @@ class EtsyClient:
             raise RuntimeError(f"Digital file is empty: {file_path}")
 
         body, content_type = self._build_multipart_body(
-            fields={},
+            fields={"name": file_path.name},
             file_field="file",
             file_path=file_path,
+            file_content_type="application/zip",
         )
         api_request = request.Request(
             self._build_url(
@@ -218,6 +219,7 @@ class EtsyClient:
         fields: dict[str, str],
         file_field: str,
         file_path: Path,
+        file_content_type: str | None = None,
     ) -> tuple[bytes, str]:
         boundary = f"aurora-{uuid.uuid4().hex}"
         lines: list[bytes] = []
@@ -233,7 +235,7 @@ class EtsyClient:
                 )
             )
 
-        content_type = (
+        content_type = file_content_type or (
             mimetypes.guess_type(file_path.name)[0] or "application/octet-stream"
         )
         lines.extend(

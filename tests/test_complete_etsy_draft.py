@@ -24,6 +24,15 @@ from project_aurora.integrations.etsy.etsy_listing_mapper import (  # noqa: E402
     EtsyDraftListingPayload,
 )
 from project_aurora.integrations.etsy.etsy_result import EtsyDraftResult  # noqa: E402
+from project_aurora.integrations.etsy.etsy_digital_file_service import (  # noqa: E402
+    EtsyDigitalFileService,
+)
+from project_aurora.integrations.etsy.etsy_result import (  # noqa: E402
+    EtsyCompleteDraftResult,
+)
+from project_aurora.production.digital_download_builder import (  # noqa: E402
+    DIGITAL_DOWNLOAD_FILENAME,
+)
 from project_aurora.seo.description_builder import (  # noqa: E402
     RAINBOW_MILK_STUDIO_DESCRIPTION,
 )
@@ -222,7 +231,7 @@ class CompleteEtsyDraftTest(unittest.TestCase):
         self.assertEqual(client.draft_calls, 0)
 
     def test_client_uploads_digital_file_as_multipart(self) -> None:
-        zip_path = self.downloads_dir / "download.zip"
+        zip_path = self.downloads_dir / DIGITAL_DOWNLOAD_FILENAME
         self.downloads_dir.mkdir()
         zip_path.write_bytes(b"zip-bytes")
         calls = []
@@ -243,7 +252,64 @@ class CompleteEtsyDraftTest(unittest.TestCase):
         self.assertEqual(len(calls), 1)
         self.assertIn("/shops/shop/listings/123456789/files", calls[0].full_url)
         self.assertIn("multipart/form-data", calls[0].headers["Content-type"])
-        self.assertIn(b'name="file"; filename="download.zip"', calls[0].data)
+        self.assertIn(
+            b'name="file"; filename="Summer_Strawberry_Birthday_Collection.zip"',
+            calls[0].data,
+        )
+        self.assertIn(
+            b'Content-Disposition: form-data; name="name"',
+            calls[0].data,
+        )
+        self.assertIn(b"Summer_Strawberry_Birthday_Collection.zip", calls[0].data)
+        self.assertIn(b"Content-Type: application/zip", calls[0].data)
+        self.assertIn(b"zip-bytes", calls[0].data)
+
+    def test_digital_file_upload_service_does_not_create_draft(self) -> None:
+        zip_path = self.downloads_dir / DIGITAL_DOWNLOAD_FILENAME
+        self.downloads_dir.mkdir()
+        zip_path.write_bytes(b"zip-bytes")
+        draft_calls = []
+
+        class NoDraftClient(FakeCompleteEtsyClient):
+            def create_draft_listing(self, payload):  # type: ignore[no-untyped-def]
+                draft_calls.append(payload)
+                raise AssertionError("Draft creation must not run.")
+
+        client = NoDraftClient(self.config)
+
+        result = EtsyDigitalFileService(
+            config=self.config,
+            memory=self.memory,
+            client=client,
+        ).upload_digital_file(
+            listing_id="123456789",
+            file_path=zip_path,
+        )
+
+        self.assertEqual(result.status, "SUCCESS")
+        self.assertEqual(result.uploaded, True)
+        self.assertEqual(draft_calls, [])
+
+    def test_resume_latest_partial_result_keeps_listing_id(self) -> None:
+        partial = EtsyCompleteDraftResult(
+            etsy_listing_id="123456789",
+            draft_url="https://www.etsy.com/listing/123456789",
+            draft_created=True,
+            images_uploaded=4,
+            image_count=4,
+            digital_file_uploaded=False,
+            digital_file_path=None,
+            price=1.99,
+            status="PARTIAL_FAILURE",
+            completed_stages=("draft_created", "images_uploaded"),
+            failed_stage="digital_file_upload",
+        )
+        self.memory.save_etsy_complete_draft_result(partial)
+
+        loaded = self.memory.load_etsy_complete_draft_result()
+
+        self.assertEqual(loaded["status"], "PARTIAL_FAILURE")
+        self.assertEqual(loaded["etsy_listing_id"], "123456789")
 
 
 if __name__ == "__main__":
