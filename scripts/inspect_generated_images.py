@@ -16,7 +16,13 @@ from project_aurora.image_generation.image_inspector import (  # noqa: E402
 
 def main() -> None:
     """Print diagnostics for generated Aurora PNG images."""
-    image_dir = PROJECT_ROOT / "data" / "aurora" / "generated_images"
+    image_dir = (
+        Path(sys.argv[1])
+        if len(sys.argv) > 1
+        else PROJECT_ROOT / "data" / "aurora" / "generated_images"
+    )
+    if not image_dir.is_absolute():
+        image_dir = PROJECT_ROOT / image_dir
     inspections = inspect_png_directory(image_dir)
 
     print("GENERATED IMAGE INSPECTION")

@@ -146,7 +146,7 @@ class SEOEngine:
             score += 5
         if len(description) >= 300:
             score += 4
-        if "Digital download" in description:
+        if "digital download" in description.casefold():
             score += 3
         score -= len(warnings) * 6
         return max(0, min(100, score))

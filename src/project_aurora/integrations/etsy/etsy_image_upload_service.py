@@ -24,13 +24,15 @@ class EtsyImageUploadService:
         memory: MemoryManager,
         images_dir: Path,
         client: EtsyClient | None = None,
-        max_images: int = 10,
+        max_images: int = 4,
+        required_image_count: int = 4,
     ) -> None:
         self._config = config
         self._memory = memory
         self._images_dir = images_dir
         self._client = client or EtsyClient(config)
         self._max_images = max_images
+        self._required_image_count = required_image_count
 
     def upload_latest_draft_images(self) -> EtsyImageUploadResult:
         """Upload generated PNG images to the latest stored Etsy draft."""
@@ -50,6 +52,13 @@ class EtsyImageUploadService:
             errors.append("Latest Etsy draft does not include etsy_listing_id.")
         if not image_files:
             errors.append("No non-empty PNG image files found.")
+        if self._images_dir.name != "final_product_images":
+            errors.append("Etsy image upload must use final_product_images only.")
+        if image_files and len(image_files) != self._required_image_count:
+            errors.append(
+                f"Exactly {self._required_image_count} final commercial PNG "
+                f"files are required, found {len(image_files)}."
+            )
         if invalid_images:
             errors.extend(invalid_images)
         if errors:

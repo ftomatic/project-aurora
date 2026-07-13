@@ -13,16 +13,16 @@ from project_aurora.image_generation.image_result import ImageResult
 PLACEHOLDER_PNG_BYTES = (
     b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01"
     b"\x00\x00\x00\x01\x08\x06\x00\x00\x00\x1f\x15\xc4\x89"
-    b"\x00\x00\x00\rIDATx\x9cc\xf8\xff\xff?\x00\x05\xfe"
-    b"\x02\xfeA\xd8\x8f\x8d\x00\x00\x00\x00IEND\xaeB`\x82"
+    b"\x00\x00\x00\rIDATx\x9cc\xf8\xcf\xc0\xf0\x1f\x00\x05"
+    b"\x00\x01\xff\x89\x99=\x1d\x00\x00\x00\x00IEND\xaeB`\x82"
 )
 
 
 class MockImageProvider(ImageProvider):
     """Create local placeholder image files without external APIs."""
 
-    def __init__(self, output_dir: Path | None = None, image_count: int = 8) -> None:
-        self._output_dir = output_dir or Path("data") / "aurora" / "generated_images"
+    def __init__(self, output_dir: Path | None = None, image_count: int = 4) -> None:
+        self._output_dir = self._safe_mock_output_dir(output_dir)
         self._image_count = image_count
 
     def generate_image(self, request: ImageRequest) -> ImageResult:
@@ -71,3 +71,11 @@ class MockImageProvider(ImageProvider):
             .replace("/", "_")
             .replace(" ", "_")
         )
+
+    @staticmethod
+    def _safe_mock_output_dir(output_dir: Path | None) -> Path:
+        if output_dir is None:
+            return Path("data") / "aurora" / "mock_generated_images"
+        if output_dir.name == "generated_images":
+            return output_dir.parent / "mock_generated_images"
+        return output_dir

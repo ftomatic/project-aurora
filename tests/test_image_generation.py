@@ -45,6 +45,7 @@ class ImageGenerationTest(unittest.TestCase):
         self.base_path = Path(self.temp_dir.name)
         self.memory = MemoryManager(storage=CSVStorage(base_path=self.base_path))
         self.output_dir = self.base_path / "generated_images"
+        self.mock_output_dir = self.base_path / "mock_generated_images"
 
     def tearDown(self) -> None:
         self.temp_dir.cleanup()
@@ -101,6 +102,8 @@ class ImageGenerationTest(unittest.TestCase):
         for generated_file in result.generated_files:
             self.assertTrue(Path(generated_file).exists())
             self.assertEqual(Path(generated_file).suffix, ".png")
+            self.assertIn("mock_generated_images", generated_file)
+        self.assertFalse(self.output_dir.exists())
 
     def test_provider_selection(self) -> None:
         engine = ImageGenerationEngine(
@@ -142,10 +145,30 @@ class ImageGenerationTest(unittest.TestCase):
         result = engine.run(provider="mock")
 
         self.assertEqual(result.status, "SUCCESS")
-        self.assertEqual(len(result.generated_files), 8)
+        self.assertEqual(len(result.generated_files), 4)
         saved_result = self.memory.load_image_result()
         self.assertEqual(saved_result["status"], "SUCCESS")
         self.assertEqual(saved_result["provider"], "Mock Provider")
+
+    def test_mock_provider_cannot_overwrite_real_production_paths(self) -> None:
+        self.output_dir.mkdir()
+        real_file = self.output_dir / "strawberry_birthday_party_printable_01.png"
+        real_file.write_bytes(b"real-openai-image")
+        provider = MockImageProvider(output_dir=self.output_dir, image_count=1)
+        request = ImageGenerationEngine.create_request(
+            prompt_package=make_prompt_package(),
+            provider_name=provider.provider_name(),
+            image_type="product_asset",
+            width=3000,
+            height=3000,
+            dpi=300,
+            transparent_background=True,
+        )
+
+        result = provider.generate_image(request)
+
+        self.assertEqual(real_file.read_bytes(), b"real-openai-image")
+        self.assertIn("mock_generated_images", result.generated_files[0])
 
 
 if __name__ == "__main__":

@@ -21,7 +21,7 @@ class ImageProviderConfig:
     quality: str = "standard"
     background: str = "transparent"
     output_format: str = "png"
-    number_of_images: int = 8
+    number_of_images: int = 4
     prompt_version: str = "v1"
 
     @classmethod

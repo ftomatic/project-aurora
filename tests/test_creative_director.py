@@ -104,10 +104,10 @@ class CreativeDirectorTest(unittest.TestCase):
         revenue = CollectionEngine.estimate_revenue(
             recommended_products=tuple(f"Product {index}" for index in range(10)),
             upsell_products=tuple(f"Upsell {index}" for index in range(5)),
-            default_price=7.99,
+            default_price=1.99,
         )
 
-        self.assertEqual(revenue, 119.9)
+        self.assertEqual(revenue, 59.9)
 
     def test_generation_cost_estimation(self) -> None:
         cost = CollectionEngine.estimate_generation_cost(

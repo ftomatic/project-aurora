@@ -39,6 +39,7 @@ class ListingPackage:
     approved_mockup_files: tuple[str, ...]
     approved_generated_image_files: tuple[str, ...]
     is_digital_download: bool = True
+    price: float = 1.99
     etsy_listing_id: str | None = None
     local_asset_cleanup_status: str = CLEANUP_NOT_STARTED
     local_files_retention_policy: str = (
@@ -69,6 +70,8 @@ class ListingPackage:
                 "Unsupported local asset cleanup status: "
                 f"{self.local_asset_cleanup_status}."
             )
+        if self.price != 1.99:
+            raise ValueError("RainbowMilkStudio listing price must be 1.99.")
 
         object.__setattr__(
             self,

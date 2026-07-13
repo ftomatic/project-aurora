@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
-from PIL import Image, UnidentifiedImageError
+from PIL import Image, ImageStat, UnidentifiedImageError
 
 
 ImageClassification = Literal[
@@ -61,12 +61,6 @@ def inspect_png(path: Path) -> GeneratedImageInspection:
             original_mode = image.mode
             rgba = image.convert("RGBA")
             width, height = rgba.size
-            pixel_data = (
-                rgba.get_flattened_data()
-                if hasattr(rgba, "get_flattened_data")
-                else rgba.getdata()
-            )
-            pixels = list(pixel_data)
     except (OSError, SyntaxError, UnidentifiedImageError):
         return GeneratedImageInspection(
             filename=path.name,
@@ -80,18 +74,19 @@ def inspect_png(path: Path) -> GeneratedImageInspection:
             classification="INVALID_IMAGE",
         )
 
-    alpha_values = [alpha for _, _, _, alpha in pixels]
-    alpha_minimum = min(alpha_values)
-    alpha_maximum = max(alpha_values)
-    visible = [
-        (red, green, blue)
-        for red, green, blue, alpha in pixels
-        if alpha > 0
-    ]
-    visible_pixels = len(visible)
-    all_visible_pixels_white = bool(visible) and all(
-        red == 255 and green == 255 and blue == 255
-        for red, green, blue in visible
+    red_channel, green_channel, blue_channel, alpha_channel = rgba.split()
+    alpha_minimum, alpha_maximum = alpha_channel.getextrema()
+    alpha_histogram = alpha_channel.histogram()
+    visible_pixels = (width * height) - alpha_histogram[0]
+    visible_mask = alpha_channel.point(lambda alpha: 255 if alpha > 0 else 0)
+    all_visible_pixels_white = bool(visible_pixels) and all(
+        extrema == (255, 255)
+        for extrema in ImageStat.Stat(
+            red_channel,
+            visible_mask,
+        ).extrema
+        + ImageStat.Stat(green_channel, visible_mask).extrema
+        + ImageStat.Stat(blue_channel, visible_mask).extrema
     )
     if alpha_maximum == 0:
         classification: ImageClassification = "FULLY_TRANSPARENT"

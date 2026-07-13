@@ -56,7 +56,7 @@ class EtsyImageUploadTest(unittest.TestCase):
         self.memory = MemoryManager(
             storage=CSVStorage(base_path=self.base_path / "memory")
         )
-        self.images_dir = self.base_path / "generated_images"
+        self.images_dir = self.base_path / "final_product_images"
         self.images_dir.mkdir()
         self.config = EtsyConfig(
             mode="live",
@@ -136,6 +136,8 @@ class EtsyImageUploadTest(unittest.TestCase):
     def test_service_uploads_sorted_png_images_to_latest_draft(self) -> None:
         (self.images_dir / "b.png").write_bytes(make_visible_png_bytes())
         (self.images_dir / "a.png").write_bytes(make_visible_png_bytes())
+        (self.images_dir / "c.png").write_bytes(make_visible_png_bytes())
+        (self.images_dir / "d.png").write_bytes(make_visible_png_bytes())
         (self.images_dir / "empty.png").write_bytes(b"")
         calls = []
 
@@ -152,18 +154,18 @@ class EtsyImageUploadTest(unittest.TestCase):
 
         self.assertEqual(result.status, "SUCCESS")
         self.assertEqual(result.etsy_listing_id, "123456789")
-        self.assertEqual(result.images_found, 2)
-        self.assertEqual(result.images_uploaded, 2)
+        self.assertEqual(result.images_found, 4)
+        self.assertEqual(result.images_uploaded, 4)
         self.assertEqual(result.failed, 0)
-        self.assertEqual([attempt.rank for attempt in result.attempts], [1, 2])
+        self.assertEqual([attempt.rank for attempt in result.attempts], [1, 2, 3, 4])
         self.assertIn(b'filename="a.png"', calls[0].data)
         self.assertIn(b'filename="b.png"', calls[1].data)
         saved = self.memory.load_etsy_image_upload_result()
         self.assertEqual(saved["status"], "SUCCESS")
-        self.assertEqual(saved["images_uploaded"], 2)
+        self.assertEqual(saved["images_uploaded"], 4)
 
-    def test_service_limits_uploads_to_ten_images(self) -> None:
-        for index in range(12):
+    def test_service_requires_exactly_four_images(self) -> None:
+        for index in range(5):
             (self.images_dir / f"asset_{index:02d}.png").write_bytes(
                 make_visible_png_bytes()
             )
@@ -180,9 +182,11 @@ class EtsyImageUploadTest(unittest.TestCase):
             client=EtsyClient(config=self.config, urlopen=fake_urlopen),
         ).upload_latest_draft_images()
 
-        self.assertEqual(result.images_found, 12)
-        self.assertEqual(result.images_uploaded, 10)
-        self.assertEqual(len(calls), 10)
+        self.assertEqual(result.status, "CONFIGURATION_REQUIRED")
+        self.assertEqual(result.images_found, 5)
+        self.assertEqual(result.images_uploaded, 0)
+        self.assertEqual(calls, [])
+        self.assertIn("Exactly 4", result.errors[0])
 
     def test_service_validates_before_calling_etsy(self) -> None:
         (self.images_dir / "a.png").write_bytes(make_visible_png_bytes())
@@ -206,6 +210,23 @@ class EtsyImageUploadTest(unittest.TestCase):
         self.assertIn("ETSY_CLIENT_ID", result.errors[0])
         self.assertIn("ETSY_SHARED_SECRET", result.errors[0])
         self.assertIn("ETSY_ACCESS_TOKEN", result.errors[0])
+
+    def test_service_rejects_generated_images_folder(self) -> None:
+        wrong_dir = self.base_path / "generated_images"
+        wrong_dir.mkdir()
+        for index in range(4):
+            (wrong_dir / f"asset_{index:02d}.png").write_bytes(
+                make_visible_png_bytes()
+            )
+
+        result = EtsyImageUploadService(
+            config=self.config,
+            memory=self.memory,
+            images_dir=wrong_dir,
+        ).upload_latest_draft_images()
+
+        self.assertEqual(result.status, "CONFIGURATION_REQUIRED")
+        self.assertIn("final_product_images", result.errors[0])
 
     def test_service_requires_latest_listing_id(self) -> None:
         self.memory.save_etsy_draft_result(
@@ -262,7 +283,7 @@ class EtsyImageUploadTest(unittest.TestCase):
 
         self.assertEqual(result.status, "CONFIGURATION_REQUIRED")
         self.assertEqual(calls, [])
-        self.assertIn("INVALID_IMAGE", result.errors[0])
+        self.assertTrue(any("INVALID_IMAGE" in error for error in result.errors))
 
 
 if __name__ == "__main__":

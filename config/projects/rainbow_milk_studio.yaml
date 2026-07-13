@@ -8,7 +8,7 @@ target_customer: parents, teachers, crafters, digital printable buyers
 brand_style: whimsical storybook watercolor, cottagecore, fantasy, cute seasonal illustration
 default_ai_provider: openai
 default_image_size: 1024x1024
-default_price: 7.99
+default_price: 1.99
 allowed_product_types:
   - clipart
   - digital paper

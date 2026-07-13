@@ -3,10 +3,15 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 from project_aurora.integrations.etsy.etsy_config import EtsyConfig
+from project_aurora.image_generation.commercial_image_exporter import (
+    validate_commercial_png,
+)
 from project_aurora.listing.listing_package import ListingPackage
+from project_aurora.seo.description_builder import RAINBOW_MILK_STUDIO_DESCRIPTION
 from project_aurora.seo.seo_package import SEOPackage
 
 
@@ -75,7 +80,7 @@ class EtsyListingMapper:
             title=seo_package.title,
             description=seo_package.description,
             tags=seo_package.tags,
-            price=config.default_price,
+            price=listing_package.price,
             quantity=config.default_quantity,
             taxonomy_id=config.taxonomy_id,
             listing_type=listing_type,
@@ -114,8 +119,23 @@ class EtsyListingMapper:
                 errors.append(f"Tag exceeds 20 characters: {tag}.")
         if payload.price <= 0:
             errors.append("Price must be greater than zero.")
+        if payload.price != 1.99:
+            errors.append("RainbowMilkStudio listing price must be 1.99.")
         if payload.quantity <= 0:
             errors.append("Quantity must be greater than zero.")
+        if payload.description != RAINBOW_MILK_STUDIO_DESCRIPTION:
+            errors.append("Required RainbowMilkStudio listing description is missing.")
+        if payload.is_digital and payload.listing_type != "download":
+            errors.append("Digital listing type must be download.")
+        if payload.is_digital:
+            if len(payload.image_files) != 4:
+                errors.append("Exactly 4 final commercial PNG files are required.")
+            for image_file in payload.image_files:
+                image_errors = validate_commercial_png(Path(image_file))
+                errors.extend(
+                    f"{Path(image_file).name}: {error}"
+                    for error in image_errors
+                )
         if (
             payload.listing_type == "physical"
             and payload.shipping_profile_id is None

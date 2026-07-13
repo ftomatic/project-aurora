@@ -3,6 +3,32 @@
 from __future__ import annotations
 
 
+RAINBOW_MILK_STUDIO_DESCRIPTION = """YOUR PURCHASE INCLUDES:
+
+4 high-quality 300 DPI PNG files
+FREE COMMERCIAL LICENSE
+
+EACH IMAGE SIZE:
+12" × 12"
+300 DPI
+3600 × 3600 pixels
+
+Use these handmade-style images to create mouse mats, mugs, T-shirts, cushions, cards, scrapbook pages, crafts, and mixed-media projects.
+
+Download and start creating!
+
+After purchase, access your files by visiting:
+Etsy Profile > Purchases and Reviews
+
+PLEASE NOTE:
+
+This is an instant digital download. No physical product will be shipped.
+
+Colors may differ slightly because of variations in monitor and printer settings.
+
+Please email me with any questions or if you need a different size."""
+
+
 class DescriptionBuilder:
     """Build deterministic Etsy product descriptions."""
 
@@ -16,23 +42,4 @@ class DescriptionBuilder:
         tags: tuple[str, ...],
     ) -> str:
         """Return a buyer-focused Etsy listing description."""
-        return "\n\n".join(
-            (
-                (
-                    f"Bring a sweet summer berry moment to the party with the "
-                    f"{product_name}."
-                ),
-                (
-                    f"This {product_type.lower()} is designed for "
-                    f"{target_buyer.lower()} and includes coordinated printable "
-                    "party pieces that feel cheerful, polished, and easy to use."
-                ),
-                f"Best for: {buyer_use_case}.",
-                f"Positioning: {product_positioning}.",
-                (
-                    "SEO focus: "
-                    f"{', '.join(tags[:6])}. Digital download only; no physical "
-                    "item will be shipped."
-                ),
-            )
-        )
+        return RAINBOW_MILK_STUDIO_DESCRIPTION

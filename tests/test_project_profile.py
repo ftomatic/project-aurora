@@ -31,7 +31,7 @@ class ProjectProfileTest(unittest.TestCase):
         self.assertEqual(profile.brand_name, "RainbowMilkStudio")
         self.assertEqual(profile.marketplace, "Etsy")
         self.assertEqual(profile.default_ai_provider, "openai")
-        self.assertEqual(profile.default_price, 7.99)
+        self.assertEqual(profile.default_price, 1.99)
 
     def test_profile_includes_allowed_products_and_platforms(self) -> None:
         profile = ProjectProfileLoader().load(PROFILE_PATH)

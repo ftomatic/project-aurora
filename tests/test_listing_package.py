@@ -31,6 +31,7 @@ class ListingPackageTest(unittest.TestCase):
         )
 
         self.assertEqual(package.listing_status, READY_FOR_ETSY_DRAFT)
+        self.assertEqual(package.price, 1.99)
         self.assertEqual(package.etsy_listing_id, None)
         self.assertEqual(package.posted_at, None)
         self.assertEqual(package.local_asset_cleanup_status, CLEANUP_NOT_STARTED)
@@ -50,6 +51,19 @@ class ListingPackageTest(unittest.TestCase):
                 prompt_package_id="latest",
                 approved_mockup_files=(),
                 approved_generated_image_files=(),
+            )
+
+    def test_listing_package_rejects_non_rainbow_milk_price(self) -> None:
+        with self.assertRaises(ValueError):
+            ListingPackage(
+                product_name="Summer Strawberry Birthday Collection",
+                collection_name="Summer Strawberry Birthday Collection",
+                listing_status=READY_FOR_ETSY_DRAFT,
+                seo_package_id="latest",
+                prompt_package_id="latest",
+                approved_mockup_files=(),
+                approved_generated_image_files=(),
+                price=7.99,
             )
 
 

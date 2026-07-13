@@ -26,7 +26,7 @@ def main() -> None:
     service = EtsyImageUploadService(
         config=config,
         memory=memory,
-        images_dir=PROJECT_ROOT / "data" / "aurora" / "generated_images",
+        images_dir=PROJECT_ROOT / "data" / "aurora" / "final_product_images",
     )
     try:
         result = service.upload_latest_draft_images()

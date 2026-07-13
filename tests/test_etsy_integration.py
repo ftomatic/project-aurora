@@ -8,6 +8,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from PIL import Image
+
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 SRC_PATH = PROJECT_ROOT / "src"
 sys.path.insert(0, str(SRC_PATH))
@@ -22,6 +24,9 @@ from project_aurora.integrations.etsy.etsy_listing_mapper import (  # noqa: E402
 )
 from project_aurora.integrations.etsy.etsy_result import (  # noqa: E402
     EtsyDraftResult,
+)
+from project_aurora.seo.description_builder import (  # noqa: E402
+    RAINBOW_MILK_STUDIO_DESCRIPTION,
 )
 from project_aurora.listing.listing_package import (  # noqa: E402
     READY_FOR_ETSY_DRAFT,
@@ -53,26 +58,30 @@ class FakeResponse:
         return json.dumps(self._payload).encode("utf-8")
 
 
-def make_listing_package() -> ListingPackage:
+def make_listing_package(
+    image_files: tuple[str, ...] = ("mockup_01.png",),
+) -> ListingPackage:
     return ListingPackage(
         product_name="Summer Strawberry Birthday Collection",
         collection_name="Summer Strawberry Birthday Collection",
         listing_status=READY_FOR_ETSY_DRAFT,
         seo_package_id="latest",
         prompt_package_id="latest",
-        approved_mockup_files=("mockup_01.png",),
+        approved_mockup_files=image_files,
         approved_generated_image_files=("asset_01.png",),
     )
 
 
-def make_physical_listing_package() -> ListingPackage:
+def make_physical_listing_package(
+    image_files: tuple[str, ...] = ("mockup_01.png",),
+) -> ListingPackage:
     return ListingPackage(
         product_name="Summer Strawberry Birthday Collection",
         collection_name="Summer Strawberry Birthday Collection",
         listing_status=READY_FOR_ETSY_DRAFT,
         seo_package_id="latest",
         prompt_package_id="latest",
-        approved_mockup_files=("mockup_01.png",),
+        approved_mockup_files=image_files,
         approved_generated_image_files=("asset_01.png",),
         is_digital_download=False,
     )
@@ -86,9 +95,24 @@ class EtsyIntegrationTest(unittest.TestCase):
         )
         self.config = EtsyConfig(mode="mock")
         self.seo_package = SEOEngine().build_package(PRODUCT_DATA)
+        self.final_image_files = self._create_final_image_files()
 
     def tearDown(self) -> None:
         self.temp_dir.cleanup()
+
+    def _create_final_image_files(self) -> tuple[str, ...]:
+        image_dir = Path(self.temp_dir.name) / "final_product_images"
+        image_dir.mkdir()
+        paths: list[str] = []
+        for index in range(1, 5):
+            path = image_dir / f"strawberry_birthday_party_printable_{index:02d}.png"
+            Image.new("RGBA", (3600, 3600), (255, index * 20, 0, 255)).save(
+                path,
+                format="PNG",
+                dpi=(300, 300),
+            )
+            paths.append(str(path))
+        return tuple(paths)
 
     def test_config_loads_environment_safe_defaults(self) -> None:
         config = EtsyConfig.from_file(Path("missing_etsy.yaml"))
@@ -98,7 +122,7 @@ class EtsyIntegrationTest(unittest.TestCase):
 
     def test_listing_mapper_creates_draft_payload(self) -> None:
         payload = EtsyListingMapper().map_to_draft(
-            listing_package=make_listing_package(),
+            listing_package=make_listing_package(self.final_image_files),
             seo_package=self.seo_package,
             config=self.config,
         )
@@ -107,12 +131,14 @@ class EtsyIntegrationTest(unittest.TestCase):
         self.assertEqual(len(payload.tags), 13)
         self.assertTrue(payload.is_digital)
         self.assertEqual(payload.listing_type, "download")
+        self.assertEqual(payload.price, 1.99)
+        self.assertEqual(payload.description, RAINBOW_MILK_STUDIO_DESCRIPTION)
         self.assertEqual(payload.who_made, "i_did")
         self.assertEqual(payload.to_dict()["state"], "draft")
 
     def test_digital_listing_payload_uses_download_type(self) -> None:
         payload = EtsyListingMapper().map_to_draft(
-            listing_package=make_listing_package(),
+            listing_package=make_listing_package(self.final_image_files),
             seo_package=self.seo_package,
             config=self.config,
         )
@@ -131,7 +157,7 @@ class EtsyIntegrationTest(unittest.TestCase):
         )
 
         payload = EtsyListingMapper().map_to_draft(
-            listing_package=make_physical_listing_package(),
+            listing_package=make_physical_listing_package(self.final_image_files),
             seo_package=self.seo_package,
             config=config,
         )
@@ -144,7 +170,7 @@ class EtsyIntegrationTest(unittest.TestCase):
     def test_payload_validation_passes(self) -> None:
         mapper = EtsyListingMapper()
         payload = mapper.map_to_draft(
-            listing_package=make_listing_package(),
+            listing_package=make_listing_package(self.final_image_files),
             seo_package=self.seo_package,
             config=self.config,
         )
@@ -153,7 +179,7 @@ class EtsyIntegrationTest(unittest.TestCase):
 
     def test_mock_client_does_not_call_etsy_api(self) -> None:
         payload = EtsyListingMapper().map_to_draft(
-            listing_package=make_listing_package(),
+            listing_package=make_listing_package(self.final_image_files),
             seo_package=self.seo_package,
             config=self.config,
         )
@@ -169,7 +195,7 @@ class EtsyIntegrationTest(unittest.TestCase):
             config=self.config,
             memory=self.memory,
         ).create_draft(
-            listing_package=make_listing_package(),
+            listing_package=make_listing_package(self.final_image_files),
             seo_package=self.seo_package,
         )
 
@@ -182,7 +208,7 @@ class EtsyIntegrationTest(unittest.TestCase):
     def test_real_mode_requires_credentials(self) -> None:
         config = EtsyConfig(mode="live")
         payload = EtsyListingMapper().map_to_draft(
-            listing_package=make_listing_package(),
+            listing_package=make_listing_package(self.final_image_files),
             seo_package=self.seo_package,
             config=config,
         )
@@ -234,7 +260,7 @@ class EtsyIntegrationTest(unittest.TestCase):
             memory=self.memory,
             client=ExplodingClient(EtsyConfig(mode="live")),
         ).create_draft(
-            listing_package=make_listing_package(),
+            listing_package=make_listing_package(self.final_image_files),
             seo_package=self.seo_package,
         )
 
@@ -251,7 +277,7 @@ class EtsyIntegrationTest(unittest.TestCase):
             taxonomy_id=123,
         )
         payload = EtsyListingMapper().map_to_draft(
-            listing_package=make_physical_listing_package(),
+            listing_package=make_physical_listing_package(self.final_image_files),
             seo_package=self.seo_package,
             config=config,
         )
@@ -269,7 +295,7 @@ class EtsyIntegrationTest(unittest.TestCase):
             shipping_profile_id=None,
         )
         payload = EtsyListingMapper().map_to_draft(
-            listing_package=make_physical_listing_package(),
+            listing_package=make_physical_listing_package(self.final_image_files),
             seo_package=self.seo_package,
             config=config,
         )
@@ -290,7 +316,7 @@ class EtsyIntegrationTest(unittest.TestCase):
             api_base_url="https://example.test/v3/application",
         )
         payload = EtsyListingMapper().map_to_draft(
-            listing_package=make_listing_package(),
+            listing_package=make_listing_package(self.final_image_files),
             seo_package=self.seo_package,
             config=config,
         )

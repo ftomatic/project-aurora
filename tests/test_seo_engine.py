@@ -13,6 +13,7 @@ sys.path.insert(0, str(SRC_PATH))
 
 from project_aurora.seo.description_builder import (  # noqa: E402
     DescriptionBuilder,
+    RAINBOW_MILK_STUDIO_DESCRIPTION,
 )
 from project_aurora.seo.keyword_engine import KeywordEngine  # noqa: E402
 from project_aurora.seo.seo_engine import SEOEngine  # noqa: E402
@@ -61,7 +62,7 @@ class SEOEngineTest(unittest.TestCase):
         self.assertIn("Cupcake Toppers", title)
         self.assertLessEqual(len(title), 140)
 
-    def test_description_builder_mentions_buyer_and_download(self) -> None:
+    def test_description_builder_returns_required_description(self) -> None:
         description = DescriptionBuilder().build_description(
             product_name=SAMPLE_PRODUCT_DATA["product_name"],
             product_type=SAMPLE_PRODUCT_DATA["product_type"],
@@ -71,9 +72,9 @@ class SEOEngineTest(unittest.TestCase):
             tags=("strawberry party", "birthday printable"),
         )
 
-        self.assertIn("parents planning", description)
-        self.assertIn("Digital download", description)
-        self.assertIn("strawberry party", description)
+        self.assertEqual(description, RAINBOW_MILK_STUDIO_DESCRIPTION)
+        self.assertIn("4 high-quality 300 DPI PNG files", description)
+        self.assertIn("3600 × 3600 pixels", description)
 
     def test_seo_engine_builds_package(self) -> None:
         package = SEOEngine().build_package(SAMPLE_PRODUCT_DATA)
@@ -85,6 +86,7 @@ class SEOEngineTest(unittest.TestCase):
         )
         self.assertEqual(len(package.tags), 13)
         self.assertGreaterEqual(package.seo_score, 90)
+        self.assertEqual(package.description, RAINBOW_MILK_STUDIO_DESCRIPTION)
         self.assertEqual(package.warnings, ())
 
     def test_seo_engine_saves_package_to_memory(self) -> None:

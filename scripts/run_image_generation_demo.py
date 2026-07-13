@@ -34,7 +34,7 @@ def main() -> None:
     prompt_package_id = ensure_prompt_package(memory)
     engine = ImageGenerationEngine(
         memory=memory,
-        output_dir=PROJECT_ROOT / "data" / "aurora" / "generated_images",
+        output_dir=PROJECT_ROOT / "data" / "aurora" / "mock_generated_images",
     )
     result = engine.run(prompt_package_id=prompt_package_id, provider="mock")
 
@@ -50,7 +50,7 @@ def main() -> None:
     print(len(result.generated_files))
     print("")
     print("Output Folder")
-    print("data/aurora/generated_images/")
+    print("data/aurora/mock_generated_images/")
     print("")
     print("Status")
     print(result.status)

@@ -29,6 +29,12 @@ SAMPLE_PRODUCT_DATA = {
 }
 
 
+def final_product_image_files() -> tuple[str, ...]:
+    """Return the expected final commercial image paths."""
+    image_dir = PROJECT_ROOT / "data" / "aurora" / "final_product_images"
+    return tuple(str(path) for path in sorted(image_dir.glob("*.png")))
+
+
 def main() -> None:
     """Create a mock Etsy draft result from local Aurora data."""
     memory = MemoryManager(
@@ -42,7 +48,7 @@ def main() -> None:
         listing_status=READY_FOR_ETSY_DRAFT,
         seo_package_id="latest",
         prompt_package_id="latest",
-        approved_mockup_files=("mockup_01.png",),
+        approved_mockup_files=final_product_image_files(),
         approved_generated_image_files=("asset_01.png",),
     )
     result = EtsyDraftService(config=config, memory=memory).create_draft(

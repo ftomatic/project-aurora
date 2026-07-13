@@ -17,7 +17,7 @@ class EtsyConfig:
     shared_secret: str | None = None
     access_token: str | None = None
     api_base_url: str = "https://openapi.etsy.com/v3/application"
-    default_price: float = 7.99
+    default_price: float = 1.99
     default_quantity: int = 999
     taxonomy_id: int | None = None
     processing_profile_id: int | None = None
@@ -51,7 +51,7 @@ class EtsyConfig:
                 "api_base_url",
                 "https://openapi.etsy.com/v3/application",
             ),
-            default_price=float(values.get("default_price", "7.99")),
+            default_price=float(values.get("default_price", "1.99")),
             default_quantity=int(values.get("default_quantity", "999")),
             taxonomy_id=_optional_int(
                 os.getenv("ETSY_TAXONOMY_ID") or values.get("taxonomy_id")
