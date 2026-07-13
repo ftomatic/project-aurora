@@ -7,7 +7,6 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
-from zipfile import ZipFile
 
 from PIL import Image
 
@@ -29,9 +28,6 @@ from project_aurora.integrations.etsy.etsy_digital_file_service import (  # noqa
 )
 from project_aurora.integrations.etsy.etsy_result import (  # noqa: E402
     EtsyCompleteDraftResult,
-)
-from project_aurora.production.digital_download_builder import (  # noqa: E402
-    DIGITAL_DOWNLOAD_FILENAME,
 )
 from project_aurora.seo.description_builder import (  # noqa: E402
     RAINBOW_MILK_STUDIO_DESCRIPTION,
@@ -101,11 +97,12 @@ class FakeCompleteEtsyClient(EtsyClient):
         self,
         listing_id: str,
         file_path: Path,
+        rank: int | None = None,
     ) -> dict[str, object]:
         if self.fail_stage == "digital":
             raise RuntimeError("Digital upload failed.")
         self.digital_uploads.append((listing_id, file_path.name))
-        return {"file_id": "file-1"}
+        return {"listing_file_id": f"file-{rank}"}
 
 
 def write_final_png(path: Path, color: tuple[int, int, int, int]) -> None:
@@ -164,7 +161,7 @@ class CompleteEtsyDraftTest(unittest.TestCase):
         self.assertTrue(result.digital_file_uploaded)
         self.assertEqual(client.draft_calls, 1)
         self.assertEqual([upload[2] for upload in client.image_uploads], [1, 2, 3, 4])
-        self.assertEqual(len(client.digital_uploads), 1)
+        self.assertEqual(len(client.digital_uploads), 4)
         payload = client.payloads[0].to_dict()
         self.assertEqual(payload["type"], "download")
         self.assertEqual(payload["price"], 1.99)
@@ -174,8 +171,8 @@ class CompleteEtsyDraftTest(unittest.TestCase):
         self.assertEqual(len(payload["tags"]), 13)
         self.assertNotIn("shipping_profile_id", payload)
         self.assertNotIn("processing_profile_id", payload)
-        with ZipFile(result.digital_file_path or "", "r") as archive:
-            self.assertEqual(len(archive.namelist()), 4)
+        self.assertEqual(result.digital_file_path, str(self.final_images_dir))
+        self.assertEqual(len(client.digital_uploads), 4)
         saved = self.memory.load_etsy_complete_draft_result()
         self.assertEqual(saved["status"], "SUCCESS")
         self.assertEqual(saved["etsy_listing_id"], "123456789")
@@ -231,9 +228,7 @@ class CompleteEtsyDraftTest(unittest.TestCase):
         self.assertEqual(client.draft_calls, 0)
 
     def test_client_uploads_digital_file_as_multipart(self) -> None:
-        zip_path = self.downloads_dir / DIGITAL_DOWNLOAD_FILENAME
-        self.downloads_dir.mkdir()
-        zip_path.write_bytes(b"zip-bytes")
+        png_path = self.final_images_dir / "strawberry_birthday_party_printable_01.png"
         calls = []
 
         def fake_urlopen(api_request, timeout: int):  # type: ignore[no-untyped-def]
@@ -245,7 +240,8 @@ class CompleteEtsyDraftTest(unittest.TestCase):
             urlopen=fake_urlopen,
         ).upload_listing_digital_file(
             listing_id="123456789",
-            file_path=zip_path,
+            file_path=png_path,
+            rank=1,
         )
 
         self.assertEqual(response["file_id"], 1)
@@ -253,21 +249,19 @@ class CompleteEtsyDraftTest(unittest.TestCase):
         self.assertIn("/shops/shop/listings/123456789/files", calls[0].full_url)
         self.assertIn("multipart/form-data", calls[0].headers["Content-type"])
         self.assertIn(
-            b'name="file"; filename="Summer_Strawberry_Birthday_Collection.zip"',
+            b'name="file"; filename="strawberry_birthday_party_printable_01.png"',
             calls[0].data,
         )
         self.assertIn(
             b'Content-Disposition: form-data; name="name"',
             calls[0].data,
         )
-        self.assertIn(b"Summer_Strawberry_Birthday_Collection.zip", calls[0].data)
-        self.assertIn(b"Content-Type: application/zip", calls[0].data)
-        self.assertIn(b"zip-bytes", calls[0].data)
+        self.assertIn(b"strawberry_birthday_party_printable_01.png", calls[0].data)
+        self.assertIn(b'Content-Disposition: form-data; name="rank"', calls[0].data)
+        self.assertIn(b"Content-Type: image/png", calls[0].data)
+        self.assertIn(b"\x89PNG", calls[0].data)
 
     def test_digital_file_upload_service_does_not_create_draft(self) -> None:
-        zip_path = self.downloads_dir / DIGITAL_DOWNLOAD_FILENAME
-        self.downloads_dir.mkdir()
-        zip_path.write_bytes(b"zip-bytes")
         draft_calls = []
 
         class NoDraftClient(FakeCompleteEtsyClient):
@@ -281,14 +275,77 @@ class CompleteEtsyDraftTest(unittest.TestCase):
             config=self.config,
             memory=self.memory,
             client=client,
-        ).upload_digital_file(
+        ).upload_digital_files(
             listing_id="123456789",
-            file_path=zip_path,
+            final_images_dir=self.final_images_dir,
         )
 
         self.assertEqual(result.status, "SUCCESS")
         self.assertEqual(result.uploaded, True)
+        self.assertEqual(result.files_uploaded, 4)
+        self.assertEqual(
+            [attempt.rank for attempt in result.attempts],
+            [1, 2, 3, 4],
+        )
         self.assertEqual(draft_calls, [])
+
+    def test_digital_upload_stops_before_api_when_file_exceeds_twenty_mb(self) -> None:
+        large_file = self.final_images_dir / "strawberry_birthday_party_printable_01.png"
+        large_file.write_bytes(b"0" * (20 * 1024 * 1024))
+        calls = []
+
+        class TrackingClient(FakeCompleteEtsyClient):
+            def upload_listing_digital_file(
+                self,
+                listing_id: str,
+                file_path: Path,
+                rank: int | None = None,
+            ) -> dict[str, object]:
+                calls.append(file_path.name)
+                return {"listing_file_id": "file"}
+
+        result = EtsyDigitalFileService(
+            config=self.config,
+            memory=self.memory,
+            client=TrackingClient(self.config),
+        ).upload_digital_files(
+            listing_id="123456789",
+            final_images_dir=self.final_images_dir,
+        )
+
+        self.assertEqual(result.status, "CONFIGURATION_REQUIRED")
+        self.assertEqual(calls, [])
+        self.assertTrue(any("20 MB" in error for error in result.errors))
+
+    def test_digital_upload_returns_partial_failure_after_some_uploads(self) -> None:
+        class ThirdUploadFailsClient(FakeCompleteEtsyClient):
+            def upload_listing_digital_file(
+                self,
+                listing_id: str,
+                file_path: Path,
+                rank: int | None = None,
+            ) -> dict[str, object]:
+                if rank == 3:
+                    raise RuntimeError("Third file failed.")
+                self.digital_uploads.append((listing_id, file_path.name))
+                return {"listing_file_id": f"file-{rank}"}
+
+        client = ThirdUploadFailsClient(self.config)
+
+        result = EtsyDigitalFileService(
+            config=self.config,
+            memory=self.memory,
+            client=client,
+        ).upload_digital_files(
+            listing_id="123456789",
+            final_images_dir=self.final_images_dir,
+        )
+
+        self.assertEqual(result.status, "PARTIAL_FAILURE")
+        self.assertEqual(result.files_uploaded, 3)
+        self.assertEqual(result.failed, 1)
+        self.assertEqual(result.attempts[2].status, "FAILED")
+        self.assertEqual(result.etsy_listing_id, "123456789")
 
     def test_resume_latest_partial_result_keeps_listing_id(self) -> None:
         partial = EtsyCompleteDraftResult(

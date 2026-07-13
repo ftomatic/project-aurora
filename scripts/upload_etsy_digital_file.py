@@ -1,4 +1,4 @@
-"""Upload the customer ZIP to the latest partial Etsy draft only."""
+"""Upload final PNG digital files to the latest partial Etsy draft only."""
 
 from __future__ import annotations
 
@@ -16,9 +16,6 @@ from project_aurora.integrations.etsy.etsy_digital_file_service import (  # noqa
 )
 from project_aurora.integrations.etsy.etsy_result import (  # noqa: E402
     EtsyCompleteDraftResult,
-)
-from project_aurora.production.digital_download_builder import (  # noqa: E402
-    DIGITAL_DOWNLOAD_FILENAME,
 )
 from project_aurora.storage.csv_storage import CSVStorage  # noqa: E402
 from project_aurora.storage.memory_manager import MemoryManager  # noqa: E402
@@ -49,26 +46,25 @@ def _load_partial_result(memory: MemoryManager) -> EtsyCompleteDraftResult:
 
 
 def main() -> None:
-    """Upload only the digital ZIP for the existing latest draft."""
+    """Upload only the four final PNG digital files for the existing draft."""
     memory = MemoryManager(
         storage=CSVStorage(base_path=PROJECT_ROOT / "data" / "aurora")
     )
     config = EtsyConfig.from_file(PROJECT_ROOT / "config" / "etsy.yaml")
-    zip_path = (
+    final_images_dir = (
         PROJECT_ROOT
         / "data"
         / "aurora"
-        / "digital_downloads"
-        / DIGITAL_DOWNLOAD_FILENAME
+        / "final_product_images"
     )
     try:
         current = _load_partial_result(memory)
         upload_result = EtsyDigitalFileService(
             config=config,
             memory=memory,
-        ).upload_digital_file(
+        ).upload_digital_files(
             listing_id=current.etsy_listing_id,
-            file_path=zip_path,
+            final_images_dir=final_images_dir,
         )
     except RuntimeError as error:
         print("ETSY DIGITAL FILE UPLOAD")
@@ -84,7 +80,7 @@ def main() -> None:
         current,
         status="SUCCESS" if upload_result.uploaded else "PARTIAL_FAILURE",
         digital_file_uploaded=upload_result.uploaded,
-        digital_file_path=str(zip_path),
+        digital_file_path=str(final_images_dir),
         failed_stage=None if upload_result.uploaded else "digital_file_upload",
         errors=upload_result.errors,
         warnings=upload_result.warnings,
@@ -101,11 +97,14 @@ def main() -> None:
     print("Listing ID")
     print(current.etsy_listing_id)
     print("")
-    print("File")
-    print(DIGITAL_DOWNLOAD_FILENAME)
+    print("Files Found")
+    print(upload_result.files_found)
     print("")
-    print("Uploaded")
-    print("YES" if upload_result.uploaded else "NO")
+    print("Files Uploaded")
+    print(upload_result.files_uploaded)
+    print("")
+    print("Failed")
+    print(upload_result.failed)
     print("")
     print("Status")
     print(upload_result.status)

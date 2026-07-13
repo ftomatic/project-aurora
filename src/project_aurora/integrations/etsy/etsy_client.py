@@ -71,6 +71,7 @@ class EtsyClient:
         self,
         listing_id: str,
         file_path: Path,
+        rank: int | None = None,
     ) -> dict[str, Any]:
         """Upload one customer digital file to an Etsy draft listing."""
         if not self._config.shop_id:
@@ -80,11 +81,14 @@ class EtsyClient:
         if file_path.stat().st_size <= 0:
             raise RuntimeError(f"Digital file is empty: {file_path}")
 
+        fields = {"name": file_path.name}
+        if rank is not None:
+            fields["rank"] = str(rank)
         body, content_type = self._build_multipart_body(
-            fields={"name": file_path.name},
+            fields=fields,
             file_field="file",
             file_path=file_path,
-            file_content_type="application/zip",
+            file_content_type="image/png" if file_path.suffix == ".png" else None,
         )
         api_request = request.Request(
             self._build_url(

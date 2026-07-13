@@ -18,7 +18,6 @@ from project_aurora.listing.listing_package import (
     READY_FOR_ETSY_DRAFT,
     ListingPackage,
 )
-from project_aurora.production.digital_download_builder import DigitalDownloadBuilder
 from project_aurora.seo.seo_engine import SEOEngine
 from project_aurora.storage.memory_manager import MemoryManager
 
@@ -117,33 +116,13 @@ class EtsyCompleteDraftService:
             return result
         completed.append("images_uploaded")
 
-        download_result = DigitalDownloadBuilder(
-            final_images_dir=self._final_images_dir,
-            output_dir=self._digital_downloads_dir,
-        ).build()
-        if download_result.status != "SUCCESS" or not download_result.zip_path:
-            result = self._result(
-                status="PARTIAL_FAILURE",
-                etsy_listing_id=listing_id,
-                draft_url=draft_result.draft_url,
-                draft_created=True,
-                images_uploaded=image_result.images_uploaded,
-                image_count=image_result.images_found,
-                completed_stages=tuple(completed),
-                failed_stage="digital_download_package",
-                errors=download_result.errors,
-            )
-            self._save(result)
-            return result
-        completed.append("digital_download_package_created")
-
         digital_result = EtsyDigitalFileService(
             config=self._config,
             memory=self._memory,
             client=self._client,
-        ).upload_digital_file(
+        ).upload_digital_files(
             listing_id=listing_id,
-            file_path=Path(download_result.zip_path),
+            final_images_dir=self._final_images_dir,
         )
         if digital_result.status != "SUCCESS":
             result = self._result(
@@ -153,7 +132,7 @@ class EtsyCompleteDraftService:
                 draft_created=True,
                 images_uploaded=image_result.images_uploaded,
                 image_count=image_result.images_found,
-                digital_file_path=download_result.zip_path,
+                digital_file_path=str(self._final_images_dir),
                 completed_stages=tuple(completed),
                 failed_stage="digital_file_upload",
                 errors=digital_result.errors,

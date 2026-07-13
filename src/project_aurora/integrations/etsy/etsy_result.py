@@ -73,19 +73,41 @@ class EtsyImageUploadResult:
 
 
 @dataclass(frozen=True, slots=True)
+class EtsyDigitalFileUploadAttempt:
+    """Result for one attempted Etsy digital file upload."""
+
+    filename: str
+    rank: int
+    status: str
+    etsy_file_id: str | None = None
+    errors: tuple[str, ...] = field(default_factory=tuple)
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "status", self.status.strip().upper())
+        object.__setattr__(self, "errors", tuple(self.errors))
+        object.__setattr__(self, "metadata", dict(self.metadata))
+
+
+@dataclass(frozen=True, slots=True)
 class EtsyDigitalFileUploadResult:
-    """Result of uploading a customer ZIP file to an Etsy draft."""
+    """Result of uploading customer digital files to an Etsy draft."""
 
     status: str
     etsy_listing_id: str | None
     digital_file_path: str | None
     uploaded: bool
+    files_found: int = 0
+    files_uploaded: int = 0
+    failed: int = 0
+    attempts: tuple[EtsyDigitalFileUploadAttempt, ...] = field(default_factory=tuple)
     errors: tuple[str, ...] = field(default_factory=tuple)
     warnings: tuple[str, ...] = field(default_factory=tuple)
     metadata: dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "status", self.status.strip().upper())
+        object.__setattr__(self, "attempts", tuple(self.attempts))
         object.__setattr__(self, "errors", tuple(self.errors))
         object.__setattr__(self, "warnings", tuple(self.warnings))
         object.__setattr__(self, "metadata", dict(self.metadata))
