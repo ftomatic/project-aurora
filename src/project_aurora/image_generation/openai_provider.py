@@ -11,6 +11,7 @@ from typing import Any
 from project_aurora.image_generation.image_provider import ImageProvider
 from project_aurora.image_generation.image_request import ImageRequest
 from project_aurora.image_generation.image_result import ImageResult
+from project_aurora.image_generation.image_inspector import inspect_png
 
 
 class OpenAIImageProvider(ImageProvider):
@@ -45,14 +46,17 @@ class OpenAIImageProvider(ImageProvider):
             output_format=request.output_format,
             n=request.number_of_images,
         )
-        generated_files = self._save_response_images(response, request)
+        errors: list[str] = []
+        generated_files = self._save_response_images(response, request, errors)
+        status = "FAILED" if errors else "SUCCESS"
 
         return ImageResult(
-            status="SUCCESS",
+            status=status,
             provider=self.provider_name(),
             generated_files=tuple(generated_files),
             generation_time=perf_counter() - started_at,
             cost_estimate=0.0,
+            errors=tuple(errors),
             estimated_cost=0.0,
             image_paths=tuple(generated_files),
             prompt_version="openai-gpt-image-v1",
@@ -89,6 +93,7 @@ class OpenAIImageProvider(ImageProvider):
         self,
         response: Any,
         request: ImageRequest,
+        errors: list[str],
     ) -> tuple[str, ...]:
         data_items = getattr(response, "data", [])
         generated_files: list[str] = []
@@ -102,11 +107,25 @@ class OpenAIImageProvider(ImageProvider):
                 continue
 
             path = self._output_dir / f"{slug}_{index:02d}.{request.output_format}"
-            path.write_bytes(base64.b64decode(image_base64))
+            try:
+                decoded_bytes = base64.b64decode(image_base64, validate=True)
+            except (ValueError, TypeError) as error:
+                errors.append(
+                    f"OpenAI image {index} contained invalid base64 data."
+                )
+                continue
+
+            path.write_bytes(decoded_bytes)
             generated_files.append(str(path))
+            inspection = inspect_png(path)
+            if not inspection.is_valid:
+                errors.append(
+                    f"{path.name} is visually blank or invalid: "
+                    f"{inspection.classification}."
+                )
 
         if not generated_files:
-            raise RuntimeError("OpenAI response did not contain image data.")
+            errors.append("OpenAI response did not contain valid image data.")
         return tuple(generated_files)
 
     @staticmethod

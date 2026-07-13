@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import json
+from io import BytesIO
 import sys
 import tempfile
 import unittest
 from pathlib import Path
+
+from PIL import Image
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 SRC_PATH = PROJECT_ROOT / "src"
@@ -38,6 +41,12 @@ class FakeResponse:
 
     def read(self) -> bytes:
         return json.dumps(self._payload).encode("utf-8")
+
+
+def make_visible_png_bytes(color: tuple[int, int, int, int] = (255, 0, 0, 255)) -> bytes:
+    output = BytesIO()
+    Image.new("RGBA", (2, 2), color).save(output, format="PNG")
+    return output.getvalue()
 
 
 class EtsyImageUploadTest(unittest.TestCase):
@@ -92,7 +101,7 @@ class EtsyImageUploadTest(unittest.TestCase):
 
     def test_client_uploads_listing_image_as_multipart(self) -> None:
         image_path = self.images_dir / "strawberry_01.png"
-        image_path.write_bytes(b"png-bytes")
+        image_path.write_bytes(make_visible_png_bytes())
         calls = []
 
         def fake_urlopen(api_request, timeout: int):  # type: ignore[no-untyped-def]
@@ -122,11 +131,11 @@ class EtsyImageUploadTest(unittest.TestCase):
         )
         self.assertIn(b'name="rank"', api_request.data)
         self.assertIn(b"name=\"image\"; filename=\"strawberry_01.png\"", api_request.data)
-        self.assertIn(b"png-bytes", api_request.data)
+        self.assertIn(b"\x89PNG", api_request.data)
 
     def test_service_uploads_sorted_png_images_to_latest_draft(self) -> None:
-        (self.images_dir / "b.png").write_bytes(b"second")
-        (self.images_dir / "a.png").write_bytes(b"first")
+        (self.images_dir / "b.png").write_bytes(make_visible_png_bytes())
+        (self.images_dir / "a.png").write_bytes(make_visible_png_bytes())
         (self.images_dir / "empty.png").write_bytes(b"")
         calls = []
 
@@ -155,7 +164,9 @@ class EtsyImageUploadTest(unittest.TestCase):
 
     def test_service_limits_uploads_to_ten_images(self) -> None:
         for index in range(12):
-            (self.images_dir / f"asset_{index:02d}.png").write_bytes(b"png")
+            (self.images_dir / f"asset_{index:02d}.png").write_bytes(
+                make_visible_png_bytes()
+            )
         calls = []
 
         def fake_urlopen(api_request, timeout: int):  # type: ignore[no-untyped-def]
@@ -174,7 +185,7 @@ class EtsyImageUploadTest(unittest.TestCase):
         self.assertEqual(len(calls), 10)
 
     def test_service_validates_before_calling_etsy(self) -> None:
-        (self.images_dir / "a.png").write_bytes(b"first")
+        (self.images_dir / "a.png").write_bytes(make_visible_png_bytes())
         calls = []
 
         def fake_urlopen(api_request, timeout: int):  # type: ignore[no-untyped-def]
@@ -204,7 +215,7 @@ class EtsyImageUploadTest(unittest.TestCase):
                 draft_url=None,
             )
         )
-        (self.images_dir / "a.png").write_bytes(b"first")
+        (self.images_dir / "a.png").write_bytes(make_visible_png_bytes())
 
         result = EtsyImageUploadService(
             config=self.config,
@@ -223,7 +234,7 @@ class EtsyImageUploadTest(unittest.TestCase):
                 draft_url=None,
             )
         )
-        (self.images_dir / "a.png").write_bytes(b"first")
+        (self.images_dir / "a.png").write_bytes(make_visible_png_bytes())
 
         result = EtsyImageUploadService(
             config=self.config,
@@ -233,6 +244,25 @@ class EtsyImageUploadTest(unittest.TestCase):
 
         self.assertEqual(result.status, "CONFIGURATION_REQUIRED")
         self.assertIn("not successful", result.errors[0])
+
+    def test_service_blocks_invalid_pngs_before_calling_etsy(self) -> None:
+        (self.images_dir / "bad.png").write_bytes(b"not-a-real-png")
+        calls = []
+
+        def fake_urlopen(api_request, timeout: int):  # type: ignore[no-untyped-def]
+            calls.append(api_request)
+            return FakeResponse({"listing_image_id": 1})
+
+        result = EtsyImageUploadService(
+            config=self.config,
+            memory=self.memory,
+            images_dir=self.images_dir,
+            client=EtsyClient(config=self.config, urlopen=fake_urlopen),
+        ).upload_latest_draft_images()
+
+        self.assertEqual(result.status, "CONFIGURATION_REQUIRED")
+        self.assertEqual(calls, [])
+        self.assertIn("INVALID_IMAGE", result.errors[0])
 
 
 if __name__ == "__main__":

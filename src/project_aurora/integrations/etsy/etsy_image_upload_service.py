@@ -11,6 +11,7 @@ from project_aurora.integrations.etsy.etsy_result import (
     EtsyImageUploadAttempt,
     EtsyImageUploadResult,
 )
+from project_aurora.image_generation.image_inspector import inspect_png
 from project_aurora.storage.memory_manager import MemoryManager
 
 
@@ -36,6 +37,7 @@ class EtsyImageUploadService:
         draft = self._load_latest_draft()
         listing_id = self._listing_id_from_draft(draft)
         image_files = self._find_images()
+        invalid_images = self._invalid_images(image_files[: self._max_images])
         missing = self._missing_config()
         errors: list[str] = []
         if missing:
@@ -48,6 +50,8 @@ class EtsyImageUploadService:
             errors.append("Latest Etsy draft does not include etsy_listing_id.")
         if not image_files:
             errors.append("No non-empty PNG image files found.")
+        if invalid_images:
+            errors.extend(invalid_images)
         if errors:
             result = EtsyImageUploadResult(
                 status="CONFIGURATION_REQUIRED",
@@ -134,6 +138,18 @@ class EtsyImageUploadService:
             for path in sorted(self._images_dir.glob("*.png"), key=lambda p: p.name)
             if path.is_file() and path.stat().st_size > 0
         ]
+
+    @staticmethod
+    def _invalid_images(image_files: list[Path]) -> tuple[str, ...]:
+        errors: list[str] = []
+        for image_path in image_files:
+            inspection = inspect_png(image_path)
+            if not inspection.is_valid:
+                errors.append(
+                    "Generated image is not a valid visible PNG: "
+                    f"{image_path.name} ({inspection.classification})."
+                )
+        return tuple(errors)
 
     def _missing_config(self) -> tuple[str, ...]:
         missing: list[str] = []

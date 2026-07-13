@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import base64
+from io import BytesIO
 import sys
 import tempfile
 import unittest
 from pathlib import Path
+
+from PIL import Image
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 SRC_PATH = PROJECT_ROOT / "src"
@@ -17,9 +20,6 @@ from project_aurora.image_generation.image_cost_estimator import (  # noqa: E402
 )
 from project_aurora.image_generation.image_generation_engine import (  # noqa: E402
     ImageGenerationEngine,
-)
-from project_aurora.image_generation.mock_provider import (  # noqa: E402
-    PLACEHOLDER_PNG_BYTES,
 )
 from project_aurora.image_generation.openai_provider import (  # noqa: E402
     OpenAIImageProvider,
@@ -41,13 +41,19 @@ def make_prompt_package() -> dict[str, object]:
     }
 
 
+def make_visible_png_bytes() -> bytes:
+    output = BytesIO()
+    Image.new("RGBA", (2, 2), (255, 0, 0, 255)).save(output, format="PNG")
+    return output.getvalue()
+
+
 class FakeImagesClient:
     def __init__(self) -> None:
         self.calls: list[dict[str, object]] = []
 
     def generate(self, **kwargs: object) -> object:
         self.calls.append(kwargs)
-        image_data = base64.b64encode(PLACEHOLDER_PNG_BYTES).decode("ascii")
+        image_data = base64.b64encode(make_visible_png_bytes()).decode("ascii")
         count = int(kwargs["n"])
         return type(
             "FakeResponse",
