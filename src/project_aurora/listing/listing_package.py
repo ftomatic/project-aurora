@@ -38,6 +38,7 @@ class ListingPackage:
     prompt_package_id: str
     approved_mockup_files: tuple[str, ...]
     approved_generated_image_files: tuple[str, ...]
+    is_digital_download: bool = True
     etsy_listing_id: str | None = None
     local_asset_cleanup_status: str = CLEANUP_NOT_STARTED
     local_files_retention_policy: str = (

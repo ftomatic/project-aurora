@@ -21,6 +21,7 @@ class EtsyConfig:
     default_quantity: int = 999
     taxonomy_id: int | None = None
     processing_profile_id: int | None = None
+    shipping_profile_id: int | None = None
 
     @classmethod
     def from_file(cls, path: Path) -> "EtsyConfig":
@@ -59,6 +60,10 @@ class EtsyConfig:
                 os.getenv("ETSY_PROCESSING_PROFILE_ID")
                 or values.get("processing_profile_id")
             ),
+            shipping_profile_id=_optional_int(
+                os.getenv("ETSY_SHIPPING_PROFILE_ID")
+                or values.get("shipping_profile_id")
+            ),
         )
 
     @property
@@ -81,6 +86,8 @@ class EtsyConfig:
             missing.append("taxonomy_id")
         if not is_digital and self.processing_profile_id is None:
             missing.append("processing_profile_id")
+        if not is_digital and self.shipping_profile_id is None:
+            missing.append("shipping_profile_id")
         return tuple(missing)
 
 

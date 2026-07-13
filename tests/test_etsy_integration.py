@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-from dataclasses import replace
 import sys
 import tempfile
 import unittest
@@ -66,6 +65,19 @@ def make_listing_package() -> ListingPackage:
     )
 
 
+def make_physical_listing_package() -> ListingPackage:
+    return ListingPackage(
+        product_name="Summer Strawberry Birthday Collection",
+        collection_name="Summer Strawberry Birthday Collection",
+        listing_status=READY_FOR_ETSY_DRAFT,
+        seo_package_id="latest",
+        prompt_package_id="latest",
+        approved_mockup_files=("mockup_01.png",),
+        approved_generated_image_files=("asset_01.png",),
+        is_digital_download=False,
+    )
+
+
 class EtsyIntegrationTest(unittest.TestCase):
     def setUp(self) -> None:
         self.temp_dir = tempfile.TemporaryDirectory()
@@ -94,8 +106,40 @@ class EtsyIntegrationTest(unittest.TestCase):
         self.assertEqual(payload.title, self.seo_package.title)
         self.assertEqual(len(payload.tags), 13)
         self.assertTrue(payload.is_digital)
+        self.assertEqual(payload.listing_type, "download")
         self.assertEqual(payload.who_made, "i_did")
         self.assertEqual(payload.to_dict()["state"], "draft")
+
+    def test_digital_listing_payload_uses_download_type(self) -> None:
+        payload = EtsyListingMapper().map_to_draft(
+            listing_package=make_listing_package(),
+            seo_package=self.seo_package,
+            config=self.config,
+        )
+        payload_data = payload.to_dict()
+
+        self.assertEqual(payload_data["type"], "download")
+        self.assertNotIn("shipping_profile_id", payload_data)
+        self.assertNotIn("processing_profile_id", payload_data)
+
+    def test_listing_package_digital_flag_maps_to_physical_type(self) -> None:
+        config = EtsyConfig(
+            mode="live",
+            taxonomy_id=123,
+            processing_profile_id=456,
+            shipping_profile_id=789,
+        )
+
+        payload = EtsyListingMapper().map_to_draft(
+            listing_package=make_physical_listing_package(),
+            seo_package=self.seo_package,
+            config=config,
+        )
+        payload_data = payload.to_dict()
+
+        self.assertFalse(payload.is_digital)
+        self.assertEqual(payload_data["type"], "physical")
+        self.assertEqual(payload_data["shipping_profile_id"], 789)
 
     def test_payload_validation_passes(self) -> None:
         mapper = EtsyListingMapper()
@@ -177,7 +221,7 @@ class EtsyIntegrationTest(unittest.TestCase):
 
         self.assertEqual(
             config.validate_for_api(is_digital=False),
-            ("processing_profile_id",),
+            ("processing_profile_id", "shipping_profile_id"),
         )
 
     def test_draft_service_stops_before_client_when_live_config_missing(self) -> None:
@@ -197,7 +241,7 @@ class EtsyIntegrationTest(unittest.TestCase):
         self.assertEqual(result.status, "CONFIGURATION_REQUIRED")
         self.assertFalse(result.metadata["api_called"])
 
-    def test_physical_payload_validation_requires_processing_profile(self) -> None:
+    def test_physical_config_validation_requires_profiles(self) -> None:
         config = EtsyConfig(
             mode="live",
             shop_id="shop",
@@ -207,15 +251,32 @@ class EtsyIntegrationTest(unittest.TestCase):
             taxonomy_id=123,
         )
         payload = EtsyListingMapper().map_to_draft(
-            listing_package=make_listing_package(),
+            listing_package=make_physical_listing_package(),
             seo_package=self.seo_package,
             config=config,
         )
-        physical_payload = replace(payload, is_digital=False)
 
         self.assertEqual(
-            config.validate_for_api(is_digital=physical_payload.is_digital),
-            ("processing_profile_id",),
+            config.validate_for_api(is_digital=payload.is_digital),
+            ("processing_profile_id", "shipping_profile_id"),
+        )
+
+    def test_physical_payload_validation_requires_shipping_profile(self) -> None:
+        config = EtsyConfig(
+            mode="live",
+            taxonomy_id=123,
+            processing_profile_id=456,
+            shipping_profile_id=None,
+        )
+        payload = EtsyListingMapper().map_to_draft(
+            listing_package=make_physical_listing_package(),
+            seo_package=self.seo_package,
+            config=config,
+        )
+
+        self.assertIn(
+            "shipping_profile_id is required for physical listings.",
+            EtsyListingMapper().validate_payload(payload),
         )
 
     def test_live_client_sends_keystring_and_shared_secret_header(self) -> None:

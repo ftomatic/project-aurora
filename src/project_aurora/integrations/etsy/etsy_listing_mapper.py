@@ -20,35 +20,42 @@ class EtsyDraftListingPayload:
     price: float
     quantity: int
     taxonomy_id: int | None
+    listing_type: str
     who_made: str
     when_made: str
     is_supply: bool
     item_weight: float | None
     item_weight_unit: str | None
     processing_profile_id: int | None
+    shipping_profile_id: int | None
     is_digital: bool
     image_files: tuple[str, ...]
     digital_files: tuple[str, ...]
 
     def to_dict(self) -> dict[str, Any]:
         """Return API-ready payload values."""
-        return {
+        payload: dict[str, Any] = {
             "title": self.title,
             "description": self.description,
             "tags": list(self.tags),
             "price": self.price,
             "quantity": self.quantity,
             "taxonomy_id": self.taxonomy_id,
+            "type": self.listing_type,
             "who_made": self.who_made,
             "when_made": self.when_made,
             "is_supply": self.is_supply,
             "item_weight": self.item_weight,
             "item_weight_unit": self.item_weight_unit,
             "processing_profile_id": self.processing_profile_id,
+            "shipping_profile_id": self.shipping_profile_id,
             "is_digital": self.is_digital,
             "image_files": list(self.image_files),
             "digital_files": list(self.digital_files),
             "state": "draft",
+        }
+        return {
+            key: value for key, value in payload.items() if value is not None
         }
 
 
@@ -62,6 +69,8 @@ class EtsyListingMapper:
         config: EtsyConfig,
     ) -> EtsyDraftListingPayload:
         """Return an Etsy draft listing payload."""
+        is_digital = listing_package.is_digital_download
+        listing_type = "download" if is_digital else "physical"
         return EtsyDraftListingPayload(
             title=seo_package.title,
             description=seo_package.description,
@@ -69,13 +78,19 @@ class EtsyListingMapper:
             price=config.default_price,
             quantity=config.default_quantity,
             taxonomy_id=config.taxonomy_id,
+            listing_type=listing_type,
             who_made="i_did",
             when_made="made_to_order",
             is_supply=False,
             item_weight=None,
             item_weight_unit=None,
-            processing_profile_id=config.processing_profile_id,
-            is_digital=True,
+            processing_profile_id=(
+                None if is_digital else config.processing_profile_id
+            ),
+            shipping_profile_id=(
+                None if is_digital else config.shipping_profile_id
+            ),
+            is_digital=is_digital,
             image_files=listing_package.approved_mockup_files,
             digital_files=listing_package.approved_generated_image_files,
         )
@@ -101,4 +116,9 @@ class EtsyListingMapper:
             errors.append("Price must be greater than zero.")
         if payload.quantity <= 0:
             errors.append("Quantity must be greater than zero.")
+        if (
+            payload.listing_type == "physical"
+            and payload.shipping_profile_id is None
+        ):
+            errors.append("shipping_profile_id is required for physical listings.")
         return tuple(errors)
