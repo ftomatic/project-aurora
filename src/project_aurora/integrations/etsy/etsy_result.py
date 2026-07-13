@@ -26,3 +26,47 @@ class EtsyDraftResult:
         object.__setattr__(self, "errors", tuple(self.errors))
         object.__setattr__(self, "warnings", tuple(self.warnings))
         object.__setattr__(self, "metadata", dict(self.metadata))
+
+
+@dataclass(frozen=True, slots=True)
+class EtsyImageUploadAttempt:
+    """Result for one attempted Etsy listing image upload."""
+
+    image_path: str
+    rank: int
+    status: str
+    etsy_image_id: str | None = None
+    errors: tuple[str, ...] = field(default_factory=tuple)
+    warnings: tuple[str, ...] = field(default_factory=tuple)
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        if self.rank < 1:
+            raise ValueError("Image rank must start at 1.")
+        object.__setattr__(self, "status", self.status.strip().upper())
+        object.__setattr__(self, "errors", tuple(self.errors))
+        object.__setattr__(self, "warnings", tuple(self.warnings))
+        object.__setattr__(self, "metadata", dict(self.metadata))
+
+
+@dataclass(frozen=True, slots=True)
+class EtsyImageUploadResult:
+    """Summary for uploading local images to an Etsy draft listing."""
+
+    status: str
+    etsy_listing_id: str | None
+    images_found: int
+    images_uploaded: int
+    failed: int
+    attempts: tuple[EtsyImageUploadAttempt, ...] = field(default_factory=tuple)
+    errors: tuple[str, ...] = field(default_factory=tuple)
+    warnings: tuple[str, ...] = field(default_factory=tuple)
+    created_at: datetime = field(default_factory=datetime.now)
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "status", self.status.strip().upper())
+        object.__setattr__(self, "attempts", tuple(self.attempts))
+        object.__setattr__(self, "errors", tuple(self.errors))
+        object.__setattr__(self, "warnings", tuple(self.warnings))
+        object.__setattr__(self, "metadata", dict(self.metadata))

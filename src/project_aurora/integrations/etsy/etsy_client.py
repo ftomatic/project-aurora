@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 import json
+import mimetypes
+import uuid
+from pathlib import Path
 from typing import Any, Callable
 from urllib import request
 from urllib.error import HTTPError, URLError
@@ -28,6 +31,41 @@ class EtsyClient:
     def get_json(self, path: str) -> dict[str, Any]:
         """Execute an authenticated Etsy Open API v3 GET request."""
         return self._request_json(path=path, method="GET")
+
+    def upload_listing_image(
+        self,
+        listing_id: str,
+        image_path: Path,
+        rank: int,
+    ) -> dict[str, Any]:
+        """Upload one image to an existing Etsy listing draft."""
+        if not self._config.shop_id:
+            raise RuntimeError("ETSY_SHOP_ID is required.")
+        if rank < 1:
+            raise RuntimeError("Image rank must start at 1.")
+        if not image_path.exists() or not image_path.is_file():
+            raise RuntimeError(f"Image file does not exist: {image_path}")
+        if image_path.stat().st_size <= 0:
+            raise RuntimeError(f"Image file is empty: {image_path}")
+
+        body, content_type = self._build_multipart_body(
+            fields={"rank": str(rank)},
+            file_field="image",
+            file_path=image_path,
+        )
+        api_request = request.Request(
+            self._build_url(
+                f"/shops/{self._config.shop_id}/listings/"
+                f"{listing_id}/images"
+            ),
+            data=body,
+            headers={
+                **self._build_headers(),
+                "Content-Type": content_type,
+            },
+            method="POST",
+        )
+        return self._open_json(api_request)
 
     def create_draft_listing(
         self,
@@ -100,6 +138,9 @@ class EtsyClient:
             headers=self._build_headers(include_json=data is not None),
             method=method,
         )
+        return self._open_json(api_request)
+
+    def _open_json(self, api_request: request.Request) -> dict[str, Any]:
         try:
             with self._urlopen(api_request, timeout=30) as response:
                 raw_body = response.read().decode("utf-8")
@@ -139,3 +180,42 @@ class EtsyClient:
         if include_json:
             headers["Content-Type"] = "application/json"
         return headers
+
+    def _build_multipart_body(
+        self,
+        fields: dict[str, str],
+        file_field: str,
+        file_path: Path,
+    ) -> tuple[bytes, str]:
+        boundary = f"aurora-{uuid.uuid4().hex}"
+        lines: list[bytes] = []
+        for name, value in fields.items():
+            lines.extend(
+                (
+                    f"--{boundary}".encode("utf-8"),
+                    (
+                        f'Content-Disposition: form-data; name="{name}"'
+                    ).encode("utf-8"),
+                    b"",
+                    value.encode("utf-8"),
+                )
+            )
+
+        content_type = (
+            mimetypes.guess_type(file_path.name)[0] or "application/octet-stream"
+        )
+        lines.extend(
+            (
+                f"--{boundary}".encode("utf-8"),
+                (
+                    "Content-Disposition: form-data; "
+                    f'name="{file_field}"; filename="{file_path.name}"'
+                ).encode("utf-8"),
+                f"Content-Type: {content_type}".encode("utf-8"),
+                b"",
+                file_path.read_bytes(),
+                f"--{boundary}--".encode("utf-8"),
+                b"",
+            )
+        )
+        return b"\r\n".join(lines), f"multipart/form-data; boundary={boundary}"

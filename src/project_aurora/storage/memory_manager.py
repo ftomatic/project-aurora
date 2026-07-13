@@ -50,6 +50,7 @@ class MemoryManager:
     SEO_COLLECTION = "seo"
     LISTING_COLLECTION = "listings"
     ETSY_DRAFT_COLLECTION = "etsy_drafts"
+    ETSY_IMAGE_UPLOAD_COLLECTION = "etsy_image_uploads"
 
     def __init__(self, storage: StorageInterface | None = None) -> None:
         self._storage = storage or CSVStorage()
@@ -274,6 +275,29 @@ class MemoryManager:
     ) -> dict[str, Any]:
         """Load an Etsy draft creation result."""
         return self._storage.load(self.ETSY_DRAFT_COLLECTION, result_id)
+
+    def save_etsy_image_upload_result(
+        self,
+        upload_result: Any,
+        result_id: str = "latest",
+    ) -> str:
+        """Save an Etsy listing image upload result."""
+        self._storage.save(
+            self.ETSY_IMAGE_UPLOAD_COLLECTION,
+            result_id,
+            self._to_record(upload_result),
+        )
+        return result_id
+
+    def load_etsy_image_upload_result(
+        self,
+        result_id: str = "latest",
+    ) -> dict[str, Any]:
+        """Load an Etsy listing image upload result."""
+        return self._storage.load(
+            self.ETSY_IMAGE_UPLOAD_COLLECTION,
+            result_id,
+        )
 
     def memory_summary(self) -> MemorySummary:
         """Return a summary of stored Aurora memory."""
