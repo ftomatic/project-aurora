@@ -49,3 +49,9 @@ build/
 data/aurora/**/*.json
 data/aurora/generated_images/*
 !data/aurora/generated_images/.gitkeep
+data/aurora/mock_generated_images/*
+!data/aurora/mock_generated_images/.gitkeep
+data/aurora/final_product_images/*
+!data/aurora/final_product_images/.gitkeep
+data/aurora/digital_downloads/*
+!data/aurora/digital_downloads/.gitkeep

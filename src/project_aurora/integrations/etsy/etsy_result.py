@@ -70,3 +70,48 @@ class EtsyImageUploadResult:
         object.__setattr__(self, "errors", tuple(self.errors))
         object.__setattr__(self, "warnings", tuple(self.warnings))
         object.__setattr__(self, "metadata", dict(self.metadata))
+
+
+@dataclass(frozen=True, slots=True)
+class EtsyDigitalFileUploadResult:
+    """Result of uploading a customer ZIP file to an Etsy draft."""
+
+    status: str
+    etsy_listing_id: str | None
+    digital_file_path: str | None
+    uploaded: bool
+    errors: tuple[str, ...] = field(default_factory=tuple)
+    warnings: tuple[str, ...] = field(default_factory=tuple)
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "status", self.status.strip().upper())
+        object.__setattr__(self, "errors", tuple(self.errors))
+        object.__setattr__(self, "warnings", tuple(self.warnings))
+        object.__setattr__(self, "metadata", dict(self.metadata))
+
+
+@dataclass(frozen=True, slots=True)
+class EtsyCompleteDraftResult:
+    """Complete Etsy draft production flow result."""
+
+    etsy_listing_id: str | None
+    draft_url: str | None
+    draft_created: bool
+    images_uploaded: int
+    image_count: int
+    digital_file_uploaded: bool
+    digital_file_path: str | None
+    price: float
+    status: str
+    completed_stages: tuple[str, ...] = field(default_factory=tuple)
+    failed_stage: str | None = None
+    warnings: tuple[str, ...] = field(default_factory=tuple)
+    errors: tuple[str, ...] = field(default_factory=tuple)
+    created_at: datetime = field(default_factory=datetime.now)
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "status", self.status.strip().upper())
+        object.__setattr__(self, "completed_stages", tuple(self.completed_stages))
+        object.__setattr__(self, "warnings", tuple(self.warnings))
+        object.__setattr__(self, "errors", tuple(self.errors))

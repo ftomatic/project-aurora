@@ -67,6 +67,38 @@ class EtsyClient:
         )
         return self._open_json(api_request)
 
+    def upload_listing_digital_file(
+        self,
+        listing_id: str,
+        file_path: Path,
+    ) -> dict[str, Any]:
+        """Upload one customer digital file to an Etsy draft listing."""
+        if not self._config.shop_id:
+            raise RuntimeError("ETSY_SHOP_ID is required.")
+        if not file_path.exists() or not file_path.is_file():
+            raise RuntimeError(f"Digital file does not exist: {file_path}")
+        if file_path.stat().st_size <= 0:
+            raise RuntimeError(f"Digital file is empty: {file_path}")
+
+        body, content_type = self._build_multipart_body(
+            fields={},
+            file_field="file",
+            file_path=file_path,
+        )
+        api_request = request.Request(
+            self._build_url(
+                f"/shops/{self._config.shop_id}/listings/"
+                f"{listing_id}/files"
+            ),
+            data=body,
+            headers={
+                **self._build_headers(),
+                "Content-Type": content_type,
+            },
+            method="POST",
+        )
+        return self._open_json(api_request)
+
     def create_draft_listing(
         self,
         payload: EtsyDraftListingPayload,

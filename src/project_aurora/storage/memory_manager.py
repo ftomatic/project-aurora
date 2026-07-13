@@ -51,6 +51,8 @@ class MemoryManager:
     LISTING_COLLECTION = "listings"
     ETSY_DRAFT_COLLECTION = "etsy_drafts"
     ETSY_IMAGE_UPLOAD_COLLECTION = "etsy_image_uploads"
+    ETSY_DIGITAL_FILE_UPLOAD_COLLECTION = "etsy_digital_file_uploads"
+    ETSY_COMPLETE_DRAFT_COLLECTION = "etsy_complete_drafts"
 
     def __init__(self, storage: StorageInterface | None = None) -> None:
         self._storage = storage or CSVStorage()
@@ -298,6 +300,39 @@ class MemoryManager:
             self.ETSY_IMAGE_UPLOAD_COLLECTION,
             result_id,
         )
+
+    def save_etsy_digital_file_upload_result(
+        self,
+        upload_result: Any,
+        result_id: str = "latest",
+    ) -> str:
+        """Save an Etsy digital file upload result."""
+        self._storage.save(
+            self.ETSY_DIGITAL_FILE_UPLOAD_COLLECTION,
+            result_id,
+            self._to_record(upload_result),
+        )
+        return result_id
+
+    def save_etsy_complete_draft_result(
+        self,
+        complete_result: Any,
+        result_id: str = "latest",
+    ) -> str:
+        """Save a complete Etsy draft workflow result."""
+        self._storage.save(
+            self.ETSY_COMPLETE_DRAFT_COLLECTION,
+            result_id,
+            self._to_record(complete_result),
+        )
+        return result_id
+
+    def load_etsy_complete_draft_result(
+        self,
+        result_id: str = "latest",
+    ) -> dict[str, Any]:
+        """Load a complete Etsy draft workflow result."""
+        return self._storage.load(self.ETSY_COMPLETE_DRAFT_COLLECTION, result_id)
 
     def memory_summary(self) -> MemorySummary:
         """Return a summary of stored Aurora memory."""

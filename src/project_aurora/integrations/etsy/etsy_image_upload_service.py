@@ -162,6 +162,8 @@ class EtsyImageUploadService:
 
     def _missing_config(self) -> tuple[str, ...]:
         missing: list[str] = []
+        if self._config.is_mock_mode:
+            missing.append("AURORA_ETSY_MODE=live")
         if not self._config.shop_id:
             missing.append("ETSY_SHOP_ID")
         if not self._config.client_id:
