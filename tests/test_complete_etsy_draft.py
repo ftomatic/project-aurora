@@ -28,6 +28,8 @@ from project_aurora.integrations.etsy.etsy_digital_file_service import (  # noqa
 )
 from project_aurora.integrations.etsy.etsy_result import (  # noqa: E402
     EtsyCompleteDraftResult,
+    EtsyDigitalFileUploadAttempt,
+    EtsyDigitalFileUploadResult,
 )
 from project_aurora.seo.description_builder import (  # noqa: E402
     RAINBOW_MILK_STUDIO_DESCRIPTION,
@@ -60,8 +62,9 @@ class FakeCompleteEtsyClient(EtsyClient):
         self.fail_stage = fail_stage
         self.draft_calls = 0
         self.image_uploads: list[tuple[str, str, int]] = []
-        self.digital_uploads: list[tuple[str, str]] = []
+        self.digital_uploads: list[tuple[str, str, int | None]] = []
         self.payloads: list[EtsyDraftListingPayload] = []
+        self.existing_digital_files: list[dict[str, object]] = []
 
     def create_draft_listing(
         self,
@@ -101,8 +104,14 @@ class FakeCompleteEtsyClient(EtsyClient):
     ) -> dict[str, object]:
         if self.fail_stage == "digital":
             raise RuntimeError("Digital upload failed.")
-        self.digital_uploads.append((listing_id, file_path.name))
+        self.digital_uploads.append((listing_id, file_path.name, rank))
         return {"listing_file_id": f"file-{rank}"}
+
+    def list_listing_digital_files(
+        self,
+        listing_id: str,
+    ) -> tuple[dict[str, object], ...]:
+        return tuple(self.existing_digital_files)
 
 
 def write_final_png(path: Path, color: tuple[int, int, int, int]) -> None:
@@ -367,6 +376,201 @@ class CompleteEtsyDraftTest(unittest.TestCase):
 
         self.assertEqual(loaded["status"], "PARTIAL_FAILURE")
         self.assertEqual(loaded["etsy_listing_id"], "123456789")
+
+    def test_retry_digital_upload_only_uploads_failed_files(self) -> None:
+        previous = EtsyDigitalFileUploadResult(
+            status="PARTIAL_FAILURE",
+            etsy_listing_id="123456789",
+            digital_file_path=str(self.final_images_dir),
+            uploaded=False,
+            files_found=4,
+            files_uploaded=3,
+            failed=1,
+            attempts=(
+                EtsyDigitalFileUploadAttempt(
+                    filename="strawberry_birthday_party_printable_01.png",
+                    rank=1,
+                    status="SUCCESS",
+                    etsy_file_id="file-1",
+                ),
+                EtsyDigitalFileUploadAttempt(
+                    filename="strawberry_birthday_party_printable_02.png",
+                    rank=2,
+                    status="SUCCESS",
+                    etsy_file_id="file-2",
+                ),
+                EtsyDigitalFileUploadAttempt(
+                    filename="strawberry_birthday_party_printable_03.png",
+                    rank=3,
+                    status="SUCCESS",
+                    etsy_file_id="file-3",
+                ),
+                EtsyDigitalFileUploadAttempt(
+                    filename="strawberry_birthday_party_printable_04.png",
+                    rank=4,
+                    status="FAILED",
+                    errors=("HTTP 400: upload failed.",),
+                ),
+            ),
+        )
+        client = FakeCompleteEtsyClient(self.config)
+
+        result = EtsyDigitalFileService(
+            config=self.config,
+            memory=self.memory,
+            client=client,
+        ).retry_failed_digital_files(
+            listing_id="123456789",
+            final_images_dir=self.final_images_dir,
+            previous_result=previous,
+        )
+
+        self.assertEqual(result.status, "SUCCESS")
+        self.assertEqual(result.files_uploaded, 1)
+        self.assertEqual(result.failed, 0)
+        self.assertEqual(
+            client.digital_uploads,
+            [
+                (
+                    "123456789",
+                    "strawberry_birthday_party_printable_04.png",
+                    4,
+                )
+            ],
+        )
+        previous_failed = result.metadata["previous_failed"]
+        self.assertEqual(previous_failed[0]["filename"], "strawberry_birthday_party_printable_04.png")
+        self.assertEqual(previous_failed[0]["errors"], ["HTTP 400: upload failed."])
+        saved = self.memory.load_etsy_digital_file_upload_result()
+        self.assertEqual(saved["status"], "SUCCESS")
+
+    def test_retry_uses_existing_etsy_files_to_prevent_duplicates(self) -> None:
+        previous = EtsyDigitalFileUploadResult(
+            status="PARTIAL_FAILURE",
+            etsy_listing_id="123456789",
+            digital_file_path=str(self.final_images_dir),
+            uploaded=False,
+            files_found=4,
+            files_uploaded=2,
+            failed=2,
+            attempts=(
+                EtsyDigitalFileUploadAttempt(
+                    filename="strawberry_birthday_party_printable_01.png",
+                    rank=1,
+                    status="SUCCESS",
+                    etsy_file_id="file-1",
+                ),
+                EtsyDigitalFileUploadAttempt(
+                    filename="strawberry_birthday_party_printable_02.png",
+                    rank=2,
+                    status="SUCCESS",
+                    etsy_file_id="file-2",
+                ),
+                EtsyDigitalFileUploadAttempt(
+                    filename="strawberry_birthday_party_printable_03.png",
+                    rank=3,
+                    status="FAILED",
+                    errors=("File is already attached.",),
+                ),
+                EtsyDigitalFileUploadAttempt(
+                    filename="strawberry_birthday_party_printable_04.png",
+                    rank=4,
+                    status="FAILED",
+                    errors=("Timeout.",),
+                ),
+            ),
+        )
+        client = FakeCompleteEtsyClient(self.config)
+        client.existing_digital_files = [
+            {
+                "filename": "strawberry_birthday_party_printable_03.png",
+                "listing_file_id": "file-3",
+            }
+        ]
+
+        result = EtsyDigitalFileService(
+            config=self.config,
+            memory=self.memory,
+            client=client,
+        ).retry_failed_digital_files(
+            listing_id="123456789",
+            final_images_dir=self.final_images_dir,
+            previous_result=previous,
+        )
+
+        self.assertEqual(result.status, "SUCCESS")
+        self.assertEqual(
+            client.digital_uploads,
+            [
+                (
+                    "123456789",
+                    "strawberry_birthday_party_printable_04.png",
+                    4,
+                )
+            ],
+        )
+        already_uploaded = result.metadata["already_uploaded"]
+        self.assertIn(
+            {
+                "filename": "strawberry_birthday_party_printable_03.png",
+                "etsy_file_id": "file-3",
+            },
+            already_uploaded,
+        )
+
+    def test_retry_preserves_failure_error_when_retry_fails(self) -> None:
+        previous = EtsyDigitalFileUploadResult(
+            status="PARTIAL_FAILURE",
+            etsy_listing_id="123456789",
+            digital_file_path=str(self.final_images_dir),
+            uploaded=False,
+            files_found=4,
+            files_uploaded=3,
+            failed=1,
+            attempts=(
+                EtsyDigitalFileUploadAttempt(
+                    filename="strawberry_birthday_party_printable_01.png",
+                    rank=1,
+                    status="SUCCESS",
+                    etsy_file_id="file-1",
+                ),
+                EtsyDigitalFileUploadAttempt(
+                    filename="strawberry_birthday_party_printable_02.png",
+                    rank=2,
+                    status="SUCCESS",
+                    etsy_file_id="file-2",
+                ),
+                EtsyDigitalFileUploadAttempt(
+                    filename="strawberry_birthday_party_printable_03.png",
+                    rank=3,
+                    status="SUCCESS",
+                    etsy_file_id="file-3",
+                ),
+                EtsyDigitalFileUploadAttempt(
+                    filename="strawberry_birthday_party_printable_04.png",
+                    rank=4,
+                    status="FAILED",
+                    errors=("Original API error.",),
+                ),
+            ),
+        )
+        client = FakeCompleteEtsyClient(self.config, fail_stage="digital")
+
+        result = EtsyDigitalFileService(
+            config=self.config,
+            memory=self.memory,
+            client=client,
+        ).retry_failed_digital_files(
+            listing_id="123456789",
+            final_images_dir=self.final_images_dir,
+            previous_result=previous,
+        )
+
+        self.assertEqual(result.status, "PARTIAL_FAILURE")
+        self.assertEqual(result.failed, 1)
+        self.assertEqual(result.attempts[0].filename, "strawberry_birthday_party_printable_04.png")
+        self.assertEqual(result.attempts[0].errors, ("Digital upload failed.",))
+        self.assertEqual(result.metadata["previous_failed"][0]["errors"], ["Original API error."])
 
 
 if __name__ == "__main__":

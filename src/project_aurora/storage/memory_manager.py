@@ -314,6 +314,16 @@ class MemoryManager:
         )
         return result_id
 
+    def load_etsy_digital_file_upload_result(
+        self,
+        result_id: str = "latest",
+    ) -> dict[str, Any]:
+        """Load an Etsy digital file upload result."""
+        return self._storage.load(
+            self.ETSY_DIGITAL_FILE_UPLOAD_COLLECTION,
+            result_id,
+        )
+
     def save_etsy_complete_draft_result(
         self,
         complete_result: Any,

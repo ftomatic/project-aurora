@@ -87,6 +87,108 @@ class EtsyDigitalFileService:
         directory = file_path.parent
         return self.upload_digital_files(listing_id=listing_id, final_images_dir=directory)
 
+    def retry_failed_digital_files(
+        self,
+        listing_id: str | None,
+        final_images_dir: Path,
+        previous_result: EtsyDigitalFileUploadResult,
+    ) -> EtsyDigitalFileUploadResult:
+        """Retry only failed or missing digital files for an existing draft."""
+        files = self._find_pngs(final_images_dir)
+        file_by_name = {file_path.name: file_path for file_path in files}
+        previous_uploaded = self._successful_attempts_by_filename(previous_result)
+        previous_failed = self._failed_attempt_records(previous_result)
+        errors = list(self._preflight_errors(listing_id, final_images_dir, files))
+        if errors:
+            retry_names = tuple(
+                filename
+                for filename in file_by_name
+                if filename not in previous_uploaded
+            )
+            result = EtsyDigitalFileUploadResult(
+                status="CONFIGURATION_REQUIRED",
+                etsy_listing_id=listing_id,
+                digital_file_path=str(final_images_dir),
+                uploaded=False,
+                files_found=len(files),
+                files_uploaded=0,
+                failed=0,
+                errors=tuple(errors),
+                metadata={
+                    "api_called": False,
+                    "already_uploaded": [
+                        {"filename": filename, "etsy_file_id": file_id}
+                        for filename, file_id in sorted(previous_uploaded.items())
+                    ],
+                    "retrying": list(retry_names),
+                    "previous_failed": previous_failed,
+                },
+            )
+            return result
+
+        etsy_uploaded, query_warning = self._uploaded_files_from_listing(str(listing_id))
+        already_uploaded = {**previous_uploaded, **etsy_uploaded}
+        retry_names = tuple(
+            filename
+            for filename in file_by_name
+            if filename not in already_uploaded
+        )
+
+        attempts: list[EtsyDigitalFileUploadAttempt] = []
+        for filename in retry_names:
+            file_path = file_by_name[filename]
+            attempts.append(
+                self._upload_one(
+                    listing_id=str(listing_id),
+                    file_path=file_path,
+                    rank=self._rank_for_filename(filename, files),
+                )
+            )
+
+        newly_uploaded = {
+            attempt.filename: attempt.etsy_file_id
+            for attempt in attempts
+            if attempt.status == "SUCCESS"
+        }
+        all_uploaded = {**already_uploaded, **newly_uploaded}
+        failed_attempts = tuple(
+            attempt for attempt in attempts if attempt.status != "SUCCESS"
+        )
+        uploaded_complete = (
+            len(all_uploaded) == self._required_count and not failed_attempts
+        )
+        warnings = (query_warning,) if query_warning else ()
+        result = EtsyDigitalFileUploadResult(
+            status="SUCCESS" if uploaded_complete else "PARTIAL_FAILURE",
+            etsy_listing_id=listing_id,
+            digital_file_path=str(final_images_dir),
+            uploaded=uploaded_complete,
+            files_found=len(files),
+            files_uploaded=len(newly_uploaded),
+            failed=len(failed_attempts),
+            attempts=tuple(attempts),
+            warnings=warnings,
+            metadata={
+                "api_called": bool(attempts),
+                "already_uploaded": [
+                    {"filename": filename, "etsy_file_id": file_id}
+                    for filename, file_id in sorted(already_uploaded.items())
+                ],
+                "retrying": list(retry_names),
+                "uploaded": [
+                    {
+                        "filename": attempt.filename,
+                        "etsy_file_id": attempt.etsy_file_id,
+                    }
+                    for attempt in attempts
+                    if attempt.status == "SUCCESS"
+                ],
+                "previous_failed": previous_failed,
+            },
+        )
+        self._save_result(result)
+        return result
+
     def _upload_one(
         self,
         listing_id: str,
@@ -175,3 +277,67 @@ class EtsyDigitalFileService:
     def _save_result(self, result: EtsyDigitalFileUploadResult) -> None:
         if self._memory is not None:
             self._memory.save_etsy_digital_file_upload_result(result)
+
+    @staticmethod
+    def _successful_attempts_by_filename(
+        result: EtsyDigitalFileUploadResult,
+    ) -> dict[str, str | None]:
+        return {
+            attempt.filename: attempt.etsy_file_id
+            for attempt in result.attempts
+            if attempt.status == "SUCCESS"
+        }
+
+    @staticmethod
+    def _failed_attempt_records(
+        result: EtsyDigitalFileUploadResult,
+    ) -> list[dict[str, object]]:
+        return [
+            {
+                "filename": attempt.filename,
+                "rank": attempt.rank,
+                "errors": list(attempt.errors),
+            }
+            for attempt in result.attempts
+            if attempt.status != "SUCCESS"
+        ]
+
+    def _uploaded_files_from_listing(
+        self,
+        listing_id: str,
+    ) -> tuple[dict[str, str | None], str | None]:
+        try:
+            records = self._client.list_listing_digital_files(listing_id)
+        except (AttributeError, RuntimeError) as error:
+            return {}, (
+                "Could not query Etsy listing digital files; "
+                f"using saved upload history only. Reason: {error}"
+            )
+
+        uploaded: dict[str, str | None] = {}
+        for record in records:
+            filename = self._filename_from_record(record)
+            if not filename:
+                continue
+            file_id = (
+                record.get("listing_file_id")
+                or record.get("file_id")
+                or record.get("digital_file_id")
+            )
+            uploaded[filename] = str(file_id) if file_id is not None else None
+        return uploaded, None
+
+    @staticmethod
+    def _filename_from_record(record: dict[str, object]) -> str | None:
+        for key in ("filename", "name", "file_name"):
+            value = record.get(key)
+            if isinstance(value, str) and value:
+                return Path(value).name
+        return None
+
+    @staticmethod
+    def _rank_for_filename(filename: str, files: tuple[Path, ...]) -> int:
+        for index, file_path in enumerate(files, start=1):
+            if file_path.name == filename:
+                return index
+        raise ValueError(f"Unknown digital file: {filename}")

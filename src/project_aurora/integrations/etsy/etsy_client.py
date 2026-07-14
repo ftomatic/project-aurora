@@ -104,6 +104,23 @@ class EtsyClient:
         )
         return self._open_json(api_request)
 
+    def list_listing_digital_files(
+        self,
+        listing_id: str,
+    ) -> tuple[dict[str, Any], ...]:
+        """Return digital files already attached to an Etsy listing."""
+        if not self._config.shop_id:
+            raise RuntimeError("ETSY_SHOP_ID is required.")
+        response = self.get_json(
+            f"/shops/{self._config.shop_id}/listings/{listing_id}/files"
+        )
+        results = response.get("results", ())
+        if isinstance(results, list):
+            return tuple(
+                item for item in results if isinstance(item, dict)
+            )
+        return ()
+
     def create_draft_listing(
         self,
         payload: EtsyDraftListingPayload,
