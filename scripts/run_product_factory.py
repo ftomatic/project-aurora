@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import argparse
 import sys
+import tempfile
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -15,45 +17,94 @@ from project_aurora.planning.production_queue_manager import (  # noqa: E402
 )
 from project_aurora.production.product_factory import (  # noqa: E402
     DefaultProductFactoryStageRunner,
+    DryRunProductFactoryStageRunner,
     ProductFactory,
 )
 from project_aurora.storage.csv_storage import CSVStorage  # noqa: E402
 from project_aurora.storage.memory_manager import MemoryManager  # noqa: E402
 
 
-def main() -> None:
-    """Execute exactly one ready production queue job."""
-    queue_manager = ProductionQueueManager(
-        queue_path=(
-            PROJECT_ROOT
-            / "data"
-            / "aurora"
-            / "production_queue"
-            / "queue.json"
-        )
+REAL_QUEUE_PATH = (
+    PROJECT_ROOT
+    / "data"
+    / "aurora"
+    / "production_queue"
+    / "queue.json"
+)
+
+
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+    """Parse Product Factory mode flags."""
+    parser = argparse.ArgumentParser(description="Run one Aurora Product Factory job.")
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Verify one ready job without consuming the real queue.",
     )
-    job = queue_manager.next_ready_job()
+    mode.add_argument(
+        "--live",
+        action="store_true",
+        help="Consume one real queue job and call configured live services.",
+    )
+    parser.add_argument(
+        "--save-report",
+        action="store_true",
+        help="Save a production report during dry run verification.",
+    )
+    return parser.parse_args(argv)
+
+
+def main(argv: list[str] | None = None) -> None:
+    """Execute exactly one ready production queue job."""
+    args = parse_args(argv)
+    dry_run = not args.live
+    real_queue = ProductionQueueManager(queue_path=REAL_QUEUE_PATH)
+    job = real_queue.next_ready_job()
     if job is None:
         print("PRODUCT FACTORY")
+        print("")
+        print("Mode")
+        print("DRY RUN" if dry_run else "LIVE")
         print("")
         print("Status")
         print("NO_READY_JOB")
         return
 
-    memory = MemoryManager(
-        storage=CSVStorage(base_path=PROJECT_ROOT / "data" / "aurora")
-    )
-    etsy_config = EtsyConfig.from_file(PROJECT_ROOT / "config" / "etsy.yaml")
-    report = ProductFactory(
-        queue_manager=queue_manager,
-        memory=memory,
-        stage_runner=DefaultProductFactoryStageRunner(
+    if dry_run:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            queue_manager = ProductionQueueManager(
+                queue_path=Path(temp_dir) / "queue.json"
+            )
+            job = queue_manager.add_existing_job(job)
+            memory = MemoryManager(storage=CSVStorage(base_path=Path(temp_dir) / "memory"))
+            report = ProductFactory(
+                queue_manager=queue_manager,
+                memory=memory,
+                stage_runner=DryRunProductFactoryStageRunner(),
+                dry_run=True,
+                save_report=args.save_report,
+            ).execute(job)
+    else:
+        queue_manager = real_queue
+        memory = MemoryManager(
+            storage=CSVStorage(base_path=PROJECT_ROOT / "data" / "aurora")
+        )
+        etsy_config = EtsyConfig.from_file(PROJECT_ROOT / "config" / "etsy.yaml")
+        report = ProductFactory(
+            queue_manager=queue_manager,
             memory=memory,
-            etsy_config=etsy_config,
-        ),
-    ).execute(job)
+            stage_runner=DefaultProductFactoryStageRunner(
+                memory=memory,
+                etsy_config=etsy_config,
+            ),
+            dry_run=False,
+        ).execute(job)
 
     print("PRODUCT FACTORY")
+    print("")
+    print("Mode")
+    print("DRY RUN" if dry_run else "LIVE")
     print("")
     print("Job")
     print(report.product)
@@ -71,7 +122,11 @@ def main() -> None:
     print(report.downloads)
     print("")
     print("Queue Status")
-    print(report.queue_status)
+    print("UNCHANGED" if dry_run else report.queue_status)
+    if dry_run:
+        print("")
+        print("Real Queue")
+        print("NOT MODIFIED")
     if not report.success:
         print("")
         print("Failed Stage")

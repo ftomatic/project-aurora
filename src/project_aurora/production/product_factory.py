@@ -5,23 +5,10 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 from time import perf_counter
+from types import SimpleNamespace
 from typing import Any, Protocol
 
-from project_aurora.image_generation.commercial_image_exporter import (
-    CommercialImageExporter,
-)
-from project_aurora.image_generation.image_generation_engine import (
-    ImageGenerationEngine,
-)
-from project_aurora.image_qa.qa_engine import ImageQAEngine
 from project_aurora.integrations.etsy.etsy_config import EtsyConfig
-from project_aurora.integrations.etsy.etsy_digital_file_service import (
-    EtsyDigitalFileService,
-)
-from project_aurora.integrations.etsy.etsy_draft_service import EtsyDraftService
-from project_aurora.integrations.etsy.etsy_image_upload_service import (
-    EtsyImageUploadService,
-)
 from project_aurora.listing.listing_package import (
     READY_FOR_ETSY_DRAFT,
     ListingPackage,
@@ -116,6 +103,10 @@ class DefaultProductFactoryStageRunner:
 
     def generate_images(self, job: ProductionJob) -> Any:
         """Generate four OpenAI images through the image engine."""
+        from project_aurora.image_generation.image_generation_engine import (
+            ImageGenerationEngine,
+        )
+
         return ImageGenerationEngine(
             memory=self._memory,
             output_dir=self._paths.generated_images_dir,
@@ -135,10 +126,16 @@ class DefaultProductFactoryStageRunner:
 
     def run_image_qa(self, job: ProductionJob) -> Any:
         """Run deterministic image QA."""
+        from project_aurora.image_qa.qa_engine import ImageQAEngine
+
         return ImageQAEngine(memory=self._memory).run()
 
     def export_commercial_images(self, job: ProductionJob) -> Any:
         """Export final commercial PNGs."""
+        from project_aurora.image_generation.commercial_image_exporter import (
+            CommercialImageExporter,
+        )
+
         return CommercialImageExporter(
             source_dir=self._paths.generated_images_dir,
             output_dir=self._paths.final_images_dir,
@@ -157,6 +154,10 @@ class DefaultProductFactoryStageRunner:
 
     def create_etsy_draft(self, job: ProductionJob, seo_package: Any) -> Any:
         """Create an Etsy draft through the existing draft service."""
+        from project_aurora.integrations.etsy.etsy_draft_service import (
+            EtsyDraftService,
+        )
+
         final_files = tuple(
             str(path)
             for path in sorted(
@@ -185,6 +186,10 @@ class DefaultProductFactoryStageRunner:
 
     def upload_listing_images(self, job: ProductionJob) -> Any:
         """Upload final PNGs as Etsy listing images."""
+        from project_aurora.integrations.etsy.etsy_image_upload_service import (
+            EtsyImageUploadService,
+        )
+
         return EtsyImageUploadService(
             config=self._etsy_config,
             memory=self._memory,
@@ -193,12 +198,93 @@ class DefaultProductFactoryStageRunner:
 
     def upload_customer_downloads(self, job: ProductionJob, listing_id: str | None) -> Any:
         """Upload final PNGs as Etsy customer downloads."""
+        from project_aurora.integrations.etsy.etsy_digital_file_service import (
+            EtsyDigitalFileService,
+        )
+
         return EtsyDigitalFileService(
             config=self._etsy_config,
             memory=self._memory,
         ).upload_digital_files(
             listing_id=listing_id,
             final_images_dir=self._paths.final_images_dir,
+        )
+
+
+class DryRunProductFactoryStageRunner:
+    """No-network Product Factory stage runner for verification."""
+
+    def compose_prompts(self, job: ProductionJob) -> Any:
+        """Simulate prompt composition."""
+        return SimpleNamespace(status="SUCCESS", final_prompt=f"Dry run prompt for {job.product_name}.")
+
+    def generate_images(self, job: ProductionJob) -> Any:
+        """Simulate OpenAI image generation without calling OpenAI."""
+        return SimpleNamespace(
+            status="SUCCESS",
+            provider="DRY_RUN",
+            generated_files=(
+                "dry_run_image_01.png",
+                "dry_run_image_02.png",
+                "dry_run_image_03.png",
+                "dry_run_image_04.png",
+            ),
+            warnings=(),
+            errors=(),
+        )
+
+    def run_image_qa(self, job: ProductionJob) -> Any:
+        """Simulate QA approval."""
+        return tuple(
+            SimpleNamespace(status="PASS", asset_name=f"dry_run_image_{index:02d}.png")
+            for index in range(1, 5)
+        )
+
+    def export_commercial_images(self, job: ProductionJob) -> Any:
+        """Simulate commercial export."""
+        return SimpleNamespace(
+            status="SUCCESS",
+            exported_files=(
+                "dry_run_final_01.png",
+                "dry_run_final_02.png",
+                "dry_run_final_03.png",
+                "dry_run_final_04.png",
+            ),
+            warnings=(),
+            errors=(),
+        )
+
+    def generate_seo(self, job: ProductionJob) -> Any:
+        """Simulate SEO generation."""
+        return SimpleNamespace(status="SUCCESS", title=f"{job.product_name} SEO", warnings=())
+
+    def create_etsy_draft(self, job: ProductionJob, seo_package: Any) -> Any:
+        """Skip Etsy draft creation in dry run."""
+        return SimpleNamespace(
+            status="READY_FOR_ETSY_DRAFT",
+            etsy_listing_id=None,
+            warnings=("Dry run: Etsy draft was not created.",),
+            errors=(),
+        )
+
+    def upload_listing_images(self, job: ProductionJob) -> Any:
+        """Skip Etsy listing image upload in dry run."""
+        return SimpleNamespace(
+            status="SUCCESS",
+            images_uploaded=4,
+            failed=0,
+            warnings=("Dry run: listing images were not uploaded.",),
+            errors=(),
+        )
+
+    def upload_customer_downloads(self, job: ProductionJob, listing_id: str | None) -> Any:
+        """Skip Etsy digital file upload in dry run."""
+        return SimpleNamespace(
+            status="SUCCESS",
+            files_uploaded=4,
+            failed=0,
+            warnings=("Dry run: customer downloads were not uploaded.",),
+            errors=(),
         )
 
 
@@ -210,10 +296,14 @@ class ProductFactory:
         queue_manager: ProductionQueueManager,
         memory: MemoryManager,
         stage_runner: ProductFactoryStageRunner,
+        dry_run: bool = False,
+        save_report: bool | None = None,
     ) -> None:
         self._queue_manager = queue_manager
         self._memory = memory
         self._stage_runner = stage_runner
+        self._dry_run = dry_run
+        self._save_report_enabled = (not dry_run) if save_report is None else save_report
 
     def execute(self, job: ProductionJob) -> ProductionReport:
         """Execute one ready production job and return a saved report."""
@@ -224,7 +314,8 @@ class ProductFactory:
         warnings: list[str] = []
         metadata: dict[str, Any] = {}
 
-        self._queue_manager.mark_in_progress(job.id)
+        if not self._dry_run:
+            self._queue_manager.mark_in_progress(job.id)
         stages = (
             ("prompt_composition", lambda: self._stage_runner.compose_prompts(job)),
             ("image_generation", lambda: self._stage_runner.generate_images(job)),
@@ -271,7 +362,8 @@ class ProductFactory:
                     downloads = int(getattr(result, "files_uploaded", 0))
                 _raise_if_failed(stage_name, result)
 
-            self._queue_manager.mark_completed(job.id)
+            if not self._dry_run:
+                self._queue_manager.mark_completed(job.id)
             report = ProductionReport(
                 job_id=job.id,
                 product=job.product_name,
@@ -285,7 +377,8 @@ class ProductFactory:
                 metadata=_report_metadata(metadata),
             )
         except Exception as error:
-            self._queue_manager.mark_failed(job.id)
+            if not self._dry_run:
+                self._queue_manager.mark_failed(job.id)
             failed_stage = _failed_stage_from(error)
             draft_id = draft_id or _draft_id_from_metadata(metadata)
             report = ProductionReport(
@@ -303,7 +396,8 @@ class ProductFactory:
                 metadata=_report_metadata(metadata),
             )
 
-        self._save_report(report)
+        if self._save_report_enabled:
+            self._save_report(report)
         return report
 
     def _save_report(self, report: ProductionReport) -> None:

@@ -21,6 +21,7 @@ from project_aurora.planning.production_queue_manager import (  # noqa: E402
 )
 from project_aurora.production.product_factory import (  # noqa: E402
     REPORT_COLLECTION,
+    DryRunProductFactoryStageRunner,
     ProductFactory,
 )
 from project_aurora.production.production_report import (  # noqa: E402
@@ -28,6 +29,7 @@ from project_aurora.production.production_report import (  # noqa: E402
 )
 from project_aurora.storage.csv_storage import CSVStorage  # noqa: E402
 from project_aurora.storage.memory_manager import MemoryManager  # noqa: E402
+from scripts.run_product_factory import parse_args  # noqa: E402
 
 
 def make_job(job_id: str = "job-1") -> ProductionJob:
@@ -243,6 +245,48 @@ class ProductFactoryTest(unittest.TestCase):
         self.assertEqual(report.failed_stage, "etsy_draft")
         self.assertIsNone(report.draft_id)
         self.assertEqual(self.queue.list_jobs()[0].status, FAILED)
+
+    def test_dry_run_does_not_mutate_queue_or_save_report(self) -> None:
+        report = ProductFactory(
+            queue_manager=self.queue,
+            memory=self.memory,
+            stage_runner=DryRunProductFactoryStageRunner(),
+            dry_run=True,
+        ).execute(self.job)
+
+        self.assertTrue(report.success)
+        self.assertIsNone(report.draft_id)
+        self.assertEqual(report.images, 4)
+        self.assertEqual(report.downloads, 4)
+        self.assertEqual(self.queue.list_jobs()[0].status, READY)
+        with self.assertRaises(FileNotFoundError):
+            self.memory.load_record(REPORT_COLLECTION, "latest")
+
+    def test_dry_run_can_save_report_only_when_explicit(self) -> None:
+        report = ProductFactory(
+            queue_manager=self.queue,
+            memory=self.memory,
+            stage_runner=DryRunProductFactoryStageRunner(),
+            dry_run=True,
+            save_report=True,
+        ).execute(self.job)
+
+        saved = self.memory.load_record(REPORT_COLLECTION, "latest")
+
+        self.assertTrue(report.success)
+        self.assertEqual(saved["queue_status"], COMPLETED)
+        self.assertEqual(self.queue.list_jobs()[0].status, READY)
+
+    def test_product_factory_cli_defaults_to_dry_run(self) -> None:
+        args = parse_args([])
+
+        self.assertFalse(args.live)
+        self.assertFalse(args.dry_run)
+
+    def test_product_factory_cli_live_must_be_explicit(self) -> None:
+        args = parse_args(["--live"])
+
+        self.assertTrue(args.live)
 
 
 if __name__ == "__main__":
