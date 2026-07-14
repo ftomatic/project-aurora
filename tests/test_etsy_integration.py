@@ -20,6 +20,7 @@ from project_aurora.integrations.etsy.etsy_draft_service import (  # noqa: E402
     EtsyDraftService,
 )
 from project_aurora.integrations.etsy.etsy_listing_mapper import (  # noqa: E402
+    DEFAULT_AI_DISCLOSURE,
     EtsyListingMapper,
 )
 from project_aurora.integrations.etsy.etsy_result import (  # noqa: E402
@@ -132,8 +133,14 @@ class EtsyIntegrationTest(unittest.TestCase):
         self.assertTrue(payload.is_digital)
         self.assertEqual(payload.listing_type, "download")
         self.assertEqual(payload.price, 1.99)
+        self.assertEqual(payload.quantity, 999)
         self.assertEqual(payload.description, RAINBOW_MILK_STUDIO_DESCRIPTION)
+        self.assertIn("FREE COMMERCIAL LICENSE", payload.description)
         self.assertEqual(payload.who_made, "i_did")
+        self.assertEqual(payload.when_made, "made_to_order")
+        self.assertEqual(payload.ai_disclosure, DEFAULT_AI_DISCLOSURE)
+        self.assertTrue(payload.is_ai_generated)
+        self.assertTrue(payload.should_auto_renew)
         self.assertEqual(payload.to_dict()["state"], "draft")
 
     def test_digital_listing_payload_uses_download_type(self) -> None:
@@ -145,6 +152,13 @@ class EtsyIntegrationTest(unittest.TestCase):
         payload_data = payload.to_dict()
 
         self.assertEqual(payload_data["type"], "download")
+        self.assertEqual(payload_data["quantity"], 999)
+        self.assertEqual(payload_data["price"], 1.99)
+        self.assertEqual(payload_data["who_made"], "i_did")
+        self.assertEqual(payload_data["when_made"], "made_to_order")
+        self.assertEqual(payload_data["ai_generated_summary"], DEFAULT_AI_DISCLOSURE)
+        self.assertEqual(payload_data["is_ai_generated"], True)
+        self.assertEqual(payload_data["should_auto_renew"], True)
         self.assertNotIn("shipping_profile_id", payload_data)
         self.assertNotIn("processing_profile_id", payload_data)
 

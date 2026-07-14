@@ -15,6 +15,22 @@ from project_aurora.seo.description_builder import RAINBOW_MILK_STUDIO_DESCRIPTI
 from project_aurora.seo.seo_package import SEOPackage
 
 
+DEFAULT_AI_DISCLOSURE = "It’s created with help from an AI generator."
+
+
+@dataclass(frozen=True, slots=True)
+class EtsyListingDefaults:
+    """Configurable Etsy listing creation defaults."""
+
+    ai_disclosure: str = DEFAULT_AI_DISCLOSURE
+    should_auto_renew: bool = True
+    who_made: str = "i_did"
+    when_made: str = "made_to_order"
+    digital_listing_type: str = "download"
+    quantity: int = 999
+    price: float = 1.99
+
+
 @dataclass(frozen=True, slots=True)
 class EtsyDraftListingPayload:
     """Etsy draft listing payload."""
@@ -36,6 +52,9 @@ class EtsyDraftListingPayload:
     is_digital: bool
     image_files: tuple[str, ...]
     digital_files: tuple[str, ...]
+    ai_disclosure: str
+    is_ai_generated: bool
+    should_auto_renew: bool
 
     def to_dict(self) -> dict[str, Any]:
         """Return API-ready payload values."""
@@ -57,6 +76,9 @@ class EtsyDraftListingPayload:
             "is_digital": self.is_digital,
             "image_files": list(self.image_files),
             "digital_files": list(self.digital_files),
+            "is_ai_generated": self.is_ai_generated,
+            "ai_generated_summary": self.ai_disclosure,
+            "should_auto_renew": self.should_auto_renew,
             "state": "draft",
         }
         return {
@@ -72,20 +94,22 @@ class EtsyListingMapper:
         listing_package: ListingPackage,
         seo_package: SEOPackage,
         config: EtsyConfig,
+        defaults: EtsyListingDefaults | None = None,
     ) -> EtsyDraftListingPayload:
         """Return an Etsy draft listing payload."""
+        defaults = defaults or EtsyListingDefaults()
         is_digital = listing_package.is_digital_download
-        listing_type = "download" if is_digital else "physical"
+        listing_type = defaults.digital_listing_type if is_digital else "physical"
         return EtsyDraftListingPayload(
             title=seo_package.title,
             description=seo_package.description,
             tags=seo_package.tags,
-            price=listing_package.price,
-            quantity=config.default_quantity,
+            price=defaults.price if is_digital else listing_package.price,
+            quantity=defaults.quantity if is_digital else config.default_quantity,
             taxonomy_id=config.taxonomy_id,
             listing_type=listing_type,
-            who_made="i_did",
-            when_made="made_to_order",
+            who_made=defaults.who_made,
+            when_made=defaults.when_made,
             is_supply=False,
             item_weight=None,
             item_weight_unit=None,
@@ -98,6 +122,9 @@ class EtsyListingMapper:
             is_digital=is_digital,
             image_files=listing_package.approved_mockup_files,
             digital_files=listing_package.approved_generated_image_files,
+            ai_disclosure=defaults.ai_disclosure,
+            is_ai_generated=bool(defaults.ai_disclosure),
+            should_auto_renew=defaults.should_auto_renew,
         )
 
     def validate_payload(
@@ -125,8 +152,20 @@ class EtsyListingMapper:
             errors.append("Quantity must be greater than zero.")
         if payload.description != RAINBOW_MILK_STUDIO_DESCRIPTION:
             errors.append("Required RainbowMilkStudio listing description is missing.")
+        if "FREE COMMERCIAL LICENSE" not in payload.description:
+            errors.append("FREE COMMERCIAL LICENSE is required in the description.")
+        if payload.ai_disclosure != DEFAULT_AI_DISCLOSURE:
+            errors.append("Default AI disclosure is required.")
+        if not payload.should_auto_renew:
+            errors.append("Etsy renewal must be automatic.")
+        if payload.who_made != "i_did":
+            errors.append("who_made must default to i_did.")
+        if payload.when_made != "made_to_order":
+            errors.append("when_made must default to made_to_order.")
         if payload.is_digital and payload.listing_type != "download":
             errors.append("Digital listing type must be download.")
+        if payload.is_digital and payload.quantity != 999:
+            errors.append("Digital listing quantity must be 999.")
         if payload.is_digital:
             if len(payload.image_files) != 4:
                 errors.append("Exactly 4 final commercial PNG files are required.")

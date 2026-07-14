@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Any
 
 
 @dataclass(frozen=True, slots=True)
@@ -23,6 +24,7 @@ class ProjectProfile:
     allowed_product_types: tuple[str, ...]
     allowed_platforms: tuple[str, ...]
     retention_policy: dict[str, str]
+    etsy_listing_defaults: dict[str, Any]
 
     def __post_init__(self) -> None:
         required_values = {
@@ -48,6 +50,8 @@ class ProjectProfile:
             raise ValueError("allowed_platforms cannot be empty.")
         if not self.retention_policy:
             raise ValueError("retention_policy cannot be empty.")
+        if not self.etsy_listing_defaults:
+            raise ValueError("etsy_listing_defaults cannot be empty.")
 
         object.__setattr__(
             self,
@@ -63,6 +67,11 @@ class ProjectProfile:
             self,
             "retention_policy",
             dict(self.retention_policy),
+        )
+        object.__setattr__(
+            self,
+            "etsy_listing_defaults",
+            dict(self.etsy_listing_defaults),
         )
 
     def retention_summary(self) -> tuple[str, ...]:

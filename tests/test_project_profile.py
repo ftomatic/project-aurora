@@ -32,6 +32,17 @@ class ProjectProfileTest(unittest.TestCase):
         self.assertEqual(profile.marketplace, "Etsy")
         self.assertEqual(profile.default_ai_provider, "openai")
         self.assertEqual(profile.default_price, 1.99)
+        self.assertEqual(
+            profile.etsy_listing_defaults["ai_disclosure"],
+            "It’s created with help from an AI generator.",
+        )
+        self.assertEqual(
+            profile.etsy_listing_defaults["renewal_option"],
+            "automatic",
+        )
+        self.assertEqual(profile.etsy_listing_defaults["quantity"], 999)
+        self.assertEqual(profile.etsy_listing_defaults["price"], 1.99)
+        self.assertTrue(profile.etsy_listing_defaults["should_auto_renew"])
 
     def test_profile_includes_allowed_products_and_platforms(self) -> None:
         profile = ProjectProfileLoader().load(PROFILE_PATH)

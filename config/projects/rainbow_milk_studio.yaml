@@ -29,3 +29,12 @@ retention_policy:
   seo_packages: keep
   listing_packages: keep
   workflow_logs: keep
+etsy_listing_defaults:
+  ai_disclosure: "It’s created with help from an AI generator."
+  should_auto_renew: true
+  renewal_option: automatic
+  who_made: i_did
+  when_made: made_to_order
+  listing_type: download
+  quantity: 999
+  price: 1.99

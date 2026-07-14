@@ -34,6 +34,7 @@ class ProjectProfileLoader:
             allowed_product_types=tuple(data["allowed_product_types"]),
             allowed_platforms=tuple(data["allowed_platforms"]),
             retention_policy=dict(data["retention_policy"]),
+            etsy_listing_defaults=dict(data["etsy_listing_defaults"]),
         )
 
     @staticmethod
@@ -91,8 +92,14 @@ class ProjectProfileLoader:
         return data
 
 
-def _parse_scalar(value: str) -> str | float:
+def _parse_scalar(value: str) -> Any:
     cleaned = value.strip().strip("\"'")
+    if cleaned.casefold() == "true":
+        return True
+    if cleaned.casefold() == "false":
+        return False
+    if cleaned.isdecimal():
+        return int(cleaned)
     try:
         return float(cleaned)
     except ValueError:
