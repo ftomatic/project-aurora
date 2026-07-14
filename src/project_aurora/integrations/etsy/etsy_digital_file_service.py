@@ -18,6 +18,7 @@ from project_aurora.storage.memory_manager import MemoryManager
 
 MAX_DIGITAL_FILE_SIZE_BYTES = 20 * 1024 * 1024
 REQUIRED_DIGITAL_FILE_COUNT = 4
+ETSY_MAX_DIGITAL_FILES = 5
 
 
 class EtsyDigitalFileService:
@@ -189,6 +190,126 @@ class EtsyDigitalFileService:
         self._save_result(result)
         return result
 
+    def sync_digital_files(
+        self,
+        listing_id: str | None,
+        final_images_dir: Path,
+    ) -> EtsyDigitalFileUploadResult:
+        """Idempotently sync expected digital PNG files to an Etsy draft."""
+        files = self._find_pngs(final_images_dir)
+        file_by_name = {file_path.name: file_path for file_path in files}
+        errors = list(self._preflight_errors(listing_id, final_images_dir, files))
+        if errors:
+            result = EtsyDigitalFileUploadResult(
+                status="CONFIGURATION_REQUIRED",
+                etsy_listing_id=listing_id,
+                digital_file_path=str(final_images_dir),
+                uploaded=False,
+                files_found=len(files),
+                files_uploaded=0,
+                failed=0,
+                errors=tuple(errors),
+                metadata={"api_called": False},
+            )
+            self._save_result(result)
+            return result
+
+        try:
+            existing_records = self._client.list_listing_digital_files(
+                str(listing_id)
+            )
+        except RuntimeError as error:
+            result = EtsyDigitalFileUploadResult(
+                status="FAILED",
+                etsy_listing_id=listing_id,
+                digital_file_path=str(final_images_dir),
+                uploaded=False,
+                files_found=len(files),
+                files_uploaded=0,
+                failed=0,
+                errors=(f"Could not query Etsy digital files: {error}",),
+                metadata={"api_called": True},
+            )
+            self._save_result(result)
+            return result
+
+        existing = self._records_by_filename(existing_records)
+        missing_names = tuple(
+            filename for filename in file_by_name if filename not in existing
+        )
+        total_after_sync = len(existing) + len(missing_names)
+        if total_after_sync > ETSY_MAX_DIGITAL_FILES:
+            result = EtsyDigitalFileUploadResult(
+                status="FAILED",
+                etsy_listing_id=listing_id,
+                digital_file_path=str(final_images_dir),
+                uploaded=False,
+                files_found=len(files),
+                files_uploaded=0,
+                failed=0,
+                errors=(
+                    "Etsy allows a maximum of 5 digital files; "
+                    f"sync would result in {total_after_sync}.",
+                ),
+                metadata={
+                    "api_called": True,
+                    "already_present": self._existing_file_records(existing),
+                    "missing": list(missing_names),
+                },
+            )
+            self._save_result(result)
+            return result
+
+        attempts: list[EtsyDigitalFileUploadAttempt] = []
+        for filename in missing_names:
+            file_path = file_by_name[filename]
+            attempts.append(
+                self._upload_one(
+                    listing_id=str(listing_id),
+                    file_path=file_path,
+                    rank=self._rank_for_filename(filename, files),
+                )
+            )
+
+        uploaded_now = {
+            attempt.filename: attempt.etsy_file_id
+            for attempt in attempts
+            if attempt.status == "SUCCESS"
+        }
+        failed_attempts = tuple(
+            attempt for attempt in attempts if attempt.status != "SUCCESS"
+        )
+        total_present = len(existing) + len(uploaded_now)
+        uploaded_complete = (
+            total_present == self._required_count and not failed_attempts
+        )
+        result = EtsyDigitalFileUploadResult(
+            status="SUCCESS" if uploaded_complete else "PARTIAL_FAILURE",
+            etsy_listing_id=listing_id,
+            digital_file_path=str(final_images_dir),
+            uploaded=uploaded_complete,
+            files_found=len(files),
+            files_uploaded=len(uploaded_now),
+            failed=len(failed_attempts),
+            attempts=tuple(attempts),
+            metadata={
+                "api_called": bool(attempts),
+                "already_present": self._existing_file_records(existing),
+                "missing": list(missing_names),
+                "uploaded": [
+                    {
+                        "filename": attempt.filename,
+                        "etsy_file_id": attempt.etsy_file_id,
+                    }
+                    for attempt in attempts
+                    if attempt.status == "SUCCESS"
+                ],
+                "total_present": total_present,
+            },
+        )
+        self._save_result(result)
+        return result
+
     def _upload_one(
         self,
         listing_id: str,
@@ -326,6 +447,36 @@ class EtsyDigitalFileService:
             )
             uploaded[filename] = str(file_id) if file_id is not None else None
         return uploaded, None
+
+    def _records_by_filename(
+        self,
+        records: tuple[dict[str, object], ...],
+    ) -> dict[str, dict[str, object]]:
+        uploaded: dict[str, dict[str, object]] = {}
+        for record in records:
+            filename = self._filename_from_record(record)
+            if filename:
+                uploaded[filename] = dict(record)
+        return uploaded
+
+    def _existing_file_records(
+        self,
+        records_by_filename: dict[str, dict[str, object]],
+    ) -> list[dict[str, str | None]]:
+        existing: list[dict[str, str | None]] = []
+        for filename, record in sorted(records_by_filename.items()):
+            file_id = (
+                record.get("listing_file_id")
+                or record.get("file_id")
+                or record.get("digital_file_id")
+            )
+            existing.append(
+                {
+                    "filename": filename,
+                    "etsy_file_id": str(file_id) if file_id is not None else None,
+                }
+            )
+        return existing
 
     @staticmethod
     def _filename_from_record(record: dict[str, object]) -> str | None:

@@ -579,6 +579,141 @@ class CompleteEtsyDraftTest(unittest.TestCase):
         self.assertEqual(result.attempts[0].errors, ("Digital upload failed.",))
         self.assertEqual(result.metadata["previous_failed"][0]["errors"], ["Original API error."])
 
+    def test_sync_digital_files_uploads_only_missing_files(self) -> None:
+        client = FakeCompleteEtsyClient(self.config)
+        client.existing_digital_files = [
+            {
+                "filename": "strawberry_birthday_party_printable_01.png",
+                "listing_file_id": "file-1",
+            },
+            {
+                "filename": "strawberry_birthday_party_printable_02.png",
+                "listing_file_id": "file-2",
+            },
+            {
+                "filename": "strawberry_birthday_party_printable_03.png",
+                "listing_file_id": "file-3",
+            },
+        ]
+
+        result = EtsyDigitalFileService(
+            config=self.config,
+            memory=self.memory,
+            client=client,
+        ).sync_digital_files(
+            listing_id="123456789",
+            final_images_dir=self.final_images_dir,
+        )
+
+        self.assertEqual(result.status, "SUCCESS")
+        self.assertEqual(result.files_found, 4)
+        self.assertEqual(len(result.metadata["already_present"]), 3)
+        self.assertEqual(result.files_uploaded, 1)
+        self.assertEqual(result.failed, 0)
+        self.assertEqual(result.metadata["total_present"], 4)
+        self.assertEqual(
+            client.digital_uploads,
+            [
+                (
+                    "123456789",
+                    "strawberry_birthday_party_printable_04.png",
+                    4,
+                )
+            ],
+        )
+        self.assertEqual(
+            result.metadata["uploaded"],
+            [
+                {
+                    "filename": "strawberry_birthday_party_printable_04.png",
+                    "etsy_file_id": "file-4",
+                }
+            ],
+        )
+        saved = self.memory.load_etsy_digital_file_upload_result()
+        self.assertEqual(saved["status"], "SUCCESS")
+        self.assertEqual(saved["metadata"]["total_present"], 4)
+
+    def test_sync_digital_files_is_safe_to_rerun_without_duplicates(self) -> None:
+        client = FakeCompleteEtsyClient(self.config)
+        client.existing_digital_files = [
+            {
+                "filename": f"strawberry_birthday_party_printable_{index:02d}.png",
+                "listing_file_id": f"file-{index}",
+            }
+            for index in range(1, 5)
+        ]
+
+        result = EtsyDigitalFileService(
+            config=self.config,
+            memory=self.memory,
+            client=client,
+        ).sync_digital_files(
+            listing_id="123456789",
+            final_images_dir=self.final_images_dir,
+        )
+
+        self.assertEqual(result.status, "SUCCESS")
+        self.assertEqual(len(result.metadata["already_present"]), 4)
+        self.assertEqual(result.files_uploaded, 0)
+        self.assertEqual(result.failed, 0)
+        self.assertEqual(result.metadata["total_present"], 4)
+        self.assertEqual(client.digital_uploads, [])
+
+    def test_sync_digital_files_respects_etsy_five_file_limit(self) -> None:
+        client = FakeCompleteEtsyClient(self.config)
+        client.existing_digital_files = [
+            {
+                "filename": "existing_extra_01.png",
+                "listing_file_id": "extra-1",
+            },
+            {
+                "filename": "existing_extra_02.png",
+                "listing_file_id": "extra-2",
+            },
+        ]
+
+        result = EtsyDigitalFileService(
+            config=self.config,
+            memory=self.memory,
+            client=client,
+        ).sync_digital_files(
+            listing_id="123456789",
+            final_images_dir=self.final_images_dir,
+        )
+
+        self.assertEqual(result.status, "FAILED")
+        self.assertEqual(result.files_uploaded, 0)
+        self.assertEqual(client.digital_uploads, [])
+        self.assertTrue(
+            any("maximum of 5 digital files" in error for error in result.errors)
+        )
+
+    def test_sync_digital_files_preserves_per_file_upload_error(self) -> None:
+        client = FakeCompleteEtsyClient(self.config, fail_stage="digital")
+        client.existing_digital_files = [
+            {
+                "filename": f"strawberry_birthday_party_printable_{index:02d}.png",
+                "listing_file_id": f"file-{index}",
+            }
+            for index in range(1, 4)
+        ]
+
+        result = EtsyDigitalFileService(
+            config=self.config,
+            memory=self.memory,
+            client=client,
+        ).sync_digital_files(
+            listing_id="123456789",
+            final_images_dir=self.final_images_dir,
+        )
+
+        self.assertEqual(result.status, "PARTIAL_FAILURE")
+        self.assertEqual(result.files_uploaded, 0)
+        self.assertEqual(result.failed, 1)
+        self.assertEqual(result.attempts[0].filename, "strawberry_birthday_party_printable_04.png")
+        self.assertEqual(result.attempts[0].errors, ("Digital upload failed.",))
+
 
 if __name__ == "__main__":
     unittest.main()
