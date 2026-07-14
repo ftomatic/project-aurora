@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+import re
 from time import perf_counter
 from types import SimpleNamespace
 from typing import Any, Protocol
@@ -26,6 +27,7 @@ from project_aurora.storage.memory_manager import MemoryManager
 REPORT_COLLECTION = "production_reports"
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 DEFAULT_OPENAI_CONFIG_PATH = PROJECT_ROOT / "config" / "openai.yaml"
+DEFAULT_JOBS_DIR = PROJECT_ROOT / "data" / "aurora" / "jobs"
 
 
 class ProductFactoryStageRunner(Protocol):
@@ -60,8 +62,42 @@ class ProductFactoryStageRunner(Protocol):
 class ProductFactoryPaths:
     """Runtime paths used by the Product Factory default runner."""
 
-    generated_images_dir: Path = Path("data") / "aurora" / "generated_images"
-    final_images_dir: Path = Path("data") / "aurora" / "final_product_images"
+    jobs_dir: Path = DEFAULT_JOBS_DIR
+    generated_images_dir: Path | None = None
+    final_images_dir: Path | None = None
+    digital_downloads_dir: Path | None = None
+
+    def for_job(self, job: ProductionJob) -> "ProductFactoryJobPaths":
+        """Return isolated working directories for one production job."""
+        job_root = self.jobs_dir / _safe_job_folder_name(job)
+        return ProductFactoryJobPaths(
+            job_root=job_root,
+            generated_images_dir=self.generated_images_dir
+            or job_root / "generated_images",
+            final_images_dir=self.final_images_dir
+            or job_root / "final_product_images",
+            digital_downloads_dir=self.digital_downloads_dir
+            or job_root / "digital_downloads",
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class ProductFactoryJobPaths:
+    """Concrete isolated filesystem paths for one production job."""
+
+    job_root: Path
+    generated_images_dir: Path
+    final_images_dir: Path
+    digital_downloads_dir: Path
+
+    def to_dict(self) -> dict[str, str]:
+        """Return JSON-safe path values for production reports."""
+        return {
+            "job_root": str(self.job_root),
+            "generated_images_dir": str(self.generated_images_dir),
+            "final_product_images_dir": str(self.final_images_dir),
+            "digital_downloads_dir": str(self.digital_downloads_dir),
+        }
 
 
 class DefaultProductFactoryStageRunner:
@@ -85,6 +121,10 @@ class DefaultProductFactoryStageRunner:
 
             image_config = ImageProviderConfig.from_file(image_config_path)
         self._image_config = image_config
+
+    def job_paths(self, job: ProductionJob) -> ProductFactoryJobPaths:
+        """Return isolated runtime paths for the current production job."""
+        return self._paths.for_job(job)
 
     def compose_prompts(self, job: ProductionJob) -> Any:
         """Compose and save prompt recipe/package-compatible prompt data."""
@@ -114,13 +154,19 @@ class DefaultProductFactoryStageRunner:
 
     def generate_images(self, job: ProductionJob) -> Any:
         """Generate four OpenAI images through the image engine."""
+        job_paths = self.job_paths(job)
+        reused = self._reuse_completed_generated_images(job, job_paths)
+        if reused is not None:
+            return reused
+        self._prepare_generated_images_dir(job_paths)
+
         from project_aurora.image_generation.image_generation_engine import (
             ImageGenerationEngine,
         )
 
         return ImageGenerationEngine(
             memory=self._memory,
-            output_dir=self._paths.generated_images_dir,
+            output_dir=job_paths.generated_images_dir,
             provider_config=self._image_config,
         ).run(
             prompt_package_id=job.id,
@@ -144,13 +190,17 @@ class DefaultProductFactoryStageRunner:
 
     def export_commercial_images(self, job: ProductionJob) -> Any:
         """Export final commercial PNGs."""
+        job_paths = self.job_paths(job)
+        reused = self._reuse_completed_final_images(job_paths)
+        if reused is not None:
+            return reused
         from project_aurora.image_generation.commercial_image_exporter import (
             CommercialImageExporter,
         )
 
         return CommercialImageExporter(
-            source_dir=self._paths.generated_images_dir,
-            output_dir=self._paths.final_images_dir,
+            source_dir=job_paths.generated_images_dir,
+            output_dir=job_paths.final_images_dir,
         ).export()
 
     def generate_seo(self, job: ProductionJob) -> Any:
@@ -170,10 +220,11 @@ class DefaultProductFactoryStageRunner:
             EtsyDraftService,
         )
 
+        job_paths = self.job_paths(job)
         final_files = tuple(
             str(path)
             for path in sorted(
-                self._paths.final_images_dir.glob("*.png"),
+                job_paths.final_images_dir.glob("*.png"),
                 key=lambda item: item.name,
             )
         )
@@ -205,7 +256,7 @@ class DefaultProductFactoryStageRunner:
         return EtsyImageUploadService(
             config=self._etsy_config,
             memory=self._memory,
-            images_dir=self._paths.final_images_dir,
+            images_dir=self.job_paths(job).final_images_dir,
         ).upload_latest_draft_images()
 
     def upload_customer_downloads(self, job: ProductionJob, listing_id: str | None) -> Any:
@@ -219,7 +270,89 @@ class DefaultProductFactoryStageRunner:
             memory=self._memory,
         ).upload_digital_files(
             listing_id=listing_id,
-            final_images_dir=self._paths.final_images_dir,
+            final_images_dir=self.job_paths(job).final_images_dir,
+        )
+
+    def _prepare_generated_images_dir(self, job_paths: ProductFactoryJobPaths) -> None:
+        job_paths.generated_images_dir.mkdir(parents=True, exist_ok=True)
+        existing_pngs = tuple(job_paths.generated_images_dir.glob("*.png"))
+        if existing_pngs:
+            raise RuntimeError(
+                "Generated images directory must be empty before generation; "
+                f"found {len(existing_pngs)} PNG files in "
+                f"{job_paths.generated_images_dir}."
+            )
+
+    def _reuse_completed_generated_images(
+        self,
+        job: ProductionJob,
+        job_paths: ProductFactoryJobPaths,
+    ) -> Any | None:
+        from project_aurora.image_generation.image_inspector import inspect_png
+        from project_aurora.image_generation.image_result import ImageResult
+
+        if not job_paths.generated_images_dir.exists():
+            return None
+        pngs = tuple(
+            sorted(job_paths.generated_images_dir.glob("*.png"), key=lambda path: path.name)
+        )
+        if not pngs:
+            return None
+        valid_pngs = tuple(path for path in pngs if inspect_png(path).is_valid)
+        expected = int(self._image_config.number_of_images)
+        if len(pngs) == expected and len(valid_pngs) == expected:
+            result = ImageResult(
+                status="SUCCESS",
+                provider="OpenAI GPT Image",
+                generated_files=tuple(str(path) for path in valid_pngs),
+                generation_time=0.0,
+                cost_estimate=0.0,
+                warnings=("Reused existing valid job generated images.",),
+                metadata={
+                    "reused": True,
+                    "job_id": job.id,
+                    "job_paths": job_paths.to_dict(),
+                },
+                image_paths=tuple(str(path) for path in valid_pngs),
+                prompt_version=self._image_config.prompt_version,
+            )
+            self._memory.save_image_result(result)
+            return result
+        raise RuntimeError(
+            "Generated images directory contains incomplete or unexpected PNG files; "
+            f"expected exactly {expected} valid PNGs, found {len(valid_pngs)} valid "
+            f"out of {len(pngs)} total in {job_paths.generated_images_dir}."
+        )
+
+    @staticmethod
+    def _reuse_completed_final_images(job_paths: ProductFactoryJobPaths) -> Any | None:
+        from project_aurora.image_generation.commercial_image_exporter import (
+            COMMERCIAL_IMAGE_COUNT,
+            CommercialImageExportResult,
+            validate_commercial_png,
+        )
+        from project_aurora.image_generation.image_inspector import inspect_png
+
+        if not job_paths.final_images_dir.exists():
+            return None
+        pngs = tuple(
+            sorted(job_paths.final_images_dir.glob("*.png"), key=lambda path: path.name)
+        )
+        if not pngs:
+            return None
+        valid_pngs = tuple(path for path in pngs if not validate_commercial_png(path))
+        if len(pngs) == COMMERCIAL_IMAGE_COUNT and len(valid_pngs) == COMMERCIAL_IMAGE_COUNT:
+            return CommercialImageExportResult(
+                status="SUCCESS",
+                exported_files=tuple(str(path) for path in valid_pngs),
+                warnings=("Reused existing valid final commercial images.",),
+                inspections=tuple(inspect_png(path) for path in valid_pngs),
+            )
+        raise RuntimeError(
+            "Final product images directory contains incomplete or unexpected PNG files; "
+            f"expected exactly {COMMERCIAL_IMAGE_COUNT} valid PNGs, found "
+            f"{len(valid_pngs)} valid out of {len(pngs)} total in "
+            f"{job_paths.final_images_dir}."
         )
 
 
@@ -325,6 +458,7 @@ class ProductFactory:
         downloads = 0
         warnings: list[str] = []
         metadata: dict[str, Any] = {}
+        job_paths = _job_paths_from_runner(self._stage_runner, job)
 
         if not self._dry_run:
             self._queue_manager.mark_in_progress(job.id)
@@ -386,6 +520,7 @@ class ProductFactory:
                 time=round(perf_counter() - started_at, 3),
                 success=True,
                 warnings=tuple(warnings),
+                job_paths=job_paths,
                 metadata=_report_metadata(metadata),
             )
         except Exception as error:
@@ -405,6 +540,7 @@ class ProductFactory:
                 failed_stage=failed_stage,
                 warnings=tuple(warnings),
                 errors=(str(error),),
+                job_paths=job_paths,
                 metadata=_report_metadata(metadata),
             )
 
@@ -515,6 +651,31 @@ def _report_metadata(metadata: dict[str, Any]) -> dict[str, Any]:
         for key, value in metadata.items()
         if key != "seo_package"
     }
+
+
+def _job_paths_from_runner(
+    runner: ProductFactoryStageRunner,
+    job: ProductionJob,
+) -> dict[str, str]:
+    job_paths_method = getattr(runner, "job_paths", None)
+    if not callable(job_paths_method):
+        return {}
+    job_paths = job_paths_method(job)
+    to_dict = getattr(job_paths, "to_dict", None)
+    if callable(to_dict):
+        return dict(to_dict())
+    return {}
+
+
+def _safe_job_folder_name(job: ProductionJob) -> str:
+    job_id = _slug_part(job.id) or "job"
+    product = _slug_part(job.product_name) or "product"
+    return f"{job_id}_{product}"
+
+
+def _slug_part(value: str) -> str:
+    slug = re.sub(r"[^a-z0-9]+", "_", value.casefold()).strip("_")
+    return slug[:80]
 
 
 def _composer_style(style: str) -> str:

@@ -22,6 +22,7 @@ class ProductionReport:
     failed_stage: str | None = None
     warnings: tuple[str, ...] = field(default_factory=tuple)
     errors: tuple[str, ...] = field(default_factory=tuple)
+    job_paths: dict[str, str] = field(default_factory=dict)
     created_at: datetime = field(default_factory=datetime.now)
     metadata: dict[str, Any] = field(default_factory=dict)
 
@@ -40,6 +41,7 @@ class ProductionReport:
             raise ValueError("time cannot be negative.")
         object.__setattr__(self, "warnings", tuple(self.warnings))
         object.__setattr__(self, "errors", tuple(self.errors))
+        object.__setattr__(self, "job_paths", dict(self.job_paths))
         object.__setattr__(self, "metadata", dict(self.metadata))
 
     @property
@@ -61,6 +63,7 @@ class ProductionReport:
             "failed_stage": self.failed_stage,
             "warnings": list(self.warnings),
             "errors": list(self.errors),
+            "job_paths": self.job_paths,
             "created_at": self.created_at.isoformat(),
             "metadata": self.metadata,
             "queue_status": self.queue_status,

@@ -25,12 +25,14 @@ class CommercialImageExportResult:
 
     status: str
     exported_files: tuple[str, ...] = field(default_factory=tuple)
+    warnings: tuple[str, ...] = field(default_factory=tuple)
     errors: tuple[str, ...] = field(default_factory=tuple)
     inspections: tuple[GeneratedImageInspection, ...] = field(default_factory=tuple)
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "status", self.status.strip().upper())
         object.__setattr__(self, "exported_files", tuple(self.exported_files))
+        object.__setattr__(self, "warnings", tuple(self.warnings))
         object.__setattr__(self, "errors", tuple(self.errors))
         object.__setattr__(self, "inspections", tuple(self.inspections))
 
