@@ -121,6 +121,32 @@ class EtsyClient:
             )
         return ()
 
+    def update_listing_fields(
+        self,
+        listing_id: str,
+        fields: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Update selected Etsy listing fields without creating a listing."""
+        if not self._config.shop_id:
+            raise RuntimeError("ETSY_SHOP_ID is required.")
+        if not fields:
+            raise RuntimeError("At least one listing field is required.")
+        return self._request_json(
+            path=f"/shops/{self._config.shop_id}/listings/{listing_id}",
+            method="PATCH",
+            data=fields,
+        )
+
+    def update_listing_renewal_default(
+        self,
+        listing_id: str,
+    ) -> dict[str, Any]:
+        """Set an Etsy listing to automatic renewal."""
+        return self.update_listing_fields(
+            listing_id=listing_id,
+            fields={"should_auto_renew": True},
+        )
+
     def create_draft_listing(
         self,
         payload: EtsyDraftListingPayload,

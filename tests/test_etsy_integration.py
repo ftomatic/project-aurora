@@ -20,8 +20,10 @@ from project_aurora.integrations.etsy.etsy_draft_service import (  # noqa: E402
     EtsyDraftService,
 )
 from project_aurora.integrations.etsy.etsy_listing_mapper import (  # noqa: E402
+    AI_DISCLOSURE_API_FIELD,
     DEFAULT_AI_DISCLOSURE,
     EtsyListingMapper,
+    RENEWAL_API_FIELD,
 )
 from project_aurora.integrations.etsy.etsy_result import (  # noqa: E402
     EtsyDraftResult,
@@ -139,7 +141,6 @@ class EtsyIntegrationTest(unittest.TestCase):
         self.assertEqual(payload.who_made, "i_did")
         self.assertEqual(payload.when_made, "made_to_order")
         self.assertEqual(payload.ai_disclosure, DEFAULT_AI_DISCLOSURE)
-        self.assertTrue(payload.is_ai_generated)
         self.assertTrue(payload.should_auto_renew)
         self.assertEqual(payload.to_dict()["state"], "draft")
 
@@ -156,9 +157,10 @@ class EtsyIntegrationTest(unittest.TestCase):
         self.assertEqual(payload_data["price"], 1.99)
         self.assertEqual(payload_data["who_made"], "i_did")
         self.assertEqual(payload_data["when_made"], "made_to_order")
-        self.assertEqual(payload_data["ai_generated_summary"], DEFAULT_AI_DISCLOSURE)
-        self.assertEqual(payload_data["is_ai_generated"], True)
-        self.assertEqual(payload_data["should_auto_renew"], True)
+        self.assertEqual(payload_data[RENEWAL_API_FIELD], True)
+        self.assertNotIn("ai_generated_summary", payload_data)
+        self.assertNotIn("is_ai_generated", payload_data)
+        self.assertIsNone(AI_DISCLOSURE_API_FIELD)
         self.assertNotIn("shipping_profile_id", payload_data)
         self.assertNotIn("processing_profile_id", payload_data)
 
@@ -357,6 +359,48 @@ class EtsyIntegrationTest(unittest.TestCase):
             "Bearer fake_access_token",
         )
         self.assertIn("/shops/shop/listings", calls[0][0].full_url)
+
+    def test_live_client_updates_only_automatic_renewal_field(self) -> None:
+        config = EtsyConfig(
+            mode="live",
+            shop_id="shop",
+            client_id="fake_keystring",
+            shared_secret="fake_shared_secret",
+            access_token="fake_access_token",
+            taxonomy_id=123,
+            api_base_url="https://example.test/v3/application",
+        )
+        calls = []
+
+        def fake_urlopen(api_request, timeout: int):  # type: ignore[no-untyped-def]
+            calls.append((api_request, timeout))
+            return FakeResponse(
+                {
+                    "listing_id": 987654,
+                    "should_auto_renew": True,
+                    "state": "draft",
+                    "title": "unchanged",
+                }
+            )
+
+        response = EtsyClient(
+            config=config,
+            urlopen=fake_urlopen,
+        ).update_listing_renewal_default("987654")
+
+        self.assertEqual(response["should_auto_renew"], True)
+        self.assertEqual(len(calls), 1)
+        api_request = calls[0][0]
+        self.assertEqual(api_request.get_method(), "PATCH")
+        self.assertIn("/shops/shop/listings/987654", api_request.full_url)
+        payload = json.loads(api_request.data.decode("utf-8"))
+        self.assertEqual(payload, {"should_auto_renew": True})
+        self.assertNotIn("title", payload)
+        self.assertNotIn("description", payload)
+        self.assertNotIn("tags", payload)
+        self.assertNotIn("price", payload)
+        self.assertNotIn("image_ids", payload)
+        self.assertNotIn("digital_files", payload)
 
 
 if __name__ == "__main__":

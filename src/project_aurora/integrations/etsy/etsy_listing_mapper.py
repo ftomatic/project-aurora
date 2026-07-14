@@ -16,6 +16,8 @@ from project_aurora.seo.seo_package import SEOPackage
 
 
 DEFAULT_AI_DISCLOSURE = "It’s created with help from an AI generator."
+AI_DISCLOSURE_API_FIELD: str | None = None
+RENEWAL_API_FIELD = "should_auto_renew"
 
 
 @dataclass(frozen=True, slots=True)
@@ -53,7 +55,6 @@ class EtsyDraftListingPayload:
     image_files: tuple[str, ...]
     digital_files: tuple[str, ...]
     ai_disclosure: str
-    is_ai_generated: bool
     should_auto_renew: bool
 
     def to_dict(self) -> dict[str, Any]:
@@ -76,9 +77,7 @@ class EtsyDraftListingPayload:
             "is_digital": self.is_digital,
             "image_files": list(self.image_files),
             "digital_files": list(self.digital_files),
-            "is_ai_generated": self.is_ai_generated,
-            "ai_generated_summary": self.ai_disclosure,
-            "should_auto_renew": self.should_auto_renew,
+            RENEWAL_API_FIELD: self.should_auto_renew,
             "state": "draft",
         }
         return {
@@ -123,7 +122,6 @@ class EtsyListingMapper:
             image_files=listing_package.approved_mockup_files,
             digital_files=listing_package.approved_generated_image_files,
             ai_disclosure=defaults.ai_disclosure,
-            is_ai_generated=bool(defaults.ai_disclosure),
             should_auto_renew=defaults.should_auto_renew,
         )
 

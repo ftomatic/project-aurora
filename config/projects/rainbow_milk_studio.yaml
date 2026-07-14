@@ -31,7 +31,9 @@ retention_policy:
   workflow_logs: keep
 etsy_listing_defaults:
   ai_disclosure: "It’s created with help from an AI generator."
+  ai_disclosure_api_supported: false
   should_auto_renew: true
+  renewal_api_field: should_auto_renew
   renewal_option: automatic
   who_made: i_did
   when_made: made_to_order

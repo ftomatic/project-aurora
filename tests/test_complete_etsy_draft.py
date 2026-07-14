@@ -178,11 +178,9 @@ class CompleteEtsyDraftTest(unittest.TestCase):
         self.assertEqual(payload["taxonomy_id"], 1250)
         self.assertEqual(payload["description"], RAINBOW_MILK_STUDIO_DESCRIPTION)
         self.assertEqual(len(payload["tags"]), 13)
-        self.assertEqual(
-            payload["ai_generated_summary"],
-            "It’s created with help from an AI generator.",
-        )
         self.assertEqual(payload["should_auto_renew"], True)
+        self.assertNotIn("ai_generated_summary", payload)
+        self.assertNotIn("is_ai_generated", payload)
         self.assertEqual(payload["who_made"], "i_did")
         self.assertEqual(payload["when_made"], "made_to_order")
         self.assertNotIn("shipping_profile_id", payload)
