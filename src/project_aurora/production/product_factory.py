@@ -24,6 +24,8 @@ from project_aurora.storage.memory_manager import MemoryManager
 
 
 REPORT_COLLECTION = "production_reports"
+PROJECT_ROOT = Path(__file__).resolve().parents[3]
+DEFAULT_OPENAI_CONFIG_PATH = PROJECT_ROOT / "config" / "openai.yaml"
 
 
 class ProductFactoryStageRunner(Protocol):
@@ -71,6 +73,7 @@ class DefaultProductFactoryStageRunner:
         etsy_config: EtsyConfig,
         paths: ProductFactoryPaths | None = None,
         image_config: Any | None = None,
+        image_config_path: Path = DEFAULT_OPENAI_CONFIG_PATH,
     ) -> None:
         self._memory = memory
         self._etsy_config = etsy_config
@@ -80,7 +83,7 @@ class DefaultProductFactoryStageRunner:
                 ImageProviderConfig,
             )
 
-            image_config = ImageProviderConfig.from_file(Path("config") / "openai.yaml")
+            image_config = ImageProviderConfig.from_file(image_config_path)
         self._image_config = image_config
 
     def compose_prompts(self, job: ProductionJob) -> Any:

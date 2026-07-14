@@ -39,6 +39,17 @@ class OpenAIImageProvider(ImageProvider):
         started_at = perf_counter()
         self._output_dir.mkdir(parents=True, exist_ok=True)
         client = self._client or self._build_client()
+        print("OPENAI IMAGE REQUEST")
+        print("Resolved Provider")
+        print(self.provider_name())
+        print("Resolved Model")
+        print(self._model)
+        print("Resolved Quality")
+        print(request.quality)
+        print("Resolved Size")
+        print(request.size)
+        print("Resolved Image Count")
+        print(request.number_of_images)
         response = client.images.generate(
             model=self._model,
             prompt=request.prompt,

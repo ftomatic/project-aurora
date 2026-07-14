@@ -5,9 +5,13 @@ from __future__ import annotations
 import sys
 import tempfile
 import unittest
+import base64
+from io import BytesIO
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
+
+from PIL import Image
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 SRC_PATH = PROJECT_ROOT / "src"
@@ -33,6 +37,9 @@ from project_aurora.production.product_factory import (  # noqa: E402
 from project_aurora.production.production_report import (  # noqa: E402
     ProductionReport,
 )
+from project_aurora.image_generation.openai_provider import (  # noqa: E402
+    OpenAIImageProvider,
+)
 from project_aurora.storage.csv_storage import CSVStorage  # noqa: E402
 from project_aurora.storage.memory_manager import MemoryManager  # noqa: E402
 from scripts.run_product_factory import parse_args  # noqa: E402
@@ -53,6 +60,32 @@ def make_job(job_id: str = "job-1") -> ProductionJob:
         estimated_revenue=164.0,
         status=READY,
     )
+
+
+def make_visible_png_base64() -> str:
+    output = BytesIO()
+    Image.new("RGBA", (2, 2), (255, 0, 0, 255)).save(output, format="PNG")
+    return base64.b64encode(output.getvalue()).decode("ascii")
+
+
+class FakeOpenAIImagesClient:
+    def __init__(self) -> None:
+        self.calls: list[dict[str, object]] = []
+
+    def generate(self, **kwargs: object) -> object:
+        self.calls.append(kwargs)
+        count = int(kwargs["n"])
+        return SimpleNamespace(
+            data=[
+                {"b64_json": make_visible_png_base64()}
+                for _ in range(count)
+            ]
+        )
+
+
+class FakeOpenAIClient:
+    def __init__(self) -> None:
+        self.images = FakeOpenAIImagesClient()
 
 
 class FakeStageRunner:
@@ -328,6 +361,38 @@ class ProductFactoryTest(unittest.TestCase):
         self.assertEqual(result.status, "SUCCESS")
         self.assertEqual(captured["run_kwargs"]["quality"], "medium")
         self.assertEqual(captured["provider_config"].quality, "medium")
+
+    def test_live_image_path_sends_medium_to_openai_sdk_from_config(self) -> None:
+        fake_client = FakeOpenAIClient()
+        self.memory.save_prompt_package(
+            {
+                "product_name": self.job.product_name,
+                "collection": self.job.product_name,
+                "style": self.job.style,
+                "image_prompt": "Visible test prompt.",
+            },
+            package_id=self.job.id,
+        )
+        runner = DefaultProductFactoryStageRunner(
+            memory=self.memory,
+            etsy_config=SimpleNamespace(),
+            paths=ProductFactoryPaths(
+                generated_images_dir=self.base_path / "generated",
+                final_images_dir=self.base_path / "final",
+            ),
+        )
+
+        with patch.dict("os.environ", {"OPENAI_API_KEY": "test-key"}), patch.object(
+            OpenAIImageProvider,
+            "_build_client",
+            return_value=fake_client,
+        ):
+            result = runner.generate_images(self.job)
+
+        self.assertEqual(result.status, "SUCCESS")
+        self.assertEqual(fake_client.images.calls[0]["quality"], "medium")
+        self.assertEqual(fake_client.images.calls[0]["size"], "1024x1024")
+        self.assertEqual(fake_client.images.calls[0]["n"], 4)
 
 
 if __name__ == "__main__":
