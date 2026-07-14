@@ -45,7 +45,7 @@ def make_request() -> object:
         dpi=300,
         transparent_background=True,
         size="1024x1024",
-        quality="standard",
+        quality="medium",
         background="transparent",
         output_format="png",
         number_of_images=1,

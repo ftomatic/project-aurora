@@ -7,6 +7,10 @@ from pathlib import Path
 from typing import Any
 
 from project_aurora.image_generation.image_provider import ImageProvider
+from project_aurora.image_generation.image_quality import (
+    DEFAULT_OPENAI_IMAGE_QUALITY,
+    validate_image_quality,
+)
 from project_aurora.image_generation.mock_provider import MockImageProvider
 from project_aurora.image_generation.openai_provider import OpenAIImageProvider
 
@@ -18,11 +22,14 @@ class ImageProviderConfig:
     provider: str = "mock"
     model: str = "gpt-image-1"
     size: str = "1024x1024"
-    quality: str = "standard"
+    quality: str = DEFAULT_OPENAI_IMAGE_QUALITY
     background: str = "transparent"
     output_format: str = "png"
     number_of_images: int = 4
     prompt_version: str = "v1"
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "quality", validate_image_quality(self.quality))
 
     @classmethod
     def from_file(cls, path: Path) -> "ImageProviderConfig":
@@ -39,7 +46,7 @@ class ImageProviderConfig:
             provider=values.get("provider", "mock"),
             model=values.get("model", "gpt-image-1"),
             size=values.get("size", "1024x1024"),
-            quality=values.get("quality", "standard"),
+            quality=values.get("quality", DEFAULT_OPENAI_IMAGE_QUALITY),
             background=values.get("background", "transparent"),
             output_format=values.get("output_format", "png"),
             number_of_images=int(values.get("number_of_images", "8")),

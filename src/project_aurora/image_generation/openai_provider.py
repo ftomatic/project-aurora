@@ -9,6 +9,7 @@ from time import perf_counter
 from typing import Any
 
 from project_aurora.image_generation.image_provider import ImageProvider
+from project_aurora.image_generation.image_quality import validate_image_quality
 from project_aurora.image_generation.image_request import ImageRequest
 from project_aurora.image_generation.image_result import ImageResult
 from project_aurora.image_generation.image_inspector import inspect_png
@@ -33,6 +34,7 @@ class OpenAIImageProvider(ImageProvider):
         """Generate image files through OpenAI and save them locally."""
         if not self.health_check():
             raise RuntimeError("OPENAI_API_KEY is required for OpenAI image generation.")
+        validate_image_quality(request.quality)
 
         started_at = perf_counter()
         self._output_dir.mkdir(parents=True, exist_ok=True)

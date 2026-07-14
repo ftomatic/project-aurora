@@ -7,6 +7,7 @@ import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import patch
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 SRC_PATH = PROJECT_ROOT / "src"
@@ -19,9 +20,14 @@ from project_aurora.planning.production_queue_manager import (  # noqa: E402
     ProductionJob,
     ProductionQueueManager,
 )
+from project_aurora.image_generation.provider_registry import (  # noqa: E402
+    ImageProviderConfig,
+)
 from project_aurora.production.product_factory import (  # noqa: E402
     REPORT_COLLECTION,
+    DefaultProductFactoryStageRunner,
     DryRunProductFactoryStageRunner,
+    ProductFactoryPaths,
     ProductFactory,
 )
 from project_aurora.production.production_report import (  # noqa: E402
@@ -287,6 +293,41 @@ class ProductFactoryTest(unittest.TestCase):
         args = parse_args(["--live"])
 
         self.assertTrue(args.live)
+
+    def test_default_runner_uses_configured_medium_openai_quality(self) -> None:
+        captured: dict[str, object] = {}
+
+        class FakeImageGenerationEngine:
+            def __init__(self, **kwargs: object) -> None:
+                captured["provider_config"] = kwargs["provider_config"]
+
+            def run(self, **kwargs: object) -> object:
+                captured["run_kwargs"] = kwargs
+                return SimpleNamespace(status="SUCCESS", generated_files=(), warnings=())
+
+        runner = DefaultProductFactoryStageRunner(
+            memory=self.memory,
+            etsy_config=SimpleNamespace(),
+            paths=ProductFactoryPaths(
+                generated_images_dir=self.base_path / "generated",
+                final_images_dir=self.base_path / "final",
+            ),
+            image_config=ImageProviderConfig(
+                provider="openai",
+                quality="medium",
+                number_of_images=4,
+            ),
+        )
+
+        with patch(
+            "project_aurora.image_generation.image_generation_engine.ImageGenerationEngine",
+            FakeImageGenerationEngine,
+        ):
+            result = runner.generate_images(self.job)
+
+        self.assertEqual(result.status, "SUCCESS")
+        self.assertEqual(captured["run_kwargs"]["quality"], "medium")
+        self.assertEqual(captured["provider_config"].quality, "medium")
 
 
 if __name__ == "__main__":

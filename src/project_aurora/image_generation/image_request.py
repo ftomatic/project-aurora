@@ -6,6 +6,11 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
 
+from project_aurora.image_generation.image_quality import (
+    DEFAULT_OPENAI_IMAGE_QUALITY,
+    validate_image_quality,
+)
+
 
 @dataclass(frozen=True, slots=True)
 class ImageRequest:
@@ -24,7 +29,7 @@ class ImageRequest:
     created_at: datetime
     prompt: str = ""
     size: str = ""
-    quality: str = "standard"
+    quality: str = DEFAULT_OPENAI_IMAGE_QUALITY
     background: str = "transparent"
     output_format: str = "png"
     number_of_images: int = 1
@@ -47,6 +52,7 @@ class ImageRequest:
         if self.number_of_images <= 0:
             raise ValueError("Number of images must be greater than zero.")
 
+        object.__setattr__(self, "quality", validate_image_quality(self.quality))
         if not self.prompt:
             image_prompt = self.prompt_package.get("image_prompt", "")
             object.__setattr__(self, "prompt", str(image_prompt))

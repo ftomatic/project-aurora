@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from project_aurora.image_generation.image_quality import validate_image_quality
+
 
 @dataclass(frozen=True, slots=True)
 class ImageCostEstimate:
@@ -23,8 +25,8 @@ class ImageCostEstimator:
     """Estimate image generation costs from local configuration."""
 
     DEFAULT_RATES: dict[str, dict[str, float]] = {
-        "mock": {"standard": 0.0, "high": 0.0},
-        "openai": {"standard": 0.04, "high": 0.08},
+        "mock": {"low": 0.0, "medium": 0.0, "high": 0.0, "auto": 0.0},
+        "openai": {"low": 0.02, "medium": 0.04, "high": 0.08, "auto": 0.04},
     }
 
     def __init__(
@@ -44,12 +46,9 @@ class ImageCostEstimator:
             raise ValueError("Number of images must be greater than zero.")
 
         provider_key = provider.casefold()
-        quality_key = quality.casefold()
+        quality_key = validate_image_quality(quality)
         provider_rates = self._rates.get(provider_key, {})
-        cost_per_image = provider_rates.get(
-            quality_key,
-            provider_rates.get("standard", 0.0),
-        )
+        cost_per_image = provider_rates.get(quality_key, 0.0)
         total = round(cost_per_image * number_of_images, 4)
         return ImageCostEstimate(
             provider=provider_key,

@@ -28,6 +28,9 @@ from project_aurora.image_generation.provider_registry import (  # noqa: E402
     ImageProviderConfig,
     ProviderRegistry,
 )
+from project_aurora.image_generation.image_quality import (  # noqa: E402
+    validate_image_quality,
+)
 from project_aurora.storage.csv_storage import CSVStorage  # noqa: E402
 from project_aurora.storage.memory_manager import MemoryManager  # noqa: E402
 
@@ -80,12 +83,19 @@ class OpenAIProviderTest(unittest.TestCase):
     def test_cost_estimator(self) -> None:
         estimate = ImageCostEstimator().estimate(
             provider="openai",
-            quality="standard",
+            quality="medium",
             number_of_images=8,
         )
 
         self.assertEqual(estimate.total_cost, 0.32)
         self.assertEqual(estimate.render(), "$0.32")
+
+    def test_standard_quality_is_rejected_before_api_call(self) -> None:
+        with self.assertRaises(ValueError):
+            validate_image_quality("standard")
+
+        with self.assertRaises(ValueError):
+            ImageProviderConfig(provider="openai", quality="standard")
 
     def test_provider_registry_selects_openai(self) -> None:
         registry = ProviderRegistry.default(
@@ -116,7 +126,7 @@ class OpenAIProviderTest(unittest.TestCase):
             dpi=300,
             transparent_background=True,
             size="1024x1024",
-            quality="standard",
+            quality="medium",
             background="transparent",
             output_format="png",
             number_of_images=2,
@@ -136,7 +146,7 @@ class OpenAIProviderTest(unittest.TestCase):
         self.memory.save_prompt_package(make_prompt_package())
         config = ImageProviderConfig(
             provider="openai",
-            quality="standard",
+            quality="medium",
             number_of_images=2,
             prompt_version="openai-gpt-image-v1",
         )

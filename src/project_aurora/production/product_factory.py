@@ -70,10 +70,18 @@ class DefaultProductFactoryStageRunner:
         memory: MemoryManager,
         etsy_config: EtsyConfig,
         paths: ProductFactoryPaths | None = None,
+        image_config: Any | None = None,
     ) -> None:
         self._memory = memory
         self._etsy_config = etsy_config
         self._paths = paths or ProductFactoryPaths()
+        if image_config is None:
+            from project_aurora.image_generation.provider_registry import (
+                ImageProviderConfig,
+            )
+
+            image_config = ImageProviderConfig.from_file(Path("config") / "openai.yaml")
+        self._image_config = image_config
 
     def compose_prompts(self, job: ProductionJob) -> Any:
         """Compose and save prompt recipe/package-compatible prompt data."""
@@ -110,18 +118,19 @@ class DefaultProductFactoryStageRunner:
         return ImageGenerationEngine(
             memory=self._memory,
             output_dir=self._paths.generated_images_dir,
+            provider_config=self._image_config,
         ).run(
             prompt_package_id=job.id,
-            provider="openai",
+            provider=self._image_config.provider,
             image_type="product_asset",
             width=1024,
             height=1024,
             dpi=300,
-            size="1024x1024",
-            quality="standard",
-            background="transparent",
-            output_format="png",
-            number_of_images=4,
+            size=self._image_config.size,
+            quality=self._image_config.quality,
+            background=self._image_config.background,
+            output_format=self._image_config.output_format,
+            number_of_images=self._image_config.number_of_images,
         )
 
     def run_image_qa(self, job: ProductionJob) -> Any:

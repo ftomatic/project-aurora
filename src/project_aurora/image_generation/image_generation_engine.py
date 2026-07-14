@@ -8,6 +8,10 @@ from pathlib import Path
 from typing import Any
 
 from project_aurora.image_generation.image_provider import ImageProvider
+from project_aurora.image_generation.image_quality import (
+    DEFAULT_OPENAI_IMAGE_QUALITY,
+    validate_image_quality,
+)
 from project_aurora.image_generation.image_request import ImageRequest
 from project_aurora.image_generation.image_result import ImageResult
 from project_aurora.image_generation.image_cost_estimator import ImageCostEstimator
@@ -65,7 +69,7 @@ class ImageGenerationEngine:
         prompt_package = self._memory.load_prompt_package(prompt_package_id)
         provider_name = provider or self._provider_config.provider
         image_provider = self.select_provider(provider_name)
-        resolved_quality = quality or self._provider_config.quality
+        resolved_quality = validate_image_quality(quality or self._provider_config.quality)
         resolved_number = number_of_images or self._provider_config.number_of_images
         request = self.create_request(
             prompt_package=prompt_package,
@@ -117,7 +121,7 @@ class ImageGenerationEngine:
         dpi: int,
         transparent_background: bool,
         size: str | None = None,
-        quality: str = "standard",
+        quality: str = DEFAULT_OPENAI_IMAGE_QUALITY,
         background: str = "transparent",
         output_format: str = "png",
         number_of_images: int = 1,
@@ -140,7 +144,7 @@ class ImageGenerationEngine:
             created_at=datetime.now(),
             prompt=prompt,
             size=size or f"{width}x{height}",
-            quality=quality,
+            quality=validate_image_quality(quality),
             background=background,
             output_format=output_format,
             number_of_images=number_of_images,
