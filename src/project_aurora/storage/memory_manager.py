@@ -258,6 +258,16 @@ class MemoryManager:
         """Load a stored record from any memory collection."""
         return self._storage.load(collection, record_id)
 
+    def save_record(
+        self,
+        collection: str,
+        record_id: str,
+        value: Any,
+    ) -> str:
+        """Save a record to any memory collection."""
+        self._storage.save(collection, record_id, self._to_record(value))
+        return record_id
+
     def save_etsy_draft_result(
         self,
         etsy_result: Any,
