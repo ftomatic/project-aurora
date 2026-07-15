@@ -140,6 +140,23 @@ class EtsyClient:
             )
         return ()
 
+    def list_shop_draft_listings(self) -> tuple[dict[str, Any], ...]:
+        """Return current draft listings for the configured Etsy shop."""
+        if not self._config.shop_id:
+            raise RuntimeError("ETSY_SHOP_ID is required.")
+        response = self.get_json(
+            f"/shops/{self._config.shop_id}/listings?state=draft&limit=100"
+        )
+        results = response.get("results", ())
+        if not isinstance(results, list):
+            return ()
+        return tuple(
+            item
+            for item in results
+            if isinstance(item, dict)
+            and str(item.get("state", "")).casefold() == "draft"
+        )
+
     def update_listing_fields(
         self,
         listing_id: str,

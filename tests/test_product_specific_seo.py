@@ -44,11 +44,20 @@ PRODUCTS = (
     ("job-wildflower", "Wildflower Wedding Invitation", "party printable"),
     ("job-moody", "Moody Dark Academia Prints", "wall art"),
 )
+FIVE_PRODUCTS = (
+    *PRODUCTS,
+    ("job-pastel", "Pastel Baby Animal Clipart", "clipart"),
+    ("job-new-year", "New Year Planner Stickers", "sticker sheet"),
+)
 
 
 class FakePatchClient:
-    def __init__(self) -> None:
+    def __init__(self, drafts: tuple[dict[str, object], ...] = ()) -> None:
+        self.drafts = drafts
         self.calls: list[tuple[str, dict[str, object]]] = []
+
+    def list_shop_draft_listings(self) -> tuple[dict[str, object], ...]:
+        return self.drafts
 
     def update_listing_fields(self, listing_id: str, fields: dict[str, object]) -> dict[str, object]:
         self.calls.append((listing_id, fields))
@@ -97,6 +106,35 @@ class ProductSpecificSEOTest(unittest.TestCase):
             )
             paths.append(str(path))
         return tuple(paths)
+
+    def save_verified_report(
+        self,
+        job: ProductionJob,
+        listing_id: str,
+        write_seo: bool = True,
+    ) -> None:
+        package = self.runner.generate_seo(job) if write_seo else None
+        report = ProductionReport(
+            job_id=job.id,
+            product=job.product_name,
+            style=job.style,
+            draft_id=listing_id,
+            images=4,
+            downloads=4,
+            time=1,
+            success=True,
+            job_paths=self.runner.job_paths(job).to_dict(),
+            metadata={
+                "seo_generation": {"tags": list(package.tags)}
+                if package is not None
+                else {}
+            },
+        )
+        if not write_seo:
+            seo_path = self.runner.job_paths(job).job_root / "seo" / "seo_package.json"
+            if seo_path.exists():
+                seo_path.unlink()
+        self.memory.save_record("production_reports", job.id, report.to_dict())
 
     def test_three_products_receive_distinct_job_specific_tags(self) -> None:
         packages = []
@@ -166,39 +204,126 @@ class ProductSpecificSEOTest(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             self.runner.create_etsy_draft(moody, wrong_package)
 
-    def test_audit_and_repair_patch_only_tags(self) -> None:
-        jobs = [self.job(*product) for product in PRODUCTS[:2]]
+    def test_audit_and_repair_patch_only_tags_for_five_current_drafts(self) -> None:
+        jobs = [self.job(*product) for product in FIVE_PRODUCTS]
         for index, job in enumerate(jobs, start=1):
-            package = self.runner.generate_seo(job)
-            report = ProductionReport(
-                job_id=job.id,
-                product=job.product_name,
-                style=job.style,
-                draft_id=f"listing-{index}",
-                images=4,
-                downloads=4,
-                time=1,
-                success=True,
-                job_paths=self.runner.job_paths(job).to_dict(),
-                metadata={"seo_generation": {"tags": list(package.tags)}},
-            )
-            self.memory.save_record("production_reports", job.id, report.to_dict())
+            self.save_verified_report(job, f"listing-{index}")
 
         audit = audit_listing_seo(self.memory)
-        client = FakePatchClient()
+        client = FakePatchClient(
+            tuple(
+                {
+                    "listing_id": f"listing-{index}",
+                    "state": "draft",
+                    "tags": ["old tag"],
+                }
+                for index in range(1, 6)
+            )
+        )
+        output = StringIO()
+        with redirect_stdout(output):
+            report = repair_existing_etsy_tags(
+                self.memory,
+                client,  # type: ignore[arg-type]
+                input_fn=lambda _prompt: "FIX 5 TAGS",
+            )
+
+        self.assertEqual(len(audit), 5)
+        self.assertEqual(report["status"], "SUCCESS")
+        self.assertEqual(report["drafts_found"], 5)
+        self.assertEqual(report["eligible"], 5)
+        self.assertIn("Drafts Found\n5", output.getvalue())
+        self.assertIn("Drafts Eligible for Tag Repair\n5", output.getvalue())
+        self.assertEqual(len(client.calls), 5)
+        for _listing_id, fields in client.calls:
+            self.assertEqual(tuple(fields.keys()), ("tags",))
+            self.assertEqual(len(fields["tags"]), 13)
+
+    def test_published_listing_is_skipped_before_patch(self) -> None:
+        jobs = [self.job(*product) for product in FIVE_PRODUCTS]
+        for index, job in enumerate(jobs, start=1):
+            self.save_verified_report(job, f"listing-{index}")
+        drafts = tuple(
+            {
+                "listing_id": f"listing-{index}",
+                "state": "draft" if index < 5 else "active",
+                "tags": ["old tag"],
+            }
+            for index in range(1, 6)
+        )
+        client = FakePatchClient(drafts)
+
         with redirect_stdout(StringIO()):
             report = repair_existing_etsy_tags(
                 self.memory,
                 client,  # type: ignore[arg-type]
-                input_fn=lambda _prompt: "FIX TAGS",
+                input_fn=lambda _prompt: "FIX 5 TAGS",
             )
 
-        self.assertEqual(len(audit), 2)
-        self.assertEqual(report["status"], "SUCCESS")
-        self.assertEqual(len(client.calls), 2)
-        for _listing_id, fields in client.calls:
-            self.assertEqual(tuple(fields.keys()), ("tags",))
-            self.assertEqual(len(fields["tags"]), 13)
+        self.assertEqual(report["status"], "ELIGIBLE_DRAFT_COUNT_MISMATCH")
+        self.assertEqual(len(client.calls), 0)
+        self.assertIn(
+            {"product": jobs[4].product_name, "etsy_listing_id": "listing-5", "reason": "NOT_CURRENT_DRAFT"},
+            report["skipped"],
+        )
+
+    def test_deleted_listing_is_skipped_before_patch(self) -> None:
+        jobs = [self.job(*product) for product in FIVE_PRODUCTS]
+        for index, job in enumerate(jobs, start=1):
+            self.save_verified_report(job, f"listing-{index}")
+        client = FakePatchClient(
+            tuple(
+                {
+                    "listing_id": f"listing-{index}",
+                    "state": "draft",
+                    "tags": ["old tag"],
+                }
+                for index in range(1, 5)
+            )
+        )
+
+        with redirect_stdout(StringIO()):
+            report = repair_existing_etsy_tags(
+                self.memory,
+                client,  # type: ignore[arg-type]
+                input_fn=lambda _prompt: "FIX 5 TAGS",
+            )
+
+        self.assertEqual(report["status"], "ELIGIBLE_DRAFT_COUNT_MISMATCH")
+        self.assertEqual(len(client.calls), 0)
+        self.assertIn(
+            {"product": jobs[4].product_name, "etsy_listing_id": "listing-5", "reason": "NOT_CURRENT_DRAFT"},
+            report["skipped"],
+        )
+
+    def test_unverified_seo_package_is_skipped_before_patch(self) -> None:
+        jobs = [self.job(*product) for product in FIVE_PRODUCTS]
+        for index, job in enumerate(jobs, start=1):
+            self.save_verified_report(job, f"listing-{index}", write_seo=index != 5)
+        client = FakePatchClient(
+            tuple(
+                {
+                    "listing_id": f"listing-{index}",
+                    "state": "draft",
+                    "tags": ["old tag"],
+                }
+                for index in range(1, 6)
+            )
+        )
+
+        with redirect_stdout(StringIO()):
+            report = repair_existing_etsy_tags(
+                self.memory,
+                client,  # type: ignore[arg-type]
+                input_fn=lambda _prompt: "FIX 5 TAGS",
+            )
+
+        self.assertEqual(report["status"], "ELIGIBLE_DRAFT_COUNT_MISMATCH")
+        self.assertEqual(len(client.calls), 0)
+        self.assertIn(
+            {"product": jobs[4].product_name, "etsy_listing_id": "listing-5", "reason": "MISSING_SEO"},
+            report["skipped"],
+        )
 
     def test_cli_scripts_do_not_require_scripts_package_imports(self) -> None:
         audit = subprocess.run(

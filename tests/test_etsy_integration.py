@@ -457,6 +457,45 @@ class EtsyIntegrationTest(unittest.TestCase):
         self.assertNotIn("image_ids", payload)
         self.assertNotIn("digital_files", payload)
 
+    def test_live_client_lists_only_shop_draft_listings(self) -> None:
+        config = EtsyConfig(
+            mode="live",
+            shop_id="shop",
+            client_id="fake_keystring",
+            shared_secret="fake_shared_secret",
+            access_token="fake_access_token",
+            taxonomy_id=123,
+            api_base_url="https://example.test/v3/application",
+        )
+        calls = []
+
+        def fake_urlopen(api_request, timeout: int):  # type: ignore[no-untyped-def]
+            calls.append((api_request, timeout))
+            return FakeResponse(
+                {
+                    "results": [
+                        {"listing_id": 1, "state": "draft"},
+                        {"listing_id": 2, "state": "active"},
+                        {"listing_id": 3, "state": "draft"},
+                    ]
+                }
+            )
+
+        drafts = EtsyClient(
+            config=config,
+            urlopen=fake_urlopen,
+        ).list_shop_draft_listings()
+
+        self.assertEqual(
+            tuple(item["listing_id"] for item in drafts),
+            (1, 3),
+        )
+        self.assertEqual(len(calls), 1)
+        self.assertIn(
+            "/shops/shop/listings?state=draft&limit=100",
+            calls[0][0].full_url,
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
