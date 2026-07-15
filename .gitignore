@@ -29,6 +29,7 @@ logs/
 # Environment
 # ===========================
 .env
+config/aurora.local.env
 config/google_credentials*.json
 config/google_token*.json
 config/service_account*.json

@@ -42,6 +42,10 @@ class ProductionJob:
     estimated_revenue: float
     created_at: datetime = field(default_factory=datetime.now)
     status: str = READY
+    target_customer: str = ""
+    demand_score: float = 0.0
+    competition_score: float = 0.0
+    source_evidence: tuple[str, ...] = field(default_factory=tuple)
 
     def __post_init__(self) -> None:
         for field_name in (
@@ -66,6 +70,7 @@ class ProductionJob:
             raise ValueError("estimated_revenue cannot be negative.")
         object.__setattr__(self, "status", normalized_status)
         object.__setattr__(self, "keywords", tuple(self.keywords))
+        object.__setattr__(self, "source_evidence", tuple(self.source_evidence))
 
     def with_status(self, status: str) -> "ProductionJob":
         """Return this job with an updated status."""
@@ -87,6 +92,10 @@ class ProductionJob:
             "estimated_revenue": self.estimated_revenue,
             "created_at": self.created_at.isoformat(),
             "status": self.status,
+            "target_customer": self.target_customer,
+            "demand_score": self.demand_score,
+            "competition_score": self.competition_score,
+            "source_evidence": list(self.source_evidence),
         }
 
     @classmethod
@@ -111,6 +120,12 @@ class ProductionJob:
                 else datetime.now()
             ),
             status=str(data.get("status", READY)),
+            target_customer=str(data.get("target_customer", "")),
+            demand_score=float(data.get("demand_score", 0.0)),
+            competition_score=float(data.get("competition_score", 0.0)),
+            source_evidence=tuple(
+                str(value) for value in data.get("source_evidence", ())
+            ),
         )
 
 
@@ -148,6 +163,10 @@ class ProductionQueueManager:
         estimated_demand: str,
         estimated_revenue: float,
         status: str = READY,
+        target_customer: str = "",
+        demand_score: float = 0.0,
+        competition_score: float = 0.0,
+        source_evidence: tuple[str, ...] = (),
     ) -> ProductionJob:
         """Add and persist a production job, preventing duplicate products."""
         if self._contains_product(product_name):
@@ -165,6 +184,10 @@ class ProductionQueueManager:
             estimated_demand=estimated_demand,
             estimated_revenue=estimated_revenue,
             status=status,
+            target_customer=target_customer,
+            demand_score=demand_score,
+            competition_score=competition_score,
+            source_evidence=source_evidence,
         )
         self._jobs = self._sorted_jobs((*self._jobs, job))
         self._save()

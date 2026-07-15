@@ -1,0 +1,10 @@
+enabled: true
+daily_product_count: 10
+max_daily_products: 10
+max_daily_images: 40
+max_estimated_daily_cost: 5.00
+continue_after_failure: true
+require_live_confirmation_for_manual_runs: true
+schedule_hour: 8
+schedule_minute: 0
+timezone: America/New_York
