@@ -1,0 +1,11 @@
+# Aurora research-first production planning configuration.
+
+minimum_confidence: 85
+candidate_count: 50
+daily_products: 5
+duplicate_threshold: 0.80
+max_per_style: 1
+max_per_category: 1
+max_per_audience: 1
+max_per_season: 1
+max_per_product_type: 1
