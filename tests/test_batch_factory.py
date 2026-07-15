@@ -292,7 +292,105 @@ class BatchFactoryTest(unittest.TestCase):
         rendered = output.getvalue()
         self.assertIn("Drafts Created\n1", rendered)
         self.assertIn("Draft IDs\n4538300846", rendered)
-        self.assertIn("Elapsed Time\n63.00 seconds", rendered)
+        self.assertIn("Elapsed Time\n63.002 seconds", rendered)
+
+    def test_live_orchestration_aggregates_returned_production_reports(self) -> None:
+        self.add_jobs(3)
+        returned_reports = [
+            ProductionReport(
+                job_id="job-1",
+                product="Product 1",
+                style="Storybook Watercolor",
+                draft_id="111",
+                images=4,
+                downloads=4,
+                time=10.5,
+                success=True,
+            ),
+            ProductionReport(
+                job_id="job-2",
+                product="Product 2",
+                style="Storybook Watercolor",
+                draft_id="222",
+                images=4,
+                downloads=4,
+                time=20.5,
+                success=True,
+            ),
+            ProductionReport(
+                job_id="job-3",
+                product="Product 3",
+                style="Storybook Watercolor",
+                draft_id="333",
+                images=4,
+                downloads=4,
+                time=30.5,
+                success=True,
+            ),
+        ]
+
+        class FakeProductFactory:
+            def __init__(self, **kwargs: object) -> None:
+                self._queue_manager = kwargs["queue_manager"]
+
+            def execute(self, job: ProductionJob) -> ProductionReport:
+                report = returned_reports.pop(0)
+                self._queue_manager.mark_completed(job.id)
+                return report
+
+        with patch("scripts.run_batch_factory.ProductFactory", FakeProductFactory):
+            with patch("sys.stdout", new_callable=StringIO):
+                report = BatchProductionFactory(
+                    queue_manager=self.queue,
+                    memory=self.memory,
+                    stage_runner_factory=lambda _job: FakeBatchStageRunner(),
+                ).run(3)
+
+        self.assertEqual(report.completed, 3)
+        self.assertEqual(report.failed, 0)
+        self.assertEqual(report.drafts_created, 3)
+        self.assertEqual(report.draft_ids, ("111", "222", "333"))
+        self.assertEqual(report.images_generated, 12)
+        self.assertEqual(report.downloads_uploaded, 12)
+        self.assertEqual(report.elapsed_time, 61.5)
+        with patch("sys.stdout", new_callable=StringIO) as output:
+            print_batch_report(report)
+        self.assertIn("Elapsed Time\n61.5 seconds", output.getvalue())
+
+    def test_batch_success_comes_from_returned_report_not_queue_status(self) -> None:
+        self.add_jobs(1)
+
+        class FakeProductFactory:
+            def __init__(self, **kwargs: object) -> None:
+                self._queue_manager = kwargs["queue_manager"]
+
+            def execute(self, job: ProductionJob) -> ProductionReport:
+                self._queue_manager.mark_completed(job.id)
+                return ProductionReport(
+                    job_id=job.id,
+                    product=job.product_name,
+                    style=job.style,
+                    draft_id=None,
+                    images=0,
+                    downloads=0,
+                    time=5.0,
+                    success=False,
+                    failed_stage="image_generation",
+                    errors=("forced returned-report failure",),
+                )
+
+        with patch("scripts.run_batch_factory.ProductFactory", FakeProductFactory):
+            with patch("sys.stdout", new_callable=StringIO):
+                report = BatchProductionFactory(
+                    queue_manager=self.queue,
+                    memory=self.memory,
+                    stage_runner_factory=lambda _job: FakeBatchStageRunner(),
+                ).run(1)
+
+        self.assertEqual(self.queue.list_jobs()[0].status, COMPLETED)
+        self.assertEqual(report.completed, 0)
+        self.assertEqual(report.failed, 1)
+        self.assertEqual(report.failure_summary[0]["failed_stage"], "image_generation")
 
 
 if __name__ == "__main__":

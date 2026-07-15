@@ -8,7 +8,6 @@ import tempfile
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from time import perf_counter
 from typing import Callable
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -102,25 +101,51 @@ class BatchProductionFactory:
         if count <= 0:
             raise ValueError("count must be greater than zero.")
 
-        started_at = perf_counter()
         reports: list[ProductionReport] = []
+        completed = 0
+        failed = 0
+        draft_ids: list[str] = []
+        images_generated = 0
+        downloads_uploaded = 0
+        elapsed_time = 0.0
         for _ in range(count):
             job = self._queue_manager.next_ready_job()
             if job is None:
                 break
-            report = ProductFactory(
+            factory = ProductFactory(
                 queue_manager=self._queue_manager,
                 memory=self._memory,
                 stage_runner=self._stage_runner_factory(job),
                 dry_run=False,
                 save_report=self._save_report,
-            ).execute(job)
+            )
+            report = factory.execute(job)
+            if not isinstance(report, ProductionReport):
+                raise RuntimeError(
+                    "ProductFactory.execute() did not return a ProductionReport."
+                )
+            print_report_diagnostics(report)
             reports.append(report)
+            if report.success:
+                completed += 1
+            else:
+                failed += 1
+            draft_id = _draft_id_from_report(report)
+            if draft_id:
+                draft_ids.append(draft_id)
+            images_generated += report.images
+            downloads_uploaded += report.downloads
+            elapsed_time += report.time
 
-        batch_report = _build_batch_report(
+        batch_report = _build_batch_report_from_returned_reports(
             requested=count,
             reports=tuple(reports),
-            elapsed_time=round(perf_counter() - started_at, 3),
+            completed=completed,
+            failed=failed,
+            draft_ids=tuple(draft_ids),
+            images_generated=images_generated,
+            downloads_uploaded=downloads_uploaded,
+            elapsed_time=round(elapsed_time, 3),
         )
         if self._save_report:
             self._save_batch_report(batch_report)
@@ -228,9 +253,45 @@ def _build_batch_report(
         failed=sum(1 for report in reports if not report.success),
         drafts_created=sum(1 for report in reports if _draft_created_from_report(report)),
         draft_ids=draft_ids,
-        images_generated=sum(report.images for report in reports if report.success),
-        downloads_uploaded=sum(report.downloads for report in reports if report.success),
+        images_generated=sum(report.images for report in reports),
+        downloads_uploaded=sum(report.downloads for report in reports),
         elapsed_time=resolved_elapsed_time,
+        failure_summary=failures,
+        reports=reports,
+    )
+
+
+def _build_batch_report_from_returned_reports(
+    requested: int,
+    reports: tuple[ProductionReport, ...],
+    completed: int,
+    failed: int,
+    draft_ids: tuple[str, ...],
+    images_generated: int,
+    downloads_uploaded: int,
+    elapsed_time: float,
+) -> BatchFactoryReport:
+    """Build a batch report from counters read directly after execute()."""
+    failures = tuple(
+        {
+            "job_id": report.job_id,
+            "product": report.product,
+            "failed_stage": report.failed_stage,
+            "errors": list(report.errors),
+        }
+        for report in reports
+        if not report.success
+    )
+    return BatchFactoryReport(
+        requested=requested,
+        attempted=len(reports),
+        completed=completed,
+        failed=failed,
+        drafts_created=len(draft_ids),
+        draft_ids=draft_ids,
+        images_generated=images_generated,
+        downloads_uploaded=downloads_uploaded,
+        elapsed_time=elapsed_time,
         failure_summary=failures,
         reports=reports,
     )
@@ -266,7 +327,7 @@ def print_batch_report(report: BatchFactoryReport) -> None:
     print(report.downloads_uploaded)
     print("")
     print("Elapsed Time")
-    print(f"{report.elapsed_time:.2f} seconds")
+    print(f"{_format_elapsed_time(report.elapsed_time)} seconds")
     print("")
     print("Failure Summary")
     if not report.failure_summary:
@@ -279,6 +340,28 @@ def print_batch_report(report: BatchFactoryReport) -> None:
             )
             for error in failure.get("errors", ()):
                 print(f"  {error}")
+
+
+def print_report_diagnostics(report: ProductionReport) -> None:
+    """Print safe per-job report diagnostics without secrets."""
+    draft_id = _draft_id_from_report(report)
+    print("BATCH JOB REPORT")
+    print("Report Type")
+    print(type(report).__name__)
+    print("Report Draft ID")
+    print(draft_id if draft_id else "NONE")
+    print("Report Time")
+    print(report.time)
+    print("Report Success")
+    print("true" if report.success else "false")
+    print("")
+
+
+def _format_elapsed_time(value: float) -> str:
+    """Format elapsed seconds without hiding short nonzero runs."""
+    if value == 0:
+        return "0"
+    return f"{value:.3f}".rstrip("0").rstrip(".")
 
 
 def _draft_id_from_report(report: ProductionReport) -> str | None:
