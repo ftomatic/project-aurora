@@ -56,6 +56,7 @@ class BatchFactoryReport:
     completed: int
     failed: int
     drafts_created: int
+    draft_ids: tuple[str, ...]
     images_generated: int
     downloads_uploaded: int
     elapsed_time: float
@@ -71,6 +72,7 @@ class BatchFactoryReport:
             "completed": self.completed,
             "failed": self.failed,
             "drafts_created": self.drafts_created,
+            "draft_ids": list(self.draft_ids),
             "images_generated": self.images_generated,
             "downloads_uploaded": self.downloads_uploaded,
             "elapsed_time": self.elapsed_time,
@@ -202,6 +204,13 @@ def _build_batch_report(
     reports: tuple[ProductionReport, ...],
     elapsed_time: float,
 ) -> BatchFactoryReport:
+    draft_ids = tuple(
+        draft_id
+        for report in reports
+        if (draft_id := _draft_id_from_report(report)) is not None
+    )
+    report_time_total = round(sum(report.time for report in reports), 3)
+    resolved_elapsed_time = report_time_total if report_time_total > 0 else elapsed_time
     failures = tuple(
         {
             "job_id": report.job_id,
@@ -217,10 +226,11 @@ def _build_batch_report(
         attempted=len(reports),
         completed=sum(1 for report in reports if report.success),
         failed=sum(1 for report in reports if not report.success),
-        drafts_created=sum(1 for report in reports if report.draft_id),
+        drafts_created=sum(1 for report in reports if _draft_created_from_report(report)),
+        draft_ids=draft_ids,
         images_generated=sum(report.images for report in reports if report.success),
         downloads_uploaded=sum(report.downloads for report in reports if report.success),
-        elapsed_time=elapsed_time,
+        elapsed_time=resolved_elapsed_time,
         failure_summary=failures,
         reports=reports,
     )
@@ -242,6 +252,13 @@ def print_batch_report(report: BatchFactoryReport) -> None:
     print("Drafts Created")
     print(report.drafts_created)
     print("")
+    print("Draft IDs")
+    if report.draft_ids:
+        for draft_id in report.draft_ids:
+            print(draft_id)
+    else:
+        print("None")
+    print("")
     print("Images Generated")
     print(report.images_generated)
     print("")
@@ -262,6 +279,42 @@ def print_batch_report(report: BatchFactoryReport) -> None:
             )
             for error in failure.get("errors", ()):
                 print(f"  {error}")
+
+
+def _draft_id_from_report(report: ProductionReport) -> str | None:
+    """Return the Etsy draft id represented by one production report."""
+    if report.draft_id and report.draft_id.strip():
+        return report.draft_id.strip()
+
+    etsy_draft = report.metadata.get("etsy_draft")
+    if not isinstance(etsy_draft, dict):
+        return None
+
+    listing_id = etsy_draft.get("etsy_listing_id")
+    if isinstance(listing_id, str) and listing_id.strip():
+        return listing_id.strip()
+
+    status = etsy_draft.get("status")
+    if isinstance(status, str) and status.strip().upper() == "DRAFT_CREATED":
+        metadata = etsy_draft.get("metadata")
+        if isinstance(metadata, dict):
+            response = metadata.get("response")
+            if isinstance(response, dict):
+                response_listing_id = response.get("listing_id")
+                if response_listing_id is not None:
+                    return str(response_listing_id)
+    return None
+
+
+def _draft_created_from_report(report: ProductionReport) -> bool:
+    """Return whether one production report created an Etsy draft."""
+    if _draft_id_from_report(report) is not None:
+        return True
+    etsy_draft = report.metadata.get("etsy_draft")
+    if not isinstance(etsy_draft, dict):
+        return False
+    status = etsy_draft.get("status")
+    return isinstance(status, str) and status.strip().upper() == "DRAFT_CREATED"
 
 
 if __name__ == "__main__":

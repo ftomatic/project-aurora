@@ -5,8 +5,10 @@ from __future__ import annotations
 import sys
 import tempfile
 import unittest
+from io import StringIO
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import patch
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 SRC_PATH = PROJECT_ROOT / "src"
@@ -21,11 +23,14 @@ from project_aurora.planning.production_queue_manager import (  # noqa: E402
     ProductionQueueManager,
 )
 from project_aurora.production.product_factory import REPORT_COLLECTION  # noqa: E402
+from project_aurora.production.production_report import ProductionReport  # noqa: E402
 from project_aurora.storage.csv_storage import CSVStorage  # noqa: E402
 from project_aurora.storage.memory_manager import MemoryManager  # noqa: E402
 from scripts.run_batch_factory import (  # noqa: E402
     BatchProductionFactory,
+    _build_batch_report,
     parse_args,
+    print_batch_report,
 )
 
 
@@ -150,6 +155,7 @@ class BatchFactoryTest(unittest.TestCase):
         self.assertEqual(report.completed, 2)
         self.assertEqual(report.failed, 0)
         self.assertEqual(report.drafts_created, 2)
+        self.assertEqual(report.draft_ids, ("listing-job-1", "listing-job-2"))
         self.assertEqual(report.images_generated, 8)
         self.assertEqual(report.downloads_uploaded, 8)
         self.assertEqual(
@@ -165,6 +171,7 @@ class BatchFactoryTest(unittest.TestCase):
         self.assertEqual(report.completed, 2)
         self.assertEqual(report.failed, 1)
         self.assertEqual(report.drafts_created, 2)
+        self.assertEqual(report.draft_ids, ("listing-job-1", "listing-job-3"))
         self.assertEqual(report.images_generated, 8)
         self.assertEqual(report.downloads_uploaded, 8)
         self.assertEqual(len(report.failure_summary), 1)
@@ -181,6 +188,7 @@ class BatchFactoryTest(unittest.TestCase):
         self.assertEqual(report.completed, 0)
         self.assertEqual(report.failed, 0)
         self.assertEqual(report.drafts_created, 0)
+        self.assertEqual(report.draft_ids, ())
 
     def test_count_exceeds_queue_size(self) -> None:
         self.add_jobs(2)
@@ -201,6 +209,7 @@ class BatchFactoryTest(unittest.TestCase):
 
         self.assertEqual(latest_batch["requested"], 1)
         self.assertEqual(latest_batch["completed"], 1)
+        self.assertEqual(latest_batch["draft_ids"], ["listing-job-1"])
         self.assertEqual(latest_batch["reports"][0]["job_id"], "job-1")
         self.assertEqual(latest_job["job_id"], "job-1")
         self.assertEqual(report.completed, 1)
@@ -220,6 +229,70 @@ class BatchFactoryTest(unittest.TestCase):
 
         self.assertEqual(args.count, 3)
         self.assertFalse(args.live)
+
+    def test_batch_report_counts_drafts_from_production_reports(self) -> None:
+        reports = tuple(
+            ProductionReport(
+                job_id=f"job-{index}",
+                product=f"Product {index}",
+                style="Storybook Watercolor",
+                draft_id=str(4538300845 + index) if index == 1 else None,
+                images=4,
+                downloads=4,
+                time=60 + index,
+                success=True,
+                metadata={
+                    "etsy_draft": {
+                        "status": "DRAFT_CREATED",
+                        "etsy_listing_id": str(4538300845 + index),
+                    }
+                },
+            )
+            for index in range(1, 4)
+        )
+
+        report = _build_batch_report(
+            requested=3,
+            reports=reports,
+            elapsed_time=0.001,
+        )
+
+        self.assertEqual(report.completed, 3)
+        self.assertEqual(report.failed, 0)
+        self.assertEqual(report.drafts_created, 3)
+        self.assertEqual(
+            report.draft_ids,
+            ("4538300846", "4538300847", "4538300848"),
+        )
+        self.assertEqual(report.images_generated, 12)
+        self.assertEqual(report.downloads_uploaded, 12)
+        self.assertEqual(report.elapsed_time, 186)
+
+    def test_batch_output_prints_draft_ids_and_real_elapsed_time(self) -> None:
+        report = _build_batch_report(
+            requested=3,
+            reports=(
+                ProductionReport(
+                    job_id="job-1",
+                    product="Product 1",
+                    style="Storybook Watercolor",
+                    draft_id="4538300846",
+                    images=4,
+                    downloads=4,
+                    time=63.002,
+                    success=True,
+                ),
+            ),
+            elapsed_time=0.001,
+        )
+
+        with patch("sys.stdout", new_callable=StringIO) as output:
+            print_batch_report(report)
+
+        rendered = output.getvalue()
+        self.assertIn("Drafts Created\n1", rendered)
+        self.assertIn("Draft IDs\n4538300846", rendered)
+        self.assertIn("Elapsed Time\n63.00 seconds", rendered)
 
 
 if __name__ == "__main__":
