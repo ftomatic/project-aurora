@@ -1,0 +1,204 @@
+"""Regression tests for product-specific Etsy SEO tags."""
+
+from __future__ import annotations
+
+import json
+import sys
+import tempfile
+import unittest
+from contextlib import redirect_stdout
+from io import StringIO
+from pathlib import Path
+
+from PIL import Image
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+SRC_PATH = PROJECT_ROOT / "src"
+sys.path.insert(0, str(PROJECT_ROOT))
+sys.path.insert(0, str(SRC_PATH))
+sys.path.insert(0, str(PROJECT_ROOT))
+
+from project_aurora.integrations.etsy.etsy_config import EtsyConfig  # noqa: E402
+from project_aurora.integrations.etsy.etsy_listing_mapper import (  # noqa: E402
+    EtsyListingMapper,
+)
+from project_aurora.listing.listing_package import (  # noqa: E402
+    READY_FOR_ETSY_DRAFT,
+    ListingPackage,
+)
+from project_aurora.planning.production_queue_manager import ProductionJob  # noqa: E402
+from project_aurora.production.product_factory import (  # noqa: E402
+    DefaultProductFactoryStageRunner,
+    ProductFactoryPaths,
+)
+from project_aurora.production.production_report import ProductionReport  # noqa: E402
+from project_aurora.storage.csv_storage import CSVStorage  # noqa: E402
+from project_aurora.storage.memory_manager import MemoryManager  # noqa: E402
+from scripts.audit_etsy_listing_seo import audit_listing_seo  # noqa: E402
+from scripts.fix_existing_etsy_tags import repair_existing_etsy_tags  # noqa: E402
+
+
+PRODUCTS = (
+    ("job-spring", "Spring Bunny Nursery Art", "wall art"),
+    ("job-wildflower", "Wildflower Wedding Invitation", "party printable"),
+    ("job-moody", "Moody Dark Academia Prints", "wall art"),
+)
+
+
+class FakePatchClient:
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, dict[str, object]]] = []
+
+    def update_listing_fields(self, listing_id: str, fields: dict[str, object]) -> dict[str, object]:
+        self.calls.append((listing_id, fields))
+        return {"listing_id": listing_id, **fields}
+
+
+class ProductSpecificSEOTest(unittest.TestCase):
+    def setUp(self) -> None:
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.base_path = Path(self.temp_dir.name)
+        self.memory = MemoryManager(CSVStorage(base_path=self.base_path / "memory"))
+        self.runner = DefaultProductFactoryStageRunner(
+            memory=self.memory,
+            etsy_config=EtsyConfig(mode="mock"),
+            paths=ProductFactoryPaths(jobs_dir=self.base_path / "jobs"),
+        )
+
+    def tearDown(self) -> None:
+        self.temp_dir.cleanup()
+
+    def job(self, job_id: str, product_name: str, category: str) -> ProductionJob:
+        return ProductionJob(
+            id=job_id,
+            priority="High",
+            product_name=product_name,
+            category=category,
+            style="Storybook Watercolor",
+            seasonal_theme="Evergreen",
+            keywords=tuple(product_name.casefold().split()),
+            confidence_score=0.9,
+            estimated_competition="Low",
+            estimated_demand="High",
+            estimated_revenue=120,
+        )
+
+    def write_final_images(self, job: ProductionJob) -> tuple[str, ...]:
+        final_dir = self.runner.job_paths(job).final_images_dir
+        final_dir.mkdir(parents=True, exist_ok=True)
+        paths: list[str] = []
+        for index in range(1, 5):
+            path = final_dir / f"{job.id}_{index:02d}.png"
+            Image.new("RGBA", (3600, 3600), (255, index, 0, 255)).save(
+                path,
+                format="PNG",
+                dpi=(300, 300),
+            )
+            paths.append(str(path))
+        return tuple(paths)
+
+    def test_three_products_receive_distinct_job_specific_tags(self) -> None:
+        packages = []
+        for job_id, product_name, category in PRODUCTS:
+            packages.append(self.runner.generate_seo(self.job(job_id, product_name, category)))
+
+        tag_sets = [package.tags for package in packages]
+
+        self.assertTrue(all(len(tags) == 13 for tags in tag_sets))
+        self.assertEqual(len({tuple(tags) for tags in tag_sets}), 3)
+        for package, (job_id, product_name, _category) in zip(packages, PRODUCTS):
+            self.assertEqual(package.job_id, job_id)
+            self.assertEqual(package.product_name, product_name)
+            seo_path = self.runner.job_paths(
+                self.job(job_id, product_name, _category)
+            ).job_root / "seo" / "seo_package.json"
+            self.assertTrue(seo_path.exists())
+
+    def test_etsy_payload_receives_correct_job_specific_tags(self) -> None:
+        job = self.job(*PRODUCTS[1])
+        files = self.write_final_images(job)
+        package = self.runner.generate_seo(job)
+        listing = ListingPackage(
+            product_name=job.product_name,
+            collection_name=job.product_name,
+            listing_status=READY_FOR_ETSY_DRAFT,
+            seo_package_id=job.id,
+            prompt_package_id=job.id,
+            approved_mockup_files=files,
+            approved_generated_image_files=files,
+            is_digital_download=True,
+            price=1.99,
+        )
+
+        payload = EtsyListingMapper().map_to_draft(
+            listing_package=listing,
+            seo_package=package,
+            config=EtsyConfig(mode="mock"),
+        )
+
+        self.assertEqual(payload.tags, package.tags)
+        self.assertIn("wildflower", payload.tags)
+        self.assertNotIn("spring bunny", payload.tags)
+
+    def test_restart_loads_current_job_seo_not_another_job(self) -> None:
+        first = self.job(*PRODUCTS[0])
+        second = self.job(*PRODUCTS[2])
+        first_package = self.runner.generate_seo(first)
+        second_package = self.runner.generate_seo(second)
+
+        restarted = DefaultProductFactoryStageRunner(
+            memory=self.memory,
+            etsy_config=EtsyConfig(mode="mock"),
+            paths=ProductFactoryPaths(jobs_dir=self.base_path / "jobs"),
+        )
+        loaded = restarted.generate_seo(second)
+
+        self.assertEqual(loaded.tags, second_package.tags)
+        self.assertNotEqual(loaded.tags, first_package.tags)
+
+    def test_mismatched_seo_package_fails_before_etsy_draft(self) -> None:
+        spring = self.job(*PRODUCTS[0])
+        moody = self.job(*PRODUCTS[2])
+        wrong_package = self.runner.generate_seo(spring)
+        self.write_final_images(moody)
+
+        with self.assertRaises(RuntimeError):
+            self.runner.create_etsy_draft(moody, wrong_package)
+
+    def test_audit_and_repair_patch_only_tags(self) -> None:
+        jobs = [self.job(*product) for product in PRODUCTS[:2]]
+        for index, job in enumerate(jobs, start=1):
+            package = self.runner.generate_seo(job)
+            report = ProductionReport(
+                job_id=job.id,
+                product=job.product_name,
+                style=job.style,
+                draft_id=f"listing-{index}",
+                images=4,
+                downloads=4,
+                time=1,
+                success=True,
+                job_paths=self.runner.job_paths(job).to_dict(),
+                metadata={"seo_generation": {"tags": list(package.tags)}},
+            )
+            self.memory.save_record("production_reports", job.id, report.to_dict())
+
+        audit = audit_listing_seo(self.memory)
+        client = FakePatchClient()
+        with redirect_stdout(StringIO()):
+            report = repair_existing_etsy_tags(
+                self.memory,
+                client,  # type: ignore[arg-type]
+                input_fn=lambda _prompt: "FIX TAGS",
+            )
+
+        self.assertEqual(len(audit), 2)
+        self.assertEqual(report["status"], "SUCCESS")
+        self.assertEqual(len(client.calls), 2)
+        for _listing_id, fields in client.calls:
+            self.assertEqual(tuple(fields.keys()), ("tags",))
+            self.assertEqual(len(fields["tags"]), 13)
+
+
+if __name__ == "__main__":
+    unittest.main()

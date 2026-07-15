@@ -20,8 +20,10 @@ class SEOPackage:
     buyer_use_case: str
     product_positioning: str
     seo_score: int
+    job_id: str = ""
     warnings: tuple[str, ...] = field(default_factory=tuple)
     created_at: datetime = field(default_factory=datetime.now)
+    generated_at: datetime | None = None
 
     def __post_init__(self) -> None:
         if not self.product_name.strip():
@@ -36,6 +38,8 @@ class SEOPackage:
         object.__setattr__(self, "tags", tuple(self.tags))
         object.__setattr__(self, "keywords", tuple(self.keywords))
         object.__setattr__(self, "warnings", tuple(self.warnings))
+        if self.generated_at is None:
+            object.__setattr__(self, "generated_at", self.created_at)
 
     @property
     def status(self) -> str:

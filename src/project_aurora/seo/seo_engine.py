@@ -34,6 +34,7 @@ class SEOEngine:
         product_name = self._get_value(product_data, "product_name")
         product_type = self._get_value(product_data, "product_type")
         target_buyer = self._get_value(product_data, "target_buyer")
+        job_id = str(product_data.get("job_id") or "")
         buyer_use_case = self._buyer_use_case(target_buyer)
         product_positioning = self._product_positioning(
             product_name,
@@ -77,6 +78,7 @@ class SEOEngine:
             product_positioning=product_positioning,
             seo_score=score,
             warnings=warnings,
+            job_id=job_id,
         )
 
     def run(

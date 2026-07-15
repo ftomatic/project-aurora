@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from dataclasses import fields, is_dataclass
+from datetime import datetime
+import json
 from pathlib import Path
 import re
 from time import perf_counter
@@ -208,14 +211,34 @@ class DefaultProductFactoryStageRunner:
 
     def generate_seo(self, job: ProductionJob) -> Any:
         """Generate and save SEO package."""
-        return SEOEngine(memory=self._memory).run(
+        job_paths = self.job_paths(job)
+        seo_dir = job_paths.job_root / "seo"
+        seo_path = seo_dir / "seo_package.json"
+        if seo_path.exists():
+            package = _load_job_seo_package(seo_path)
+            _validate_job_seo_package(package, job, previous_tags=_previous_product_tags(self._memory, job.id))
+            if not getattr(self._etsy_config, "is_mock_mode", True):
+                _print_seo_diagnostics(job, package)
+            self._memory.save_seo_package(package, package_id=job.id)
+            return package
+        package = SEOEngine(memory=self._memory).run(
             {
+                "job_id": job.id,
                 "product_name": job.product_name,
                 "product_type": job.category,
                 "target_buyer": "digital printable buyers",
             },
             package_id=job.id,
         )
+        _validate_job_seo_package(package, job, previous_tags=_previous_product_tags(self._memory, job.id))
+        seo_dir.mkdir(parents=True, exist_ok=True)
+        seo_path.write_text(
+            json.dumps(_seo_package_to_record(package), indent=2, sort_keys=True),
+            encoding="utf-8",
+        )
+        if not getattr(self._etsy_config, "is_mock_mode", True):
+            _print_seo_diagnostics(job, package)
+        return package
 
     def create_etsy_draft(self, job: ProductionJob, seo_package: Any) -> Any:
         """Create an Etsy draft through the existing draft service."""
@@ -225,6 +248,11 @@ class DefaultProductFactoryStageRunner:
 
         self._refresh_etsy_config()
         job_paths = self.job_paths(job)
+        _validate_job_seo_package(
+            seo_package,
+            job,
+            previous_tags=_previous_product_tags(self._memory, job.id),
+        )
         final_files = tuple(
             str(path)
             for path in sorted(
@@ -644,6 +672,10 @@ def _summarize_result(result: Any) -> dict[str, Any]:
         "status",
         "provider",
         "etsy_listing_id",
+        "job_id",
+        "product_name",
+        "title",
+        "tags",
         "images_uploaded",
         "files_uploaded",
         "failed",
@@ -711,3 +743,133 @@ def _palette_for_job(job: ProductionJob) -> str:
     if "strawberry" in job.product_name.casefold():
         return "Strawberry Summer"
     return "Strawberry Summer"
+
+
+def _seo_package_to_record(package: Any) -> dict[str, Any]:
+    if is_dataclass(package) and not isinstance(package, type):
+        record: dict[str, Any] = {}
+        for field in fields(package):
+            value = getattr(package, field.name)
+            if isinstance(value, datetime):
+                record[field.name] = value.isoformat()
+            elif isinstance(value, tuple):
+                record[field.name] = list(value)
+            else:
+                record[field.name] = value
+        return record
+    raise TypeError("Expected dataclass SEO package.")
+
+
+def _load_job_seo_package(path: Path) -> Any:
+    from project_aurora.seo.seo_package import SEOPackage
+
+    data = json.loads(path.read_text(encoding="utf-8"))
+    return SEOPackage(
+        job_id=str(data.get("job_id", "")),
+        product_name=str(data["product_name"]),
+        product_type=str(data["product_type"]),
+        target_buyer=str(data["target_buyer"]),
+        title=str(data["title"]),
+        tags=tuple(str(item) for item in data["tags"]),
+        description=str(data["description"]),
+        keywords=tuple(str(item) for item in data["keywords"]),
+        buyer_use_case=str(data["buyer_use_case"]),
+        product_positioning=str(data["product_positioning"]),
+        seo_score=int(data["seo_score"]),
+        warnings=tuple(str(item) for item in data.get("warnings", ())),
+        created_at=datetime.fromisoformat(str(data["created_at"])),
+        generated_at=datetime.fromisoformat(str(data.get("generated_at") or data["created_at"])),
+    )
+
+
+def _validate_job_seo_package(
+    package: Any,
+    job: ProductionJob,
+    previous_tags: tuple[str, ...] = (),
+) -> None:
+    job_id = getattr(package, "job_id", "")
+    product_name = getattr(package, "product_name", "")
+    tags = tuple(str(tag).strip() for tag in getattr(package, "tags", ()))
+    if job_id != job.id:
+        raise RuntimeError("SEO package job_id does not match ProductionJob id.")
+    if product_name != job.product_name:
+        raise RuntimeError("SEO package product_name does not match ProductionJob.")
+    if len(tags) != 13:
+        raise RuntimeError("SEO package must include exactly 13 tags.")
+    if any(not tag for tag in tags):
+        raise RuntimeError("SEO package contains empty tags.")
+    if len(set(tag.casefold() for tag in tags)) != len(tags):
+        raise RuntimeError("SEO package contains duplicate tags.")
+    if previous_tags and tuple(tag.casefold() for tag in tags) == tuple(
+        tag.casefold() for tag in previous_tags
+    ):
+        raise RuntimeError("SEO tags are identical to the immediately previous product.")
+    relevant_tokens = {
+        token
+        for token in re.split(r"[^a-z0-9]+", f"{job.product_name} {job.category}".casefold())
+        if len(token) > 2
+    }
+    irrelevant = [
+        tag
+        for tag in tags
+        if not (set(tag.casefold().split()) & relevant_tokens)
+        and tag.casefold() not in _GENERIC_RELEVANT_TAGS
+    ]
+    if len(irrelevant) > 5:
+        raise RuntimeError(
+            "SEO package tags are not relevant to the current product: "
+            + ", ".join(irrelevant)
+        )
+
+
+_GENERIC_RELEVANT_TAGS = {
+    "etsy download",
+    "instant download",
+    "digital download",
+    "commercial use",
+    "craft supply",
+    "craft download",
+    "png clipart",
+    "digital clipart",
+    "clipart bundle",
+    "printable graphics",
+    "wall art",
+    "printable art",
+    "digital print",
+    "home decor",
+    "party printable",
+    "printable bundle",
+    "party decor",
+    "party download",
+    "digital paper",
+    "scrapbook paper",
+    "sticker sheet",
+    "planner stickers",
+}
+
+
+def _previous_product_tags(memory: MemoryManager, current_job_id: str) -> tuple[str, ...]:
+    try:
+        latest = memory.load_record(REPORT_COLLECTION, "latest")
+    except FileNotFoundError:
+        return ()
+    if latest.get("job_id") == current_job_id:
+        return ()
+    metadata = latest.get("metadata")
+    if not isinstance(metadata, dict):
+        return ()
+    seo = metadata.get("seo_generation")
+    if isinstance(seo, dict):
+        tags = seo.get("tags")
+        if isinstance(tags, list):
+            return tuple(str(tag) for tag in tags)
+    return ()
+
+
+def _print_seo_diagnostics(job: ProductionJob, package: Any) -> None:
+    print("SEO JOB")
+    print(job.product_name)
+    print("")
+    print("SEO TAGS")
+    for tag in getattr(package, "tags", ()):
+        print(tag)
