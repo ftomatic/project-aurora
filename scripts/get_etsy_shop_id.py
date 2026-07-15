@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import os
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -29,27 +28,19 @@ class EtsyShop:
 
 def load_credentials() -> EtsyConfig:
     """Load Etsy credentials from environment variables."""
-    client_id = os.getenv("ETSY_CLIENT_ID")
-    shared_secret = os.getenv("ETSY_SHARED_SECRET")
-    access_token = os.getenv("ETSY_ACCESS_TOKEN")
+    config = EtsyConfig.from_environment()
     missing = []
-    if not client_id:
+    if not config.client_id:
         missing.append("ETSY_CLIENT_ID")
-    if not shared_secret:
+    if not config.shared_secret:
         missing.append("ETSY_SHARED_SECRET")
-    if not access_token:
+    if not config.access_token:
         missing.append("ETSY_ACCESS_TOKEN")
     if missing:
         raise RuntimeError(
             "Missing required environment variables: " + ", ".join(missing)
         )
-    return EtsyConfig(
-        mode="live",
-        client_id=str(client_id),
-        shared_secret=str(shared_secret),
-        access_token=str(access_token),
-        api_base_url=API_BASE_URL,
-    )
+    return config
 
 
 def get_authenticated_shop(

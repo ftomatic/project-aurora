@@ -90,7 +90,10 @@ def main(argv: list[str] | None = None) -> None:
         memory = MemoryManager(
             storage=CSVStorage(base_path=PROJECT_ROOT / "data" / "aurora")
         )
-        etsy_config = EtsyConfig.from_file(PROJECT_ROOT / "config" / "etsy.yaml")
+        etsy_config = EtsyConfig.from_environment(
+            PROJECT_ROOT / "config" / "etsy.yaml"
+        )
+        print_etsy_config_diagnostics(etsy_config)
         report = ProductFactory(
             queue_manager=queue_manager,
             memory=memory,
@@ -136,6 +139,23 @@ def main(argv: list[str] | None = None) -> None:
         for error in report.errors:
             print(error)
         raise SystemExit(1)
+
+
+def print_etsy_config_diagnostics(config: EtsyConfig) -> None:
+    """Print safe Etsy credential diagnostics without exposing secrets."""
+    diagnostics = config.credential_diagnostics()
+    print("ETSY CONFIG DIAGNOSTICS")
+    print("Client ID Present")
+    print("yes" if diagnostics["client_id_present"] else "no")
+    print("Shared Secret Present")
+    print("yes" if diagnostics["shared_secret_present"] else "no")
+    print("Access Token Present")
+    print("yes" if diagnostics["access_token_present"] else "no")
+    print("Shop ID Present")
+    print("yes" if diagnostics["shop_id_present"] else "no")
+    print("x-api-key Colon Count")
+    print(diagnostics["x_api_key_colon_count"])
+    print("")
 
 
 if __name__ == "__main__":

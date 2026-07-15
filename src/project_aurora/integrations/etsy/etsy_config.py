@@ -66,6 +66,46 @@ class EtsyConfig:
             ),
         )
 
+    @classmethod
+    def from_environment(cls, config_path: Path | None = None) -> "EtsyConfig":
+        """Load live Etsy credentials from environment with optional YAML defaults."""
+        base_config = cls.from_file(config_path) if config_path is not None else cls()
+        return cls(
+            mode=os.getenv("AURORA_ETSY_MODE", "live"),
+            shop_id=os.getenv("ETSY_SHOP_ID") or base_config.shop_id,
+            client_id=os.getenv("ETSY_CLIENT_ID") or base_config.client_id,
+            shared_secret=os.getenv("ETSY_SHARED_SECRET")
+            or base_config.shared_secret,
+            access_token=os.getenv("ETSY_ACCESS_TOKEN")
+            or base_config.access_token,
+            api_base_url=base_config.api_base_url,
+            default_price=base_config.default_price,
+            default_quantity=base_config.default_quantity,
+            taxonomy_id=_optional_int(os.getenv("ETSY_TAXONOMY_ID"))
+            or base_config.taxonomy_id,
+            processing_profile_id=_optional_int(
+                os.getenv("ETSY_PROCESSING_PROFILE_ID")
+            )
+            or base_config.processing_profile_id,
+            shipping_profile_id=_optional_int(os.getenv("ETSY_SHIPPING_PROFILE_ID"))
+            or base_config.shipping_profile_id,
+        )
+
+    def credential_diagnostics(self) -> dict[str, object]:
+        """Return credential presence and header-shape diagnostics without secrets."""
+        x_api_key = (
+            f"{self.client_id}:{self.shared_secret}"
+            if self.client_id and self.shared_secret
+            else ""
+        )
+        return {
+            "client_id_present": bool(self.client_id),
+            "shared_secret_present": bool(self.shared_secret),
+            "access_token_present": bool(self.access_token),
+            "shop_id_present": bool(self.shop_id),
+            "x_api_key_colon_count": x_api_key.count(":"),
+        }
+
     @property
     def is_mock_mode(self) -> bool:
         """Return whether Etsy API calls should be skipped."""

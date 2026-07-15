@@ -6,7 +6,8 @@ import sys
 import tempfile
 import unittest
 import base64
-from io import BytesIO
+import json
+from io import BytesIO, StringIO
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -40,9 +41,14 @@ from project_aurora.production.production_report import (  # noqa: E402
 from project_aurora.image_generation.openai_provider import (  # noqa: E402
     OpenAIImageProvider,
 )
+from project_aurora.integrations.etsy.etsy_client import EtsyClient  # noqa: E402
+from project_aurora.integrations.etsy.etsy_config import EtsyConfig  # noqa: E402
 from project_aurora.storage.csv_storage import CSVStorage  # noqa: E402
 from project_aurora.storage.memory_manager import MemoryManager  # noqa: E402
-from scripts.run_product_factory import parse_args  # noqa: E402
+from scripts.run_product_factory import (  # noqa: E402
+    parse_args,
+    print_etsy_config_diagnostics,
+)
 
 
 def make_job(job_id: str = "job-1") -> ProductionJob:
@@ -91,6 +97,20 @@ class FakeOpenAIImagesClient:
 class FakeOpenAIClient:
     def __init__(self) -> None:
         self.images = FakeOpenAIImagesClient()
+
+
+class FakeEtsyResponse:
+    def __init__(self, payload: dict[str, object]) -> None:
+        self._payload = payload
+
+    def __enter__(self) -> "FakeEtsyResponse":
+        return self
+
+    def __exit__(self, *args: object) -> None:
+        return None
+
+    def read(self) -> bytes:
+        return json.dumps(self._payload).encode("utf-8")
 
 
 class FakeStageRunner:
@@ -410,6 +430,74 @@ class ProductFactoryTest(unittest.TestCase):
         self.assertEqual(fake_client.images.calls[0]["quality"], "medium")
         self.assertEqual(fake_client.images.calls[0]["size"], "1024x1024")
         self.assertEqual(fake_client.images.calls[0]["n"], 4)
+
+    def test_product_factory_live_config_builds_etsy_colon_api_key(self) -> None:
+        config_path = self.base_path / "etsy.yaml"
+        config_path.write_text(
+            "\n".join(
+                (
+                    "mode: mock",
+                    "api_base_url: https://example.test/v3/application",
+                    "taxonomy_id: 123",
+                )
+            ),
+            encoding="utf-8",
+        )
+        captured: dict[str, object] = {}
+
+        def fake_urlopen(api_request: object, timeout: int) -> FakeEtsyResponse:
+            captured["headers"] = dict(api_request.headers)
+            captured["timeout"] = timeout
+            return FakeEtsyResponse({"ok": True})
+
+        with patch.dict(
+            "os.environ",
+            {
+                "ETSY_CLIENT_ID": "test-client",
+                "ETSY_SHARED_SECRET": "test-secret",
+                "ETSY_ACCESS_TOKEN": "test-token",
+                "ETSY_SHOP_ID": "987654",
+            },
+            clear=True,
+        ):
+            config = EtsyConfig.from_environment(config_path)
+            runner = DefaultProductFactoryStageRunner(
+                memory=self.memory,
+                etsy_config=config,
+                paths=ProductFactoryPaths(jobs_dir=self.base_path / "jobs"),
+            )
+            EtsyClient(config=runner._etsy_config, urlopen=fake_urlopen).get_json(
+                "/users/me"
+            )
+
+        headers = captured["headers"]
+        self.assertEqual(headers["X-api-key"], "test-client:test-secret")
+        self.assertEqual(headers["Authorization"], "Bearer test-token")
+        self.assertEqual(runner._etsy_config.shop_id, "987654")
+        self.assertEqual(runner._etsy_config.taxonomy_id, 123)
+        self.assertFalse(runner._etsy_config.is_mock_mode)
+
+    def test_etsy_diagnostics_do_not_print_secret_values(self) -> None:
+        config = EtsyConfig(
+            mode="live",
+            shop_id="987654",
+            client_id="test-client",
+            shared_secret="test-secret",
+            access_token="test-token",
+        )
+        with patch("sys.stdout", new_callable=StringIO) as output:
+            print_etsy_config_diagnostics(config)
+
+        rendered = output.getvalue()
+        self.assertIn("Client ID Present\nyes", rendered)
+        self.assertIn("Shared Secret Present\nyes", rendered)
+        self.assertIn("Access Token Present\nyes", rendered)
+        self.assertIn("Shop ID Present\nyes", rendered)
+        self.assertIn("x-api-key Colon Count\n1", rendered)
+        self.assertNotIn("test-client", rendered)
+        self.assertNotIn("test-secret", rendered)
+        self.assertNotIn("test-token", rendered)
+        self.assertNotIn("987654", rendered)
 
     def test_old_shared_images_do_not_affect_new_job_generation(self) -> None:
         fake_client = FakeOpenAIClient()
