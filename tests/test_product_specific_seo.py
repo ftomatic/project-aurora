@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -32,9 +33,9 @@ from project_aurora.production.product_factory import (  # noqa: E402
     ProductFactoryPaths,
 )
 from project_aurora.production.production_report import ProductionReport  # noqa: E402
+from project_aurora.seo.seo_audit import audit_listing_seo  # noqa: E402
 from project_aurora.storage.csv_storage import CSVStorage  # noqa: E402
 from project_aurora.storage.memory_manager import MemoryManager  # noqa: E402
-from scripts.audit_etsy_listing_seo import audit_listing_seo  # noqa: E402
 from scripts.fix_existing_etsy_tags import repair_existing_etsy_tags  # noqa: E402
 
 
@@ -198,6 +199,26 @@ class ProductSpecificSEOTest(unittest.TestCase):
         for _listing_id, fields in client.calls:
             self.assertEqual(tuple(fields.keys()), ("tags",))
             self.assertEqual(len(fields["tags"]), 13)
+
+    def test_cli_scripts_do_not_require_scripts_package_imports(self) -> None:
+        audit = subprocess.run(
+            [sys.executable, "scripts/audit_etsy_listing_seo.py"],
+            cwd=PROJECT_ROOT,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        repair_help = subprocess.run(
+            [sys.executable, "scripts/fix_existing_etsy_tags.py", "--help"],
+            cwd=PROJECT_ROOT,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
+        self.assertEqual(audit.returncode, 0, audit.stderr)
+        self.assertEqual(repair_help.returncode, 0, repair_help.stderr)
+        self.assertNotIn("ModuleNotFoundError", audit.stderr + repair_help.stderr)
 
 
 if __name__ == "__main__":

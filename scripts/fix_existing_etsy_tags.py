@@ -13,9 +13,9 @@ sys.path.insert(0, str(SRC_PATH))
 
 from project_aurora.integrations.etsy.etsy_client import EtsyClient  # noqa: E402
 from project_aurora.integrations.etsy.etsy_config import EtsyConfig  # noqa: E402
+from project_aurora.seo.seo_audit import audit_listing_seo  # noqa: E402
 from project_aurora.storage.csv_storage import CSVStorage  # noqa: E402
 from project_aurora.storage.memory_manager import MemoryManager  # noqa: E402
-from scripts.audit_etsy_listing_seo import audit_listing_seo  # noqa: E402
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
