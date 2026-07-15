@@ -26,16 +26,23 @@ from project_aurora.integrations.etsy.etsy_digital_file_service import (  # noqa
 from project_aurora.integrations.etsy.etsy_result import (  # noqa: E402
     EtsyImageUploadAttempt,
 )
+from project_aurora.image_generation.provider_registry import ImageProviderConfig  # noqa: E402
 from project_aurora.planning.production_queue_manager import (  # noqa: E402
+    ProductionJob,
     ProductionQueueManager,
 )
-from project_aurora.production.product_factory import REPORT_COLLECTION  # noqa: E402
+from project_aurora.production.product_factory import (  # noqa: E402
+    REPORT_COLLECTION,
+    DefaultProductFactoryStageRunner,
+    ProductFactory,
+)
 from project_aurora.production.production_report import ProductionReport  # noqa: E402
 from project_aurora.storage.csv_storage import CSVStorage  # noqa: E402
 from project_aurora.storage.memory_manager import MemoryManager  # noqa: E402
 
 
 QUEUE_PATH = PROJECT_ROOT / "data" / "aurora" / "production_queue" / "queue.json"
+OPENAI_CONFIG_PATH = PROJECT_ROOT / "config" / "openai.yaml"
 
 
 @dataclass(frozen=True, slots=True)
@@ -69,17 +76,36 @@ class ProductFactoryResumeService:
         self._client = client or EtsyClient(config)
 
     def resume(self, job_id: str) -> ResumeResult:
-        """Resume a failed listing-image upload for one job."""
+        """Resume a failed Product Factory job from its failed stage."""
         report_data = self._memory.load_record(REPORT_COLLECTION, job_id)
         listing_id = _existing_draft_id(report_data)
         failed_stage = str(report_data.get("failed_stage") or "")
-        if failed_stage != "listing_image_upload":
-            raise RuntimeError(
-                "Resume only supports jobs failed at listing_image_upload."
-            )
-        if not listing_id:
+        supported = {
+            "image_generation",
+            "image_qa",
+            "commercial_export",
+            "seo_generation",
+            "etsy_draft",
+            "listing_image_upload",
+            "customer_download_upload",
+        }
+        if failed_stage not in supported:
+            raise RuntimeError(f"Unsupported failed stage for resume: {failed_stage}.")
+        if failed_stage in {"listing_image_upload", "customer_download_upload"} and not listing_id:
             raise RuntimeError("Existing Etsy draft ID is required for resume.")
+        if failed_stage == "customer_download_upload":
+            return self._resume_customer_downloads(job_id, report_data, str(listing_id))
+        if failed_stage != "listing_image_upload":
+            return self._resume_with_product_factory(job_id, report_data, failed_stage, listing_id)
+        return self._resume_listing_images(job_id, report_data, str(listing_id), failed_stage)
 
+    def _resume_listing_images(
+        self,
+        job_id: str,
+        report_data: dict[str, Any],
+        listing_id: str,
+        failed_stage: str,
+    ) -> ResumeResult:
         final_images_dir = _final_images_dir_from_report(report_data)
         final_files = _valid_final_image_files(final_images_dir)
         existing_images = self._client.list_listing_images(listing_id)
@@ -181,6 +207,82 @@ class ProductFactoryResumeService:
             errors=updated_report.errors,
         )
 
+    def _resume_customer_downloads(
+        self,
+        job_id: str,
+        report_data: dict[str, Any],
+        listing_id: str,
+    ) -> ResumeResult:
+        final_images_dir = _final_images_dir_from_report(report_data)
+        _valid_final_image_files(final_images_dir)
+        digital_result = EtsyDigitalFileService(
+            config=self._config,
+            memory=self._memory,
+            client=self._client,
+        ).sync_digital_files(
+            listing_id=listing_id,
+            final_images_dir=final_images_dir,
+        )
+        digital_total = _digital_total_present(digital_result)
+        success = digital_result.status == "SUCCESS" and digital_total == 4
+        updated_report = _updated_report(
+            report_data=report_data,
+            success=success,
+            failed_stage=None if success else "customer_download_upload",
+            images=int(report_data.get("images") or COMMERCIAL_IMAGE_COUNT),
+            downloads=digital_total,
+            metadata_update={"customer_download_upload": digital_result},
+            errors=tuple(digital_result.errors) if not success else (),
+        )
+        self._save_report(updated_report)
+        if success:
+            self._queue_manager.mark_completed(job_id)
+        else:
+            self._queue_manager.mark_failed(job_id)
+        return ResumeResult(
+            job_id=job_id,
+            etsy_listing_id=listing_id,
+            resumed_from_stage="customer_download_upload",
+            images_already_present=int(report_data.get("images") or 0),
+            images_uploaded_now=0,
+            downloads_uploaded=int(digital_result.files_uploaded),
+            final_status="COMPLETED" if success else "FAILED",
+            errors=updated_report.errors,
+        )
+
+    def _resume_with_product_factory(
+        self,
+        job_id: str,
+        report_data: dict[str, Any],
+        failed_stage: str,
+        listing_id: str | None,
+    ) -> ResumeResult:
+        job = _job_by_id(self._queue_manager, job_id)
+        runner = StageAwareResumeRunner(
+            memory=self._memory,
+            etsy_config=self._config,
+            client=self._client,
+            existing_draft_id=listing_id,
+            image_config=ImageProviderConfig.from_file(OPENAI_CONFIG_PATH),
+        )
+        report = ProductFactory(
+            queue_manager=self._queue_manager,
+            memory=self._memory,
+            stage_runner=runner,
+            dry_run=False,
+            save_report=True,
+        ).execute(job)
+        return ResumeResult(
+            job_id=job_id,
+            etsy_listing_id=report.draft_id or listing_id or "",
+            resumed_from_stage=failed_stage,
+            images_already_present=4 if _image_reused(report) else 0,
+            images_uploaded_now=_images_uploaded_now(report),
+            downloads_uploaded=report.downloads,
+            final_status="COMPLETED" if report.success else "FAILED",
+            errors=report.errors,
+        )
+
     def _upload_one(
         self,
         listing_id: str,
@@ -212,6 +314,86 @@ class ProductFactoryResumeService:
     def _save_report(self, report: ProductionReport) -> None:
         self._memory.save_record(REPORT_COLLECTION, "latest", report.to_dict())
         self._memory.save_record(REPORT_COLLECTION, report.job_id, report.to_dict())
+
+
+class StageAwareResumeRunner(DefaultProductFactoryStageRunner):
+    """Factory runner that preserves existing Etsy drafts and idempotent uploads."""
+
+    def __init__(
+        self,
+        memory: MemoryManager,
+        etsy_config: EtsyConfig,
+        client: EtsyClient,
+        existing_draft_id: str | None,
+        image_config: ImageProviderConfig,
+    ) -> None:
+        super().__init__(
+            memory=memory,
+            etsy_config=etsy_config,
+            image_config=image_config,
+        )
+        self._resume_client = client
+        self._existing_draft_id = existing_draft_id
+
+    def create_etsy_draft(self, job: ProductionJob, seo_package: Any) -> Any:
+        if self._existing_draft_id:
+            return type(
+                "DraftReuse",
+                (),
+                {
+                    "status": "DRAFT_CREATED",
+                    "etsy_listing_id": self._existing_draft_id,
+                    "warnings": ("Reused existing Etsy draft during resume.",),
+                    "errors": (),
+                },
+            )()
+        return super().create_etsy_draft(job, seo_package)
+
+    def upload_listing_images(self, job: ProductionJob) -> Any:
+        listing_id = self._existing_draft_id or _latest_draft_id(self._memory)
+        if not listing_id:
+            raise RuntimeError("Existing Etsy draft ID is required for image sync.")
+        final_files = _valid_final_image_files(self.job_paths(job).final_images_dir)
+        existing = self._resume_client.list_listing_images(listing_id)
+        existing_by_rank = _existing_listing_images_by_rank(existing)
+        attempts: list[EtsyImageUploadAttempt] = []
+        for rank, image_path in enumerate(final_files, start=1):
+            if _image_already_present(existing_by_rank.get(rank), image_path, rank):
+                continue
+            response = self._resume_client.upload_listing_image(listing_id, image_path, rank)
+            image_id = response.get("listing_image_id") or response.get("image_id")
+            attempts.append(
+                EtsyImageUploadAttempt(
+                    image_path=str(image_path),
+                    rank=rank,
+                    status="SUCCESS",
+                    etsy_image_id=str(image_id) if image_id is not None else None,
+                    metadata={"response": response},
+                )
+            )
+        return type(
+            "ImageSync",
+            (),
+            {
+                "status": "SUCCESS",
+                "etsy_listing_id": listing_id,
+                "images_uploaded": len(attempts),
+                "failed": 0,
+                "warnings": (),
+                "errors": (),
+            },
+        )()
+
+    def upload_customer_downloads(self, job: ProductionJob, listing_id: str | None) -> Any:
+        resolved_listing_id = listing_id or self._existing_draft_id or _latest_draft_id(self._memory)
+        return EtsyDigitalFileService(
+            config=self._etsy_config,
+            memory=self._memory,
+            client=self._resume_client,
+        ).sync_digital_files(
+            listing_id=resolved_listing_id,
+            final_images_dir=self.job_paths(job).final_images_dir,
+        )
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -441,6 +623,43 @@ def _attempt_to_dict(attempt: EtsyImageUploadAttempt) -> dict[str, Any]:
         "warnings": list(attempt.warnings),
         "metadata": attempt.metadata,
     }
+
+
+def _job_by_id(queue_manager: ProductionQueueManager, job_id: str) -> ProductionJob:
+    for job in queue_manager.list_jobs():
+        if job.id == job_id:
+            return job
+    raise RuntimeError(f"Production job not found: {job_id}.")
+
+
+def _latest_draft_id(memory: MemoryManager) -> str | None:
+    try:
+        draft = memory.load_etsy_draft_result()
+    except FileNotFoundError:
+        return None
+    value = draft.get("etsy_listing_id")
+    if isinstance(value, str) and value.strip():
+        return value.strip()
+    return None
+
+
+def _image_reused(report: ProductionReport) -> bool:
+    image_generation = report.metadata.get("image_generation")
+    if not isinstance(image_generation, dict):
+        return False
+    warnings = image_generation.get("warnings", ())
+    return isinstance(warnings, list | tuple) and any(
+        "reused existing" in str(warning).casefold() for warning in warnings
+    )
+
+
+def _images_uploaded_now(report: ProductionReport) -> int:
+    listing_upload = report.metadata.get("listing_image_upload")
+    if isinstance(listing_upload, dict):
+        value = listing_upload.get("images_uploaded") or listing_upload.get("images_uploaded_now")
+        if isinstance(value, int):
+            return value
+    return 0
 
 
 if __name__ == "__main__":

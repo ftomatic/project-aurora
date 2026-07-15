@@ -13,6 +13,7 @@ from project_aurora.image_generation.image_quality import (
 )
 from project_aurora.image_generation.mock_provider import MockImageProvider
 from project_aurora.image_generation.openai_provider import OpenAIImageProvider
+from project_aurora.image_generation.rate_limit import OpenAIRateLimitConfig
 
 
 @dataclass(frozen=True, slots=True)
@@ -27,6 +28,8 @@ class ImageProviderConfig:
     output_format: str = "png"
     number_of_images: int = 4
     prompt_version: str = "v1"
+    rate_limit_max_retries: int = 3
+    rate_limit_safety_seconds: float = 3.0
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "quality", validate_image_quality(self.quality))
@@ -51,6 +54,15 @@ class ImageProviderConfig:
             output_format=values.get("output_format", "png"),
             number_of_images=int(values.get("number_of_images", "8")),
             prompt_version=values.get("prompt_version", "v1"),
+            rate_limit_max_retries=int(values.get("rate_limit_max_retries", "3")),
+            rate_limit_safety_seconds=float(values.get("rate_limit_safety_seconds", "3")),
+        )
+
+    def openai_rate_limit_config(self) -> OpenAIRateLimitConfig:
+        """Return OpenAI provider retry configuration."""
+        return OpenAIRateLimitConfig(
+            max_retries=self.rate_limit_max_retries,
+            safety_seconds=self.rate_limit_safety_seconds,
         )
 
 
@@ -90,6 +102,7 @@ class ProviderRegistry:
                     output_dir=output_dir,
                     model=resolved_config.model,
                     client=openai_client,
+                    rate_limit_config=resolved_config.openai_rate_limit_config(),
                 ),
             )
         )

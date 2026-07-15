@@ -28,7 +28,9 @@ from project_aurora.storage.csv_storage import CSVStorage  # noqa: E402
 from project_aurora.storage.memory_manager import MemoryManager  # noqa: E402
 from scripts.run_batch_factory import (  # noqa: E402
     BatchProductionFactory,
+    BatchRuntimeConfig,
     _build_batch_report,
+    load_batch_runtime_config,
     parse_args,
     print_batch_report,
 )
@@ -391,6 +393,78 @@ class BatchFactoryTest(unittest.TestCase):
         self.assertEqual(report.completed, 0)
         self.assertEqual(report.failed, 1)
         self.assertEqual(report.failure_summary[0]["failed_stage"], "image_generation")
+
+    def test_sequential_four_image_jobs_obey_delay(self) -> None:
+        self.add_jobs(2)
+        sleeps: list[float] = []
+        returned_reports = [
+            ProductionReport(
+                job_id="job-1",
+                product="Product 1",
+                style="Storybook Watercolor",
+                draft_id="1",
+                images=4,
+                downloads=4,
+                time=1.0,
+                success=True,
+                metadata={"image_generation": {"status": "SUCCESS", "warnings": []}},
+            ),
+            ProductionReport(
+                job_id="job-2",
+                product="Product 2",
+                style="Storybook Watercolor",
+                draft_id="2",
+                images=4,
+                downloads=4,
+                time=1.0,
+                success=True,
+                metadata={"image_generation": {"status": "SUCCESS", "warnings": []}},
+            ),
+        ]
+
+        class FakeProductFactory:
+            def __init__(self, **kwargs: object) -> None:
+                self._queue_manager = kwargs["queue_manager"]
+
+            def execute(self, job: ProductionJob) -> ProductionReport:
+                self._queue_manager.mark_completed(job.id)
+                return returned_reports.pop(0)
+
+        with patch("scripts.run_batch_factory.ProductFactory", FakeProductFactory):
+            with patch("sys.stdout", new_callable=StringIO):
+                BatchProductionFactory(
+                    queue_manager=self.queue,
+                    memory=self.memory,
+                    stage_runner_factory=lambda _job: FakeBatchStageRunner(),
+                    image_delay_seconds=15,
+                    sleeper=sleeps.append,
+                ).run(2)
+
+        self.assertEqual(sleeps, [15])
+
+    def test_batch_runtime_config_loads_openai_delay(self) -> None:
+        path = self.base_path / "daily_factory.yaml"
+        path.write_text(
+            "\n".join(
+                (
+                    "openai_image_delay_seconds: 12",
+                    "openai_rate_limit_max_retries: 4",
+                    "openai_rate_limit_safety_seconds: 5",
+                )
+            ),
+            encoding="utf-8",
+        )
+
+        config = load_batch_runtime_config(path)
+
+        self.assertEqual(
+            config,
+            BatchRuntimeConfig(
+                openai_image_delay_seconds=12,
+                openai_rate_limit_max_retries=4,
+                openai_rate_limit_safety_seconds=5,
+            ),
+        )
 
 
 if __name__ == "__main__":

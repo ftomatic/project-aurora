@@ -173,6 +173,35 @@ class ResumeProductFactoryJobTest(unittest.TestCase):
         )
         self.memory.save_record(REPORT_COLLECTION, JOB_ID, report.to_dict())
 
+    def save_failed_report_for_stage(self, stage: str, draft_id: str | None = LISTING_ID) -> None:
+        report = ProductionReport(
+            job_id=JOB_ID,
+            product="Woodland Baby Animals",
+            style="Woodland Friends",
+            draft_id=draft_id,
+            images=4 if stage != "image_generation" else 0,
+            downloads=0,
+            time=20.748,
+            success=False,
+            failed_stage=stage,
+            errors=(f"{stage} failed.",),
+            job_paths={
+                "job_root": str(self.final_dir.parent),
+                "generated_images_dir": str(self.final_dir.parent / "generated_images"),
+                "final_product_images_dir": str(self.final_dir),
+                "digital_downloads_dir": str(self.final_dir.parent / "digital_downloads"),
+            },
+            metadata={
+                "etsy_draft": {
+                    "status": "DRAFT_CREATED",
+                    "etsy_listing_id": draft_id,
+                }
+                if draft_id
+                else {}
+            },
+        )
+        self.memory.save_record(REPORT_COLLECTION, JOB_ID, report.to_dict())
+
     def service(self, client: FakeResumeEtsyClient) -> ProductFactoryResumeService:
         return ProductFactoryResumeService(
             memory=self.memory,
@@ -281,6 +310,73 @@ class ResumeProductFactoryJobTest(unittest.TestCase):
         self.assertIn("Recovery Summary", rendered)
         self.assertIn("HTTP 404", rendered)
         self.assertNotIn("Traceback", rendered)
+
+    def test_resume_supports_all_factory_failed_stages(self) -> None:
+        stages = (
+            "image_generation",
+            "image_qa",
+            "commercial_export",
+            "seo_generation",
+            "etsy_draft",
+        )
+
+        class FakeProductFactory:
+            def __init__(self, **kwargs: object) -> None:
+                self._queue_manager = kwargs["queue_manager"]
+                self._memory = kwargs["memory"]
+
+            def execute(self, job: ProductionJob) -> ProductionReport:
+                self._queue_manager.mark_completed(job.id)
+                report = ProductionReport(
+                    job_id=job.id,
+                    product=job.product_name,
+                    style=job.style,
+                    draft_id=LISTING_ID,
+                    images=4,
+                    downloads=4,
+                    time=1,
+                    success=True,
+                    metadata={
+                        "image_generation": {
+                            "status": "SUCCESS",
+                            "warnings": ("Reused existing valid job generated images.",),
+                        },
+                        "listing_image_upload": {"images_uploaded": 0},
+                    },
+                )
+                self._memory.save_record(REPORT_COLLECTION, job.id, report.to_dict())
+                return report
+
+        for stage in stages:
+            with self.subTest(stage=stage):
+                self.queue.mark_failed(JOB_ID)
+                self.save_failed_report_for_stage(
+                    stage,
+                    draft_id=None if stage == "etsy_draft" else LISTING_ID,
+                )
+                with patch("scripts.resume_product_factory_job.ProductFactory", FakeProductFactory):
+                    result = self.service(FakeResumeEtsyClient(existing_images=())).resume(JOB_ID)
+
+                self.assertEqual(result.resumed_from_stage, stage)
+                self.assertEqual(result.final_status, "COMPLETED")
+                self.assertEqual(result.etsy_listing_id, LISTING_ID)
+
+    def test_resume_customer_download_upload_syncs_only_missing_files(self) -> None:
+        self.save_failed_report_for_stage("customer_download_upload", draft_id=LISTING_ID)
+        client = FakeResumeEtsyClient(
+            existing_images=(),
+            existing_files=(
+                {"rank": 1, "filename": "strawberry_birthday_party_printable_01.png"},
+                {"rank": 2, "filename": "strawberry_birthday_party_printable_02.png"},
+            ),
+        )
+
+        result = self.service(client).resume(JOB_ID)
+
+        self.assertEqual(result.resumed_from_stage, "customer_download_upload")
+        self.assertEqual(result.final_status, "COMPLETED")
+        self.assertEqual(len(client.uploaded_files), 2)
+        self.assertEqual([item[2] for item in client.uploaded_files], [3, 4])
 
 
 if __name__ == "__main__":

@@ -10,6 +10,7 @@ from types import SimpleNamespace
 from typing import Any, Protocol
 
 from project_aurora.integrations.etsy.etsy_config import EtsyConfig
+from project_aurora.integrations.etsy.etsy_token_manager import EtsyTokenManager
 from project_aurora.listing.listing_package import (
     READY_FOR_ETSY_DRAFT,
     ListingPackage,
@@ -28,6 +29,8 @@ REPORT_COLLECTION = "production_reports"
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 DEFAULT_OPENAI_CONFIG_PATH = PROJECT_ROOT / "config" / "openai.yaml"
 DEFAULT_JOBS_DIR = PROJECT_ROOT / "data" / "aurora" / "jobs"
+DEFAULT_LOCAL_CREDENTIAL_PATH = PROJECT_ROOT / "config" / "aurora.local.env"
+DEFAULT_ETSY_CONFIG_PATH = PROJECT_ROOT / "config" / "etsy.yaml"
 
 
 class ProductFactoryStageRunner(Protocol):
@@ -220,6 +223,7 @@ class DefaultProductFactoryStageRunner:
             EtsyDraftService,
         )
 
+        self._refresh_etsy_config()
         job_paths = self.job_paths(job)
         final_files = tuple(
             str(path)
@@ -253,6 +257,7 @@ class DefaultProductFactoryStageRunner:
             EtsyImageUploadService,
         )
 
+        self._refresh_etsy_config()
         return EtsyImageUploadService(
             config=self._etsy_config,
             memory=self._memory,
@@ -265,6 +270,7 @@ class DefaultProductFactoryStageRunner:
             EtsyDigitalFileService,
         )
 
+        self._refresh_etsy_config()
         return EtsyDigitalFileService(
             config=self._etsy_config,
             memory=self._memory,
@@ -272,6 +278,14 @@ class DefaultProductFactoryStageRunner:
             listing_id=listing_id,
             final_images_dir=self.job_paths(job).final_images_dir,
         )
+
+    def _refresh_etsy_config(self) -> None:
+        is_mock_mode = getattr(self._etsy_config, "is_mock_mode", True)
+        if is_mock_mode:
+            return
+        result = EtsyTokenManager(DEFAULT_LOCAL_CREDENTIAL_PATH).refresh_if_needed()
+        if result.refreshed:
+            self._etsy_config = EtsyConfig.from_environment(DEFAULT_ETSY_CONFIG_PATH)
 
     def _prepare_generated_images_dir(self, job_paths: ProductFactoryJobPaths) -> None:
         job_paths.generated_images_dir.mkdir(parents=True, exist_ok=True)

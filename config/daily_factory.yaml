@@ -8,3 +8,6 @@ require_live_confirmation_for_manual_runs: true
 schedule_hour: 8
 schedule_minute: 0
 timezone: America/New_York
+openai_image_delay_seconds: 15
+openai_rate_limit_max_retries: 3
+openai_rate_limit_safety_seconds: 3

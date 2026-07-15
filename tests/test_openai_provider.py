@@ -28,6 +28,10 @@ from project_aurora.image_generation.provider_registry import (  # noqa: E402
     ImageProviderConfig,
     ProviderRegistry,
 )
+from project_aurora.image_generation.rate_limit import (  # noqa: E402
+    OpenAIRateLimitConfig,
+    retry_after_seconds,
+)
 from project_aurora.image_generation.image_quality import (  # noqa: E402
     validate_image_quality,
 )
@@ -68,6 +72,28 @@ class FakeImagesClient:
 class FakeOpenAIClient:
     def __init__(self) -> None:
         self.images = FakeImagesClient()
+
+
+class RateLimitError(Exception):
+    status_code = 429
+
+
+class FlakyImagesClient:
+    def __init__(self, failures: int) -> None:
+        self.failures = failures
+        self.calls = 0
+
+    def generate(self, **kwargs: object) -> object:
+        self.calls += 1
+        if self.calls <= self.failures:
+            raise RateLimitError("rate_limit_exceeded. Please try again in 12s.")
+        image_data = base64.b64encode(make_visible_png_bytes()).decode("ascii")
+        return type("FakeResponse", (), {"data": [{"b64_json": image_data}]})()
+
+
+class FlakyOpenAIClient:
+    def __init__(self, failures: int) -> None:
+        self.images = FlakyImagesClient(failures)
 
 
 class OpenAIProviderTest(unittest.TestCase):
@@ -170,6 +196,70 @@ class OpenAIProviderTest(unittest.TestCase):
         self.assertEqual(saved["estimated_cost"], 0.08)
         self.assertEqual(saved["prompt_version"], "openai-gpt-image-v1")
         self.assertEqual(len(saved["image_paths"]), 2)
+
+    def test_openai_429_followed_by_success(self) -> None:
+        sleeps: list[float] = []
+        fake_client = FlakyOpenAIClient(failures=1)
+        provider = OpenAIImageProvider(
+            output_dir=self.output_dir,
+            client=fake_client,
+            rate_limit_config=OpenAIRateLimitConfig(max_retries=3, safety_seconds=3),
+            sleeper=sleeps.append,
+        )
+        request = ImageGenerationEngine.create_request(
+            prompt_package=make_prompt_package(),
+            provider_name=provider.provider_name(),
+            image_type="product_asset",
+            width=1024,
+            height=1024,
+            dpi=300,
+            transparent_background=True,
+            size="1024x1024",
+            quality="medium",
+            background="transparent",
+            output_format="png",
+            number_of_images=1,
+        )
+
+        result = provider.generate_image(request)
+
+        self.assertEqual(result.status, "SUCCESS")
+        self.assertEqual(fake_client.images.calls, 2)
+        self.assertEqual(sleeps, [15.0])
+
+    def test_retry_delay_parsed_from_error(self) -> None:
+        self.assertEqual(
+            retry_after_seconds("rate_limit_exceeded. Please try again in 12s."),
+            12.0,
+        )
+
+    def test_openai_429_retries_exhausted(self) -> None:
+        fake_client = FlakyOpenAIClient(failures=4)
+        provider = OpenAIImageProvider(
+            output_dir=self.output_dir,
+            client=fake_client,
+            rate_limit_config=OpenAIRateLimitConfig(max_retries=3, safety_seconds=0),
+            sleeper=lambda _seconds: None,
+        )
+        request = ImageGenerationEngine.create_request(
+            prompt_package=make_prompt_package(),
+            provider_name=provider.provider_name(),
+            image_type="product_asset",
+            width=1024,
+            height=1024,
+            dpi=300,
+            transparent_background=True,
+            size="1024x1024",
+            quality="medium",
+            background="transparent",
+            output_format="png",
+            number_of_images=1,
+        )
+
+        with self.assertRaises(RateLimitError):
+            provider.generate_image(request)
+
+        self.assertEqual(fake_client.images.calls, 4)
 
 
 if __name__ == "__main__":

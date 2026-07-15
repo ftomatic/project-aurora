@@ -5,14 +5,20 @@ from __future__ import annotations
 import base64
 import os
 from pathlib import Path
-from time import perf_counter
-from typing import Any
+from time import perf_counter, sleep
+from typing import Any, Callable
 
 from project_aurora.image_generation.image_provider import ImageProvider
 from project_aurora.image_generation.image_quality import validate_image_quality
 from project_aurora.image_generation.image_request import ImageRequest
 from project_aurora.image_generation.image_result import ImageResult
 from project_aurora.image_generation.image_inspector import inspect_png
+from project_aurora.image_generation.rate_limit import (
+    OpenAIRateLimitConfig,
+    is_rate_limit_error,
+    rate_limit_delay_seconds,
+    sleep_for_rate_limit,
+)
 
 
 class OpenAIImageProvider(ImageProvider):
@@ -24,11 +30,15 @@ class OpenAIImageProvider(ImageProvider):
         api_key: str | None = None,
         model: str = "gpt-image-1",
         client: Any | None = None,
+        rate_limit_config: OpenAIRateLimitConfig | None = None,
+        sleeper: Callable[[float], None] = sleep,
     ) -> None:
         self._output_dir = output_dir or Path("data") / "aurora" / "generated_images"
         self._api_key = api_key or os.getenv("OPENAI_API_KEY")
         self._model = model
         self._client = client
+        self._rate_limit_config = rate_limit_config or OpenAIRateLimitConfig()
+        self._sleeper = sleeper
 
     def generate_image(self, request: ImageRequest) -> ImageResult:
         """Generate image files through OpenAI and save them locally."""
@@ -50,15 +60,7 @@ class OpenAIImageProvider(ImageProvider):
         print(request.size)
         print("Resolved Image Count")
         print(request.number_of_images)
-        response = client.images.generate(
-            model=self._model,
-            prompt=request.prompt,
-            size=request.size,
-            quality=request.quality,
-            background=request.background,
-            output_format=request.output_format,
-            n=request.number_of_images,
-        )
+        response = self._generate_with_retries(client, request)
         errors: list[str] = []
         generated_files = self._save_response_images(response, request, errors)
         status = "FAILED" if errors else "SUCCESS"
@@ -83,6 +85,30 @@ class OpenAIImageProvider(ImageProvider):
                 "prompt": request.prompt,
             },
         )
+
+    def _generate_with_retries(self, client: Any, request: ImageRequest) -> Any:
+        attempts = 0
+        while True:
+            try:
+                return client.images.generate(
+                    model=self._model,
+                    prompt=request.prompt,
+                    size=request.size,
+                    quality=request.quality,
+                    background=request.background,
+                    output_format=request.output_format,
+                    n=request.number_of_images,
+                )
+            except Exception as error:
+                if not is_rate_limit_error(error) or attempts >= self._rate_limit_config.max_retries:
+                    raise
+                attempts += 1
+                delay = rate_limit_delay_seconds(
+                    error,
+                    attempt=attempts,
+                    config=self._rate_limit_config,
+                )
+                sleep_for_rate_limit(delay, self._sleeper)
 
     def health_check(self) -> bool:
         """Return whether the provider has enough configuration to run."""

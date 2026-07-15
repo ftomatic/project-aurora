@@ -15,6 +15,12 @@ from project_aurora.integrations.etsy.etsy_listing_mapper import (
     EtsyDraftListingPayload,
 )
 from project_aurora.integrations.etsy.etsy_result import EtsyDraftResult
+from project_aurora.integrations.etsy.etsy_token_manager import EtsyTokenManager
+
+
+PROJECT_ROOT = Path(__file__).resolve().parents[4]
+DEFAULT_LOCAL_CREDENTIAL_PATH = PROJECT_ROOT / "config" / "aurora.local.env"
+DEFAULT_ETSY_CONFIG_PATH = PROJECT_ROOT / "config" / "etsy.yaml"
 
 
 class EtsyClient:
@@ -24,9 +30,11 @@ class EtsyClient:
         self,
         config: EtsyConfig,
         urlopen: Callable[..., Any] = request.urlopen,
+        token_manager: EtsyTokenManager | None = None,
     ) -> None:
         self._config = config
         self._urlopen = urlopen
+        self._token_manager = token_manager
 
     def get_json(self, path: str) -> dict[str, Any]:
         """Execute an authenticated Etsy Open API v3 GET request."""
@@ -232,11 +240,29 @@ class EtsyClient:
         return self._open_json(api_request)
 
     def _open_json(self, api_request: request.Request) -> dict[str, Any]:
+        return self._open_json_once(api_request, retry_on_invalid_token=True)
+
+    def _open_json_once(
+        self,
+        api_request: request.Request,
+        retry_on_invalid_token: bool,
+    ) -> dict[str, Any]:
         try:
             with self._urlopen(api_request, timeout=30) as response:
                 raw_body = response.read().decode("utf-8")
         except HTTPError as error:
             detail = error.read().decode("utf-8", errors="replace")
+            if (
+                retry_on_invalid_token
+                and error.code == 401
+                and _is_invalid_token_response(detail)
+                and self._refresh_access_token()
+            ):
+                retry_request = self._clone_request(api_request)
+                return self._open_json_once(
+                    retry_request,
+                    retry_on_invalid_token=False,
+                )
             raise RuntimeError(
                 f"Etsy API request failed with HTTP {error.code}: {detail}"
             ) from error
@@ -248,6 +274,27 @@ class EtsyClient:
         if not isinstance(response_data, dict):
             raise RuntimeError("Etsy API response was not a JSON object.")
         return response_data
+
+    def _refresh_access_token(self) -> bool:
+        manager = self._token_manager or EtsyTokenManager(DEFAULT_LOCAL_CREDENTIAL_PATH)
+        result = manager.refresh_if_needed(force=True)
+        if not result.refreshed:
+            return False
+        self._config = EtsyConfig.from_environment(DEFAULT_ETSY_CONFIG_PATH)
+        return True
+
+    def _clone_request(self, api_request: request.Request) -> request.Request:
+        headers = dict(api_request.header_items())
+        headers.update(self._build_headers(include_json=_is_json_request(headers)))
+        content_type = headers.get("Content-type") or headers.get("Content-Type")
+        if content_type:
+            headers["Content-Type"] = content_type
+        return request.Request(
+            api_request.full_url,
+            data=api_request.data,
+            headers=headers,
+            method=api_request.get_method(),
+        )
 
     def _build_url(self, path: str) -> str:
         base_url = self._config.api_base_url.rstrip("/")
@@ -311,3 +358,17 @@ class EtsyClient:
             )
         )
         return b"\r\n".join(lines), f"multipart/form-data; boundary={boundary}"
+
+
+def _is_invalid_token_response(detail: str) -> bool:
+    lowered = detail.casefold()
+    return "invalid_token" in lowered or "access token expired" in lowered
+
+
+def _is_json_request(headers: dict[str, str]) -> bool:
+    content_type = (
+        headers.get("Content-type")
+        or headers.get("Content-Type")
+        or ""
+    )
+    return "application/json" in content_type.casefold()

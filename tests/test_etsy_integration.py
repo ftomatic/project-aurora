@@ -6,7 +6,10 @@ import json
 import sys
 import tempfile
 import unittest
+from io import BytesIO
 from pathlib import Path
+from urllib.error import HTTPError
+from unittest.mock import patch
 
 from PIL import Image
 
@@ -59,6 +62,19 @@ class FakeResponse:
 
     def read(self) -> bytes:
         return json.dumps(self._payload).encode("utf-8")
+
+
+class FakeTokenManager:
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def refresh_if_needed(self, force: bool = False):  # type: ignore[no-untyped-def]
+        self.calls += 1
+        return type(
+            "Refresh",
+            (),
+            {"refreshed": True, "status": "REFRESHED"},
+        )()
 
 
 def make_listing_package(
@@ -302,6 +318,45 @@ class EtsyIntegrationTest(unittest.TestCase):
             config.validate_for_api(is_digital=payload.is_digital),
             ("processing_profile_id", "shipping_profile_id"),
         )
+
+    def test_expired_etsy_token_refreshes_and_retries_once(self) -> None:
+        calls = []
+        token_manager = FakeTokenManager()
+
+        def fake_urlopen(api_request, timeout: int):  # type: ignore[no-untyped-def]
+            calls.append(api_request)
+            if len(calls) == 1:
+                raise HTTPError(
+                    api_request.full_url,
+                    401,
+                    "Unauthorized",
+                    {},
+                    BytesIO(b'{"error":"invalid_token","error_description":"access token expired"}'),
+                )
+            return FakeResponse({"ok": True})
+
+        config = EtsyConfig(
+            mode="live",
+            shop_id="shop",
+            client_id="client",
+            shared_secret="secret",
+            access_token="expired",
+            taxonomy_id=123,
+        )
+
+        with patch(
+            "project_aurora.integrations.etsy.etsy_client.EtsyConfig.from_environment",
+            return_value=config,
+        ):
+            result = EtsyClient(
+                config,
+                urlopen=fake_urlopen,
+                token_manager=token_manager,
+            ).get_json("/shops/shop")
+
+        self.assertEqual(result["ok"], True)
+        self.assertEqual(token_manager.calls, 1)
+        self.assertEqual(len(calls), 2)
 
     def test_physical_payload_validation_requires_shipping_profile(self) -> None:
         config = EtsyConfig(

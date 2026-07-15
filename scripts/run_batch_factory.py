@@ -8,6 +8,7 @@ import tempfile
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
+from time import sleep
 from typing import Callable
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -16,6 +17,9 @@ sys.path.insert(0, str(PROJECT_ROOT))
 sys.path.insert(0, str(SRC_PATH))
 
 from project_aurora.integrations.etsy.etsy_config import EtsyConfig  # noqa: E402
+from project_aurora.image_generation.provider_registry import (  # noqa: E402
+    ImageProviderConfig,
+)
 from project_aurora.planning.production_queue_manager import (  # noqa: E402
     ProductionJob,
     ProductionQueueManager,
@@ -44,6 +48,16 @@ REAL_QUEUE_PATH = (
     / "production_queue"
     / "queue.json"
 )
+DAILY_FACTORY_CONFIG_PATH = PROJECT_ROOT / "config" / "daily_factory.yaml"
+
+
+@dataclass(frozen=True, slots=True)
+class BatchRuntimeConfig:
+    """Runtime pacing and retry config for live batch execution."""
+
+    openai_image_delay_seconds: float = 15.0
+    openai_rate_limit_max_retries: int = 3
+    openai_rate_limit_safety_seconds: float = 3.0
 
 
 @dataclass(frozen=True, slots=True)
@@ -90,11 +104,15 @@ class BatchProductionFactory:
         memory: MemoryManager,
         stage_runner_factory: Callable[[ProductionJob], ProductFactoryStageRunner],
         save_report: bool = True,
+        image_delay_seconds: float = 0.0,
+        sleeper: Callable[[float], None] = sleep,
     ) -> None:
         self._queue_manager = queue_manager
         self._memory = memory
         self._stage_runner_factory = stage_runner_factory
         self._save_report = save_report
+        self._image_delay_seconds = image_delay_seconds
+        self._sleeper = sleeper
 
     def run(self, count: int) -> BatchFactoryReport:
         """Run up to count ready jobs, continuing after individual failures."""
@@ -108,10 +126,13 @@ class BatchProductionFactory:
         images_generated = 0
         downloads_uploaded = 0
         elapsed_time = 0.0
+        previous_generated_images = False
         for _ in range(count):
             job = self._queue_manager.next_ready_job()
             if job is None:
                 break
+            if previous_generated_images and self._image_delay_seconds > 0:
+                self._sleeper(self._image_delay_seconds)
             factory = ProductFactory(
                 queue_manager=self._queue_manager,
                 memory=self._memory,
@@ -136,6 +157,7 @@ class BatchProductionFactory:
             images_generated += report.images
             downloads_uploaded += report.downloads
             elapsed_time += report.time
+            previous_generated_images = _report_generated_images_now(report)
 
         batch_report = _build_batch_report_from_returned_reports(
             requested=count,
@@ -207,11 +229,25 @@ def _run_dry_batch(count: int, temp_dir: Path) -> BatchFactoryReport:
 
 
 def _run_live_batch(count: int) -> BatchFactoryReport:
+    runtime_config = load_batch_runtime_config(DAILY_FACTORY_CONFIG_PATH)
     queue_manager = ProductionQueueManager(queue_path=REAL_QUEUE_PATH)
     memory = MemoryManager(
         storage=CSVStorage(base_path=PROJECT_ROOT / "data" / "aurora")
     )
     etsy_config = EtsyConfig.from_environment(PROJECT_ROOT / "config" / "etsy.yaml")
+    image_config = ImageProviderConfig.from_file(PROJECT_ROOT / "config" / "openai.yaml")
+    image_config = ImageProviderConfig(
+        provider=image_config.provider,
+        model=image_config.model,
+        size=image_config.size,
+        quality=image_config.quality,
+        background=image_config.background,
+        output_format=image_config.output_format,
+        number_of_images=image_config.number_of_images,
+        prompt_version=image_config.prompt_version,
+        rate_limit_max_retries=runtime_config.openai_rate_limit_max_retries,
+        rate_limit_safety_seconds=runtime_config.openai_rate_limit_safety_seconds,
+    )
     print_etsy_config_diagnostics(etsy_config)
     return BatchProductionFactory(
         queue_manager=queue_manager,
@@ -219,9 +255,34 @@ def _run_live_batch(count: int) -> BatchFactoryReport:
         stage_runner_factory=lambda _job: DefaultProductFactoryStageRunner(
             memory=memory,
             etsy_config=etsy_config,
+            image_config=image_config,
         ),
         save_report=True,
+        image_delay_seconds=runtime_config.openai_image_delay_seconds,
     ).run(count)
+
+
+def load_batch_runtime_config(path: Path) -> BatchRuntimeConfig:
+    """Load batch pacing config from daily_factory.yaml."""
+    values: dict[str, str] = {}
+    if path.exists():
+        for raw_line in path.read_text(encoding="utf-8").splitlines():
+            line = raw_line.strip()
+            if not line or line.startswith("#") or ":" not in line:
+                continue
+            key, value = line.split(":", maxsplit=1)
+            values[key.strip()] = value.strip().strip("\"'")
+    return BatchRuntimeConfig(
+        openai_image_delay_seconds=float(
+            values.get("openai_image_delay_seconds", "15")
+        ),
+        openai_rate_limit_max_retries=int(
+            values.get("openai_rate_limit_max_retries", "3")
+        ),
+        openai_rate_limit_safety_seconds=float(
+            values.get("openai_rate_limit_safety_seconds", "3")
+        ),
+    )
 
 
 def _build_batch_report(
@@ -295,6 +356,20 @@ def _build_batch_report_from_returned_reports(
         failure_summary=failures,
         reports=reports,
     )
+
+
+def _report_generated_images_now(report: ProductionReport) -> bool:
+    image_generation = report.metadata.get("image_generation")
+    if not isinstance(image_generation, dict):
+        return False
+    if str(image_generation.get("status", "")).upper() != "SUCCESS":
+        return False
+    warnings = image_generation.get("warnings", ())
+    if isinstance(warnings, list | tuple) and any(
+        "reused existing" in str(warning).casefold() for warning in warnings
+    ):
+        return False
+    return True
 
 
 def print_batch_report(report: BatchFactoryReport) -> None:
