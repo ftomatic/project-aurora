@@ -31,8 +31,14 @@ from project_aurora.planning.dynamic_product_planner import (  # noqa: E402
     DynamicProductPlanner,
 )
 from project_aurora.planning.production_queue_manager import (  # noqa: E402
+    READY,
     ProductionQueueManager,
 )
+from project_aurora.portfolio.ai_portfolio_manager import (  # noqa: E402
+    AIPortfolioManager,
+    ScoredPortfolioCandidate,
+)
+from project_aurora.portfolio.portfolio_memory import PortfolioMemory  # noqa: E402
 from project_aurora.research.dynamic_market_research import (  # noqa: E402
     DynamicMarketResearchEngine,
 )
@@ -144,10 +150,18 @@ def run_daily_factory(
         PROJECT_ROOT / "config" / "projects" / "rainbow_milk_studio.yaml"
     )
     research = DynamicMarketResearchEngine().run()
-    planning = DynamicProductPlanner(
+    planner = DynamicProductPlanner(
         queue_manager=queue_manager,
         project_profile=profile,
-    ).plan(research, count=count)
+    )
+    candidates = planner.generate_candidates(research)
+    portfolio_plan = AIPortfolioManager().plan(
+        candidates=candidates,
+        research=research,
+        memory=PortfolioMemory.from_queue(queue_manager),
+        count=count,
+    )
+    _add_portfolio_jobs(queue_manager, portfolio_plan.selected)
     if live:
         batch = _run_live_batch(count=count)
     else:
@@ -174,9 +188,12 @@ def run_daily_factory(
             {"provider": item.provider, "reason": item.reason}
             for item in research.providers_unavailable
         ],
-        "candidates_evaluated": len(planning.candidates),
-        "duplicates_rejected": list(planning.duplicates_rejected),
-        "products_selected": [item.product_name for item in planning.selected],
+        "candidates_evaluated": len(portfolio_plan.candidates),
+        "duplicates_rejected": [
+            item.product_name for item in portfolio_plan.rejected_duplicates
+        ],
+        "products_selected": [item.product_name for item in portfolio_plan.selected],
+        "portfolio": portfolio_plan.to_report(),
         "products_completed": batch.completed,
         "products_failed": batch.failed,
         "etsy_draft_ids": list(batch.draft_ids),
@@ -201,6 +218,51 @@ def run_daily_factory(
     return report
 
 
+def _add_portfolio_jobs(
+    queue_manager: ProductionQueueManager,
+    selected: tuple[ScoredPortfolioCandidate, ...],
+) -> None:
+    """Persist selected portfolio candidates as READY queue jobs."""
+    for item in selected:
+        candidate = item.candidate
+        try:
+            queue_manager.add_job(
+                priority="High" if candidate.confidence_score >= 0.86 else "Medium",
+                product_name=candidate.product_name,
+                category=candidate.product_type,
+                style=item.art_style,
+                seasonal_theme=candidate.season,
+                keywords=candidate.keywords,
+                confidence_score=round(candidate.confidence_score, 2),
+                estimated_competition=_competition_label(candidate.competition_score),
+                estimated_demand=_demand_label(candidate.demand_score),
+                estimated_revenue=round(80 + candidate.confidence_score * 90, 2),
+                status=READY,
+                target_customer=candidate.target_customer,
+                demand_score=candidate.demand_score,
+                competition_score=candidate.competition_score,
+                source_evidence=candidate.source_evidence,
+            )
+        except ValueError:
+            continue
+
+
+def _competition_label(score: float) -> str:
+    if score < 0.4:
+        return "Low"
+    if score < 0.7:
+        return "Medium"
+    return "High"
+
+
+def _demand_label(score: float) -> str:
+    if score >= 0.75:
+        return "High"
+    if score >= 0.5:
+        return "Medium"
+    return "Low"
+
+
 def print_daily_report(report: dict[str, Any]) -> None:
     """Print daily factory summary."""
     print("AURORA DAILY FACTORY")
@@ -211,6 +273,14 @@ def print_daily_report(report: dict[str, Any]) -> None:
     print("Products Planned")
     print(len(report["products_selected"]))
     print("")
+    if report.get("portfolio"):
+        portfolio = report["portfolio"]
+        print("Today's Portfolio")
+        print("\n".join(portfolio["today_portfolio"]))
+        print("")
+        print("Wildcard Selection")
+        print(portfolio["wildcard_selection"] or "None")
+        print("")
     print("Products Completed")
     print(report["products_completed"])
     print("")
