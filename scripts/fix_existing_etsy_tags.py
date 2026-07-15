@@ -40,7 +40,6 @@ def repair_existing_etsy_tags(
     input_fn: Callable[[str], str],
 ) -> dict[str, Any]:
     """Patch only tags for current Etsy drafts with verified job-specific SEO."""
-    audit = audit_listing_seo(memory)
     draft_listings = client.list_shop_draft_listings()
     draft_by_id = {
         str(listing.get("listing_id")): listing
@@ -48,41 +47,48 @@ def repair_existing_etsy_tags(
         if listing.get("listing_id")
         and str(listing.get("state", "")).casefold() == "draft"
     }
+    audit = audit_listing_seo(memory, reconstruct_missing=True)
     candidates = _eligible_tag_repair_targets(audit, draft_by_id)
+    unverified = _skipped_records(audit, draft_by_id)
 
     print("ETSY TAG REPAIR PREVIEW")
     print("Drafts Found")
     print(len(draft_by_id))
     print("")
-    print("Drafts Eligible for Tag Repair")
+    print("Verified Drafts")
     print(len(candidates))
+    print("")
+    print("Unverified Drafts")
+    print(len(unverified))
     print("")
     for record in candidates:
         _print_preview_record(record)
 
     if len(candidates) != 5:
         report = {
-            "status": "ELIGIBLE_DRAFT_COUNT_MISMATCH",
+            "status": "DRAFT_VERIFICATION_INCOMPLETE",
             "drafts_found": len(draft_by_id),
-            "eligible": len(candidates),
+            "verified_drafts": len(candidates),
+            "unverified_drafts": len(unverified),
             "updated": [],
-            "skipped": _skipped_records(audit, draft_by_id),
+            "skipped": unverified,
             "errors": (
-                "Expected exactly 5 verified current Etsy drafts before tag repair.",
+                "Some current Etsy drafts could not be verified against Aurora job SEO.",
             ),
         }
         memory.save_record("etsy_tag_repairs", "latest", report)
         print("Status")
-        print("ELIGIBLE_DRAFT_COUNT_MISMATCH")
+        print("DRAFT_VERIFICATION_INCOMPLETE")
         print("Reason")
-        print("Expected exactly 5 verified current Etsy drafts before tag repair.")
+        print("Some current Etsy drafts could not be verified against Aurora job SEO.")
         return report
 
     if input_fn("Type FIX 5 TAGS to continue\n").strip() != "FIX 5 TAGS":
         report = {
             "status": "CANCELLED",
             "drafts_found": len(draft_by_id),
-            "eligible": len(candidates),
+            "verified_drafts": len(candidates),
+            "unverified_drafts": len(unverified),
             "updated": [],
             "skipped": len(audit),
         }
@@ -106,9 +112,10 @@ def repair_existing_etsy_tags(
     report = {
         "status": "SUCCESS",
         "drafts_found": len(draft_by_id),
-        "eligible": len(candidates),
+        "verified_drafts": len(candidates),
+        "unverified_drafts": len(unverified),
         "updated": updated,
-        "skipped": _skipped_records(audit, draft_by_id),
+        "skipped": unverified,
     }
     memory.save_record("etsy_tag_repairs", "latest", report)
     return report
@@ -122,7 +129,12 @@ def _eligible_tag_repair_targets(
     for record in audit:
         listing_id = str(record.get("etsy_listing_id") or "")
         draft = draft_by_id.get(listing_id)
-        if record.get("status") != "PASS" or draft is None:
+        tags = tuple(str(tag) for tag in record.get("proposed_tags", ()) or ())
+        if (
+            record.get("status") != "VERIFIED"
+            or draft is None
+            or not _valid_proposed_tags(tags)
+        ):
             continue
         candidates.append(
             {
@@ -130,7 +142,7 @@ def _eligible_tag_repair_targets(
                 "etsy_listing_id": listing_id,
                 "current_state": str(draft.get("state", "")),
                 "current_tags": tuple(str(tag) for tag in draft.get("tags", ()) or ()),
-                "proposed_tags": tuple(str(tag) for tag in record["tags"]),
+                "proposed_tags": tags,
                 "seo_job_id": str(record["seo_package_job_id"]),
                 "verification_status": record["status"],
             }
@@ -145,10 +157,12 @@ def _skipped_records(
     skipped: list[dict[str, str]] = []
     for record in audit:
         listing_id = str(record.get("etsy_listing_id") or "")
-        if record.get("status") != "PASS":
+        if record.get("status") != "VERIFIED":
             reason = str(record.get("status") or "UNVERIFIED")
         elif listing_id not in draft_by_id:
             reason = "NOT_CURRENT_DRAFT"
+        elif not _valid_proposed_tags(tuple(str(tag) for tag in record.get("proposed_tags", ()) or ())):
+            reason = "INVALID_TAGS"
         else:
             continue
         skipped.append(
@@ -159,6 +173,16 @@ def _skipped_records(
             }
         )
     return skipped
+
+
+def _valid_proposed_tags(tags: tuple[str, ...]) -> bool:
+    normalized = tuple(tag.strip() for tag in tags)
+    return (
+        len(normalized) == 13
+        and all(normalized)
+        and all(len(tag) <= 20 for tag in normalized)
+        and len({tag.casefold() for tag in normalized}) == 13
+    )
 
 
 def _print_preview_record(record: dict[str, Any]) -> None:
