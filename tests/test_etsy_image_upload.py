@@ -133,6 +133,29 @@ class EtsyImageUploadTest(unittest.TestCase):
         self.assertIn(b"name=\"image\"; filename=\"strawberry_01.png\"", api_request.data)
         self.assertIn(b"\x89PNG", api_request.data)
 
+    def test_client_lists_listing_images_without_shop_path(self) -> None:
+        calls = []
+
+        def fake_urlopen(api_request, timeout: int):  # type: ignore[no-untyped-def]
+            calls.append((api_request, timeout))
+            return FakeResponse(
+                {
+                    "results": [
+                        {"listing_image_id": 1, "rank": 1},
+                    ]
+                }
+            )
+
+        response = EtsyClient(
+            config=self.config,
+            urlopen=fake_urlopen,
+        ).list_listing_images("123456789")
+
+        self.assertEqual(response, ({"listing_image_id": 1, "rank": 1},))
+        self.assertEqual(len(calls), 1)
+        self.assertIn("/listings/123456789/images", calls[0][0].full_url)
+        self.assertNotIn("/shops/shop-id/listings/123456789/images", calls[0][0].full_url)
+
     def test_service_uploads_sorted_png_images_to_latest_draft(self) -> None:
         (self.images_dir / "b.png").write_bytes(make_visible_png_bytes())
         (self.images_dir / "a.png").write_bytes(make_visible_png_bytes())

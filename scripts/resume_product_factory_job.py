@@ -227,11 +227,15 @@ def main(argv: list[str] | None = None) -> None:
     memory = MemoryManager(storage=CSVStorage(base_path=PROJECT_ROOT / "data" / "aurora"))
     queue_manager = ProductionQueueManager(queue_path=QUEUE_PATH)
     config = EtsyConfig.from_environment(PROJECT_ROOT / "config" / "etsy.yaml")
-    result = ProductFactoryResumeService(
-        memory=memory,
-        queue_manager=queue_manager,
-        config=config,
-    ).resume(args.job_id)
+    try:
+        result = ProductFactoryResumeService(
+            memory=memory,
+            queue_manager=queue_manager,
+            config=config,
+        ).resume(args.job_id)
+    except RuntimeError as error:
+        print_resume_error(args.job_id, error)
+        raise SystemExit(1) from error
     print_resume_result(result)
     if result.final_status != "COMPLETED":
         raise SystemExit(1)
@@ -263,6 +267,20 @@ def print_resume_result(result: ResumeResult) -> None:
         print("Errors")
         for error in result.errors:
             print(error)
+
+
+def print_resume_error(job_id: str, error: RuntimeError) -> None:
+    """Print a concise recovery summary for resume failures."""
+    print("PRODUCT FACTORY RESUME")
+    print("")
+    print("Job ID")
+    print(job_id)
+    print("")
+    print("Final Status")
+    print("FAILED")
+    print("")
+    print("Recovery Summary")
+    print(str(error))
 
 
 def _existing_draft_id(report_data: dict[str, Any]) -> str | None:

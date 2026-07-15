@@ -5,7 +5,9 @@ from __future__ import annotations
 import sys
 import tempfile
 import unittest
+from io import StringIO
 from pathlib import Path
+from unittest.mock import patch
 
 from PIL import Image
 
@@ -27,6 +29,7 @@ from project_aurora.storage.csv_storage import CSVStorage  # noqa: E402
 from project_aurora.storage.memory_manager import MemoryManager  # noqa: E402
 from scripts.resume_product_factory_job import (  # noqa: E402
     ProductFactoryResumeService,
+    main,
 )
 
 
@@ -249,6 +252,35 @@ class ResumeProductFactoryJobTest(unittest.TestCase):
         saved = self.memory.load_record(REPORT_COLLECTION, JOB_ID)
         self.assertFalse(saved["success"])
         self.assertEqual(saved["failed_stage"], "listing_image_upload")
+
+    def test_cli_prints_concise_error_without_traceback(self) -> None:
+        class FailingResumeService:
+            def __init__(self, **kwargs: object) -> None:
+                pass
+
+            def resume(self, job_id: str) -> object:
+                raise RuntimeError("Etsy API request failed with HTTP 404: not found")
+
+        with patch(
+            "scripts.resume_product_factory_job.ProductFactoryResumeService",
+            FailingResumeService,
+        ), patch(
+            "scripts.resume_product_factory_job.MemoryManager",
+        ), patch(
+            "scripts.resume_product_factory_job.ProductionQueueManager",
+        ), patch(
+            "scripts.resume_product_factory_job.EtsyConfig.from_environment",
+            return_value=self.config,
+        ), patch("sys.stdout", new_callable=StringIO) as output:
+            with self.assertRaises(SystemExit):
+                main(["--job-id", JOB_ID])
+
+        rendered = output.getvalue()
+        self.assertIn("PRODUCT FACTORY RESUME", rendered)
+        self.assertIn("Final Status\nFAILED", rendered)
+        self.assertIn("Recovery Summary", rendered)
+        self.assertIn("HTTP 404", rendered)
+        self.assertNotIn("Traceback", rendered)
 
 
 if __name__ == "__main__":
