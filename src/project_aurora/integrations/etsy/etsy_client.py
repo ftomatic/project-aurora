@@ -67,6 +67,21 @@ class EtsyClient:
         )
         return self._open_json(api_request)
 
+    def list_listing_images(
+        self,
+        listing_id: str,
+    ) -> tuple[dict[str, Any], ...]:
+        """Return listing images already attached to an Etsy listing."""
+        if not self._config.shop_id:
+            raise RuntimeError("ETSY_SHOP_ID is required.")
+        response = self.get_json(
+            f"/shops/{self._config.shop_id}/listings/{listing_id}/images"
+        )
+        results = response.get("results", ())
+        if isinstance(results, list):
+            return tuple(item for item in results if isinstance(item, dict))
+        return ()
+
     def upload_listing_digital_file(
         self,
         listing_id: str,
