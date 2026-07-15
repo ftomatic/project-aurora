@@ -68,6 +68,11 @@ def make_visible_png_base64() -> str:
     return base64.b64encode(output.getvalue()).decode("ascii")
 
 
+def write_visible_png(path: Path, size: tuple[int, int] = (2, 2)) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    Image.new("RGBA", size, (255, 0, 0, 255)).save(path, format="PNG")
+
+
 class FakeOpenAIImagesClient:
     def __init__(self) -> None:
         self.calls: list[dict[str, object]] = []
@@ -177,6 +182,15 @@ class FakeStageRunner:
         )
 
 
+class PathAwareFakeStageRunner(FakeStageRunner):
+    def __init__(self, paths: object) -> None:
+        super().__init__()
+        self._paths = paths
+
+    def job_paths(self, job: ProductionJob) -> object:
+        return self._paths.for_job(job)
+
+
 class ProductFactoryTest(unittest.TestCase):
     def setUp(self) -> None:
         self.temp_dir = tempfile.TemporaryDirectory()
@@ -209,7 +223,8 @@ class ProductFactoryTest(unittest.TestCase):
         self.assertEqual(report.to_dict()["draft_id"], "4537338498")
 
     def test_factory_success_marks_queue_complete_and_saves_report(self) -> None:
-        runner = FakeStageRunner()
+        paths = ProductFactoryPaths(jobs_dir=self.base_path / "jobs")
+        runner = PathAwareFakeStageRunner(paths)
 
         report = ProductFactory(
             queue_manager=self.queue,
@@ -225,6 +240,8 @@ class ProductFactoryTest(unittest.TestCase):
         saved = self.memory.load_record(REPORT_COLLECTION, "latest")
         self.assertEqual(saved["product"], "Woodland Baby Animals")
         self.assertEqual(saved["queue_status"], COMPLETED)
+        self.assertIn("job_1_woodland_baby_animals", saved["job_paths"]["job_root"])
+        self.assertEqual(saved["job_paths"], report.job_paths)
         self.assertEqual(
             runner.calls,
             [
@@ -333,6 +350,7 @@ class ProductFactoryTest(unittest.TestCase):
         class FakeImageGenerationEngine:
             def __init__(self, **kwargs: object) -> None:
                 captured["provider_config"] = kwargs["provider_config"]
+                captured["output_dir"] = kwargs["output_dir"]
 
             def run(self, **kwargs: object) -> object:
                 captured["run_kwargs"] = kwargs
@@ -342,8 +360,7 @@ class ProductFactoryTest(unittest.TestCase):
             memory=self.memory,
             etsy_config=SimpleNamespace(),
             paths=ProductFactoryPaths(
-                generated_images_dir=self.base_path / "generated",
-                final_images_dir=self.base_path / "final",
+                jobs_dir=self.base_path / "jobs",
             ),
             image_config=ImageProviderConfig(
                 provider="openai",
@@ -361,6 +378,7 @@ class ProductFactoryTest(unittest.TestCase):
         self.assertEqual(result.status, "SUCCESS")
         self.assertEqual(captured["run_kwargs"]["quality"], "medium")
         self.assertEqual(captured["provider_config"].quality, "medium")
+        self.assertIn("job_1_woodland_baby_animals", str(captured["output_dir"]))
 
     def test_live_image_path_sends_medium_to_openai_sdk_from_config(self) -> None:
         fake_client = FakeOpenAIClient()
@@ -377,8 +395,7 @@ class ProductFactoryTest(unittest.TestCase):
             memory=self.memory,
             etsy_config=SimpleNamespace(),
             paths=ProductFactoryPaths(
-                generated_images_dir=self.base_path / "generated",
-                final_images_dir=self.base_path / "final",
+                jobs_dir=self.base_path / "jobs",
             ),
         )
 
@@ -393,6 +410,157 @@ class ProductFactoryTest(unittest.TestCase):
         self.assertEqual(fake_client.images.calls[0]["quality"], "medium")
         self.assertEqual(fake_client.images.calls[0]["size"], "1024x1024")
         self.assertEqual(fake_client.images.calls[0]["n"], 4)
+
+    def test_old_shared_images_do_not_affect_new_job_generation(self) -> None:
+        fake_client = FakeOpenAIClient()
+        shared_dir = self.base_path / "generated_images"
+        for index in range(1, 5):
+            write_visible_png(shared_dir / f"strawberry_{index}.png")
+        self.memory.save_prompt_package(
+            {
+                "product_name": self.job.product_name,
+                "collection": self.job.product_name,
+                "style": self.job.style,
+                "image_prompt": "Visible test prompt.",
+            },
+            package_id=self.job.id,
+        )
+        runner = DefaultProductFactoryStageRunner(
+            memory=self.memory,
+            etsy_config=SimpleNamespace(),
+            paths=ProductFactoryPaths(jobs_dir=self.base_path / "jobs"),
+        )
+
+        with patch.dict("os.environ", {"OPENAI_API_KEY": "test-key"}), patch.object(
+            OpenAIImageProvider,
+            "_build_client",
+            return_value=fake_client,
+        ):
+            result = runner.generate_images(self.job)
+
+        job_paths = runner.job_paths(self.job)
+        self.assertEqual(result.status, "SUCCESS")
+        self.assertEqual(len(tuple(shared_dir.glob("*.png"))), 4)
+        self.assertEqual(len(tuple(job_paths.generated_images_dir.glob("*.png"))), 4)
+        self.assertNotEqual(shared_dir, job_paths.generated_images_dir)
+
+    def test_two_jobs_use_different_directories(self) -> None:
+        runner = DefaultProductFactoryStageRunner(
+            memory=self.memory,
+            etsy_config=SimpleNamespace(),
+            paths=ProductFactoryPaths(jobs_dir=self.base_path / "jobs"),
+        )
+        other_job = make_job("job-2")
+
+        first_paths = runner.job_paths(self.job)
+        second_paths = runner.job_paths(other_job)
+
+        self.assertNotEqual(first_paths.job_root, second_paths.job_root)
+        self.assertIn("job_1_woodland_baby_animals", str(first_paths.job_root))
+        self.assertIn("job_2_woodland_baby_animals", str(second_paths.job_root))
+
+    def test_exporter_receives_only_current_job_generated_files(self) -> None:
+        captured: dict[str, object] = {}
+        runner = DefaultProductFactoryStageRunner(
+            memory=self.memory,
+            etsy_config=SimpleNamespace(),
+            paths=ProductFactoryPaths(jobs_dir=self.base_path / "jobs"),
+        )
+        job_paths = runner.job_paths(self.job)
+        for index in range(1, 5):
+            write_visible_png(self.base_path / "generated_images" / f"old_{index}.png")
+            write_visible_png(job_paths.generated_images_dir / f"current_{index}.png")
+
+        class FakeCommercialImageExporter:
+            def __init__(self, source_dir: Path, output_dir: Path) -> None:
+                captured["source_dir"] = source_dir
+                captured["output_dir"] = output_dir
+                captured["source_files"] = tuple(source_dir.glob("*.png"))
+
+            def export(self) -> object:
+                return SimpleNamespace(
+                    status="SUCCESS",
+                    exported_files=("final1.png", "final2.png", "final3.png", "final4.png"),
+                    warnings=(),
+                    errors=(),
+                )
+
+        with patch(
+            "project_aurora.image_generation.commercial_image_exporter.CommercialImageExporter",
+            FakeCommercialImageExporter,
+        ):
+            result = runner.export_commercial_images(self.job)
+
+        self.assertEqual(result.status, "SUCCESS")
+        self.assertEqual(captured["source_dir"], job_paths.generated_images_dir)
+        self.assertEqual(len(captured["source_files"]), 4)
+
+    def test_etsy_upload_uses_only_current_job_final_files(self) -> None:
+        captured: dict[str, object] = {}
+        runner = DefaultProductFactoryStageRunner(
+            memory=self.memory,
+            etsy_config=SimpleNamespace(),
+            paths=ProductFactoryPaths(jobs_dir=self.base_path / "jobs"),
+        )
+        job_paths = runner.job_paths(self.job)
+        for index in range(1, 5):
+            write_visible_png(self.base_path / "final_product_images" / f"old_{index}.png")
+            write_visible_png(job_paths.final_images_dir / f"current_{index}.png")
+
+        class FakeEtsyImageUploadService:
+            def __init__(self, **kwargs: object) -> None:
+                captured["images_dir"] = kwargs["images_dir"]
+                captured["files"] = tuple(kwargs["images_dir"].glob("*.png"))
+
+            def upload_latest_draft_images(self) -> object:
+                return SimpleNamespace(
+                    status="SUCCESS",
+                    images_uploaded=4,
+                    failed=0,
+                    warnings=(),
+                    errors=(),
+                )
+
+        with patch(
+            "project_aurora.integrations.etsy.etsy_image_upload_service.EtsyImageUploadService",
+            FakeEtsyImageUploadService,
+        ):
+            result = runner.upload_listing_images(self.job)
+
+        self.assertEqual(result.status, "SUCCESS")
+        self.assertEqual(captured["images_dir"], job_paths.final_images_dir)
+        self.assertEqual(len(captured["files"]), 4)
+
+    def test_rerun_reuses_four_generated_images_without_accumulating(self) -> None:
+        fake_client = FakeOpenAIClient()
+        self.memory.save_prompt_package(
+            {
+                "product_name": self.job.product_name,
+                "collection": self.job.product_name,
+                "style": self.job.style,
+                "image_prompt": "Visible test prompt.",
+            },
+            package_id=self.job.id,
+        )
+        runner = DefaultProductFactoryStageRunner(
+            memory=self.memory,
+            etsy_config=SimpleNamespace(),
+            paths=ProductFactoryPaths(jobs_dir=self.base_path / "jobs"),
+        )
+
+        with patch.dict("os.environ", {"OPENAI_API_KEY": "test-key"}), patch.object(
+            OpenAIImageProvider,
+            "_build_client",
+            return_value=fake_client,
+        ):
+            first = runner.generate_images(self.job)
+            second = runner.generate_images(self.job)
+
+        job_paths = runner.job_paths(self.job)
+        self.assertEqual(first.status, "SUCCESS")
+        self.assertEqual(second.status, "SUCCESS")
+        self.assertEqual(len(fake_client.images.calls), 1)
+        self.assertEqual(len(tuple(job_paths.generated_images_dir.glob("*.png"))), 4)
 
 
 if __name__ == "__main__":

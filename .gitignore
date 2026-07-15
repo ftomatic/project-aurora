@@ -55,3 +55,5 @@ data/aurora/final_product_images/*
 !data/aurora/final_product_images/.gitkeep
 data/aurora/digital_downloads/*
 !data/aurora/digital_downloads/.gitkeep
+data/aurora/jobs/*
+!data/aurora/jobs/.gitkeep
