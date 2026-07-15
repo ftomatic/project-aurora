@@ -70,6 +70,12 @@ def main(argv: list[str] | None = None) -> None:
     atlas.save_report(plan)
     estimate = estimate_image_cost(config.daily_products)
     print_research_planner_output(research, plan, estimate)
+    print_quality_gate(plan)
+    if not plan.quality_gate_passed:
+        print_blocked_reasons(plan)
+        return
+    print("")
+    print("Awaiting Approval")
     approved = args.auto_approve or request_production_approval(
         plan,
         estimate,
@@ -79,11 +85,6 @@ def main(argv: list[str] | None = None) -> None:
         print("")
         print("Status")
         print("AWAITING_APPROVAL")
-        return
-    if not plan.quality_gate_passed:
-        print("")
-        print("Status")
-        print("QUALITY_GATE_BLOCKED")
         return
     created = handoff_to_forge(plan, queue_manager)
     print("")
@@ -110,6 +111,8 @@ def request_production_approval(
     input_fn: Callable[[str], str],
 ) -> bool:
     """Ask for explicit production approval."""
+    if not plan.quality_gate_passed:
+        return False
     print("")
     print("Today's Portfolio")
     for index, opportunity in enumerate(plan.selected, start=1):
@@ -123,6 +126,54 @@ def request_production_approval(
     print("")
     response = input_fn("Type APPROVE to continue\n")
     return response.strip() == "APPROVE"
+
+
+def print_quality_gate(plan: AtlasPortfolioPlan) -> None:
+    """Print the explicit quality gate state."""
+    gate = plan.quality_gate
+    print("")
+    print("QUALITY GATE")
+    print("")
+    print("Required Products")
+    print(gate["required_products"])
+    print("")
+    print("Selected Products")
+    print(gate["selected_products"])
+    print("")
+    print("Portfolio Size")
+    print(gate["portfolio_size"])
+    print("")
+    print("Minimum Confidence")
+    print(f"{gate['minimum_confidence']:.0f}%")
+    print("")
+    print("Average Confidence")
+    print(f"{gate['average_confidence']:.0f}%")
+    print("")
+    print("Confidence")
+    print(gate["confidence"])
+    print("")
+    print("Duplicate Check")
+    print(gate["duplicate_check"])
+    for relaxation in plan.constraint_relaxations:
+        print("")
+        print("Constraint Relaxed")
+        print(relaxation["constraint"])
+        print("")
+        print("Reason")
+        print(relaxation["reason"])
+    print("")
+    print("Status")
+    print(gate["status"])
+
+
+def print_blocked_reasons(plan: AtlasPortfolioPlan) -> None:
+    """Print specific blocked-selection reasons."""
+    if not plan.selection_failure_reasons:
+        return
+    print("")
+    print("Selection Blocked")
+    for reason in plan.selection_failure_reasons:
+        print(reason)
 
 
 def handoff_to_forge(
@@ -188,8 +239,6 @@ def print_research_planner_output(
     print("")
     print("Estimated Image Cost")
     print(estimate.render())
-    print("")
-    print("Awaiting Approval")
 
 
 def _competition_label(score: float) -> str:

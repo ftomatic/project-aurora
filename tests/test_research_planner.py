@@ -30,6 +30,7 @@ from project_aurora.storage.csv_storage import CSVStorage  # noqa: E402
 from project_aurora.storage.memory_manager import MemoryManager  # noqa: E402
 from scripts.run_research_planner import (  # noqa: E402
     handoff_to_forge,
+    print_quality_gate,
     request_production_approval,
 )
 
@@ -254,6 +255,125 @@ class ResearchPlannerTest(unittest.TestCase):
         self.assertEqual(created, 5)
         self.assertEqual(len(self.queue.list_jobs()), 5)
         self.assertTrue(all(job.status == "READY" for job in self.queue.list_jobs()))
+
+    def test_four_selected_with_confidence_pass_uses_replacement_search(self) -> None:
+        opportunities = (
+            opportunity(0, confidence=88),
+            opportunity(1, confidence=88),
+            opportunity(2, confidence=88),
+            opportunity(3, confidence=88),
+            opportunity(
+                20,
+                niche="Animals",
+                audience="pet buyers",
+                season="Evergreen",
+                product_type="clipart",
+                style="Realistic",
+                confidence=88,
+            ),
+        )
+
+        plan = AtlasPortfolioManager(
+            config=self.config(minimum_confidence=85),
+            queue_manager=self.queue,
+            memory=self.memory,
+        ).build_portfolio(opportunities)
+
+        self.assertEqual(len(plan.selected), 5)
+        self.assertEqual(plan.quality_gate["portfolio_size"], "PASS")
+        self.assertEqual(plan.quality_gate["confidence"], "PASS")
+        self.assertEqual(plan.quality_gate["status"], "READY_FOR_APPROVAL")
+
+    def test_fifth_candidate_found_without_relaxation(self) -> None:
+        opportunities = tuple(opportunity(index, confidence=89) for index in range(5))
+
+        plan = AtlasPortfolioManager(
+            config=self.config(),
+            queue_manager=self.queue,
+            memory=self.memory,
+        ).build_portfolio(opportunities)
+
+        self.assertEqual(len(plan.selected), 5)
+        self.assertEqual(plan.constraint_relaxations, ())
+
+    def test_fifth_candidate_found_after_one_controlled_relaxation(self) -> None:
+        opportunities = (
+            opportunity(0),
+            opportunity(1),
+            opportunity(2),
+            opportunity(3),
+            opportunity(
+                10,
+                niche="Animals",
+                audience="pet buyers",
+                season="Evergreen",
+                product_type="wall art",
+                style="Realistic",
+                confidence=90,
+            ),
+        )
+
+        plan = AtlasPortfolioManager(
+            config=self.config(),
+            queue_manager=self.queue,
+            memory=self.memory,
+        ).build_portfolio(opportunities)
+
+        self.assertEqual(len(plan.selected), 5)
+        self.assertEqual(
+            plan.constraint_relaxations[0]["constraint"],
+            "Allow second product type",
+        )
+        self.assertEqual(plan.quality_gate["status"], "READY_FOR_APPROVAL")
+
+    def test_confidence_pass_but_size_failure_is_reported_separately(self) -> None:
+        opportunities = tuple(opportunity(index, confidence=88) for index in range(4))
+
+        plan = AtlasPortfolioManager(
+            config=self.config(minimum_confidence=85),
+            queue_manager=self.queue,
+            memory=self.memory,
+        ).build_portfolio(opportunities)
+
+        self.assertEqual(plan.quality_gate["required_products"], 5)
+        self.assertEqual(plan.quality_gate["selected_products"], 4)
+        self.assertEqual(plan.quality_gate["portfolio_size"], "FAIL")
+        self.assertEqual(plan.quality_gate["confidence"], "PASS")
+        self.assertEqual(plan.quality_gate["status"], "QUALITY_GATE_BLOCKED")
+
+    def test_size_pass_but_confidence_failure_is_reported_separately(self) -> None:
+        opportunities = tuple(opportunity(index, confidence=86) for index in range(5))
+
+        plan = AtlasPortfolioManager(
+            config=self.config(minimum_confidence=90),
+            queue_manager=self.queue,
+            memory=self.memory,
+        ).build_portfolio(opportunities)
+
+        self.assertEqual(plan.quality_gate["selected_products"], 5)
+        self.assertEqual(plan.quality_gate["portfolio_size"], "PASS")
+        self.assertEqual(plan.quality_gate["confidence"], "FAIL")
+        self.assertEqual(plan.quality_gate["status"], "QUALITY_GATE_BLOCKED")
+
+    def test_exactly_five_products_required_before_approval(self) -> None:
+        opportunities = tuple(opportunity(index, confidence=88) for index in range(4))
+        plan = AtlasPortfolioManager(
+            config=self.config(minimum_confidence=85),
+            queue_manager=self.queue,
+            memory=self.memory,
+        ).build_portfolio(opportunities)
+
+        with redirect_stdout(StringIO()) as output:
+            approved = request_production_approval(
+                plan,
+                estimate=type("Estimate", (), {"render": lambda self: "$0.80"})(),
+                input_fn=lambda prompt: "APPROVE",
+            )
+            print_quality_gate(plan)
+
+        self.assertFalse(approved)
+        self.assertIn("Selected Products\n4", output.getvalue())
+        self.assertIn("Portfolio Size\nFAIL", output.getvalue())
 
 
 if __name__ == "__main__":
