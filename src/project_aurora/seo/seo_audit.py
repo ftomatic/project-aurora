@@ -7,6 +7,11 @@ from pathlib import Path
 from typing import Any
 
 from project_aurora.seo.seo_engine import SEOEngine
+from project_aurora.seo.description_builder import (
+    DOWNLOAD_DISCLAIMER_SECTION,
+    PURCHASE_SECTION,
+    RAINBOW_MILK_STUDIO_DESCRIPTION,
+)
 from project_aurora.storage.memory_manager import MemoryManager
 
 RECONSTRUCTED_SEO_SOURCE = "RECONSTRUCTED_FROM_VERIFIED_JOB_DATA"
@@ -46,6 +51,7 @@ def audit_listing_seo(
         seo = _load_job_seo(report)
         tags = tuple(str(tag) for tag in seo.get("tags", ())) if seo else ()
         title = str(seo.get("title", "")) if seo else ""
+        description = str(seo.get("description", "")) if seo else ""
         tag_key = tuple(tag.casefold() for tag in tags)
         duplicate_with = seen_tags.get(tag_key, "") if tag_key else ""
         if tag_key and not duplicate_with:
@@ -57,19 +63,25 @@ def audit_listing_seo(
         status = "VERIFIED"
         title_status = "MATCH"
         tags_status = "MATCH"
+        description_status = "MATCH"
         if not seo:
             status = "MISSING_SEO"
             title_status = "MISSING"
             tags_status = "MISSING"
+            description_status = "MISSING"
         elif not _seo_matches_report(seo, report):
             status = "MISMATCH"
             title_status = "MISMATCH"
+            description_status = "MISMATCH"
         elif not _valid_tags(tags):
             status = "INVALID_TAGS"
             tags_status = "INVALID"
         elif not _valid_title(title, product):
             status = "INVALID_TITLE"
             title_status = "INVALID"
+        elif not _valid_description(description, product):
+            status = "INVALID_DESCRIPTION"
+            description_status = "INVALID"
         elif duplicate_title_with:
             status = "DUPLICATE_TITLE"
             title_status = "DUPLICATE"
@@ -82,9 +94,12 @@ def audit_listing_seo(
                 "etsy_listing_id": listing_id_text,
                 "current_etsy_title": _current_title_from_report(report),
                 "proposed_title": title,
+                "current_etsy_description": _current_description_from_report(report),
+                "proposed_description": description,
                 "seo_package_job_id": str(seo.get("job_id", "")) if seo else "",
                 "title_match_status": title_status,
                 "tags_match_status": tags_status,
+                "description_match_status": description_status,
                 "overall_status": status,
                 "tags": tags,
                 "proposed_tags": tags,
@@ -112,6 +127,8 @@ def print_audit(records: tuple[dict[str, Any], ...]) -> None:
         print(record["title_match_status"])
         print("Tags Match Status")
         print(record["tags_match_status"])
+        print("Description Match Status")
+        print(record["description_match_status"])
         print("Overall Status")
         print(record["overall_status"])
         print("")
@@ -146,9 +163,13 @@ def _reconstruct_job_seo_if_possible(report: dict[str, Any]) -> None:
     seo_path = job_root / "seo" / "seo_package.json"
     if seo_path.exists():
         existing = _load_job_seo(report)
-        if existing and _seo_matches_report(existing, report) and _valid_tags(
-            tuple(str(tag) for tag in existing.get("tags", ()))
-        ) and _valid_title(str(existing.get("title", "")), product_name):
+        if (
+            existing
+            and _seo_matches_report(existing, report)
+            and _valid_tags(tuple(str(tag) for tag in existing.get("tags", ())))
+            and _valid_title(str(existing.get("title", "")), product_name)
+            and _valid_description(str(existing.get("description", "")), product_name)
+        ):
             return
     else:
         existing = {}
@@ -194,6 +215,8 @@ def _reconstruct_job_seo_if_possible(report: dict[str, Any]) -> None:
     if not _valid_tags(tuple(record["tags"])):
         return
     if not _valid_title(str(record["title"]), product_name):
+        return
+    if not _valid_description(str(record["description"]), product_name):
         return
     seo_path.parent.mkdir(parents=True, exist_ok=True)
     seo_path.write_text(
@@ -254,6 +277,35 @@ def _valid_title(title: str, product_name: str) -> bool:
     return True
 
 
+def _valid_description(description: str, product_name: str) -> bool:
+    if not description or len(description) > 13000:
+        return False
+    if description == RAINBOW_MILK_STUDIO_DESCRIPTION:
+        return False
+    if PURCHASE_SECTION not in description:
+        return False
+    if DOWNLOAD_DISCLAIMER_SECTION not in description:
+        return False
+    lowered = description.casefold()
+    product_lower = product_name.casefold()
+    product_tokens = {
+        token
+        for token in product_lower.replace("-", " ").split()
+        if len(token) > 2
+    }
+    description_tokens = set(lowered.replace("-", " ").replace(",", " ").split())
+    if not (product_tokens & description_tokens):
+        return False
+    if "summer berry" in lowered or "girls party decor" in lowered:
+        return False
+    if "strawberry" not in product_lower and ("strawberry" in lowered or "berry" in lowered):
+        return False
+    if "party" not in product_lower and "birthday" not in product_lower:
+        if "cupcake" in lowered or "favor tag" in lowered:
+            return False
+    return True
+
+
 def _current_title_from_report(report: dict[str, Any]) -> str:
     metadata = report.get("metadata")
     if not isinstance(metadata, dict):
@@ -265,6 +317,20 @@ def _current_title_from_report(report: dict[str, Any]) -> str:
             return response["title"]
         if isinstance(etsy_draft.get("title"), str):
             return etsy_draft["title"]
+    return "UNKNOWN_NOT_QUERIED"
+
+
+def _current_description_from_report(report: dict[str, Any]) -> str:
+    metadata = report.get("metadata")
+    if not isinstance(metadata, dict):
+        return "UNKNOWN_NOT_QUERIED"
+    etsy_draft = metadata.get("etsy_draft")
+    if isinstance(etsy_draft, dict):
+        response = etsy_draft.get("response")
+        if isinstance(response, dict) and isinstance(response.get("description"), str):
+            return response["description"]
+        if isinstance(etsy_draft.get("description"), str):
+            return etsy_draft["description"]
     return "UNKNOWN_NOT_QUERIED"
 
 

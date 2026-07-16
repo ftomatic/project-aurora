@@ -34,8 +34,13 @@ from project_aurora.production.product_factory import (  # noqa: E402
 )
 from project_aurora.production.production_report import ProductionReport  # noqa: E402
 from project_aurora.seo.seo_audit import audit_listing_seo  # noqa: E402
+from project_aurora.seo.description_builder import (
+    DOWNLOAD_DISCLAIMER_SECTION,
+    PURCHASE_SECTION,
+)
 from project_aurora.storage.csv_storage import CSVStorage  # noqa: E402
 from project_aurora.storage.memory_manager import MemoryManager  # noqa: E402
+from scripts.fix_existing_etsy_descriptions import repair_existing_etsy_descriptions  # noqa: E402
 from scripts.fix_existing_etsy_titles import repair_existing_etsy_titles  # noqa: E402
 from scripts.fix_existing_etsy_tags import repair_existing_etsy_tags  # noqa: E402
 
@@ -181,6 +186,27 @@ class ProductSpecificSEOTest(unittest.TestCase):
         self.assertIn("floral", wildflower_title)
         self.assertTrue("printable" in wildflower_title or "digital" in wildflower_title)
 
+    def test_five_products_receive_distinct_job_specific_descriptions(self) -> None:
+        packages = [
+            self.runner.generate_seo(self.job(job_id, product_name, category))
+            for job_id, product_name, category in FIVE_PRODUCTS
+        ]
+        descriptions = tuple(package.description for package in packages)
+
+        self.assertEqual(len(set(descriptions)), 5)
+        for package in packages:
+            lowered = package.description.casefold()
+            self.assertIn(PURCHASE_SECTION, package.description)
+            self.assertIn(DOWNLOAD_DISCLAIMER_SECTION, package.description)
+            self.assertIn(package.product_name.casefold().split()[0], lowered)
+            if "strawberry" not in package.product_name.casefold():
+                self.assertNotIn("summer berry", lowered)
+                self.assertNotIn("girls party decor", lowered)
+                self.assertNotIn("strawberry", lowered)
+            if "party" not in package.product_name.casefold() and "birthday" not in package.product_name.casefold():
+                self.assertNotIn("cupcake", lowered)
+                self.assertNotIn("favor tag", lowered)
+
     def test_etsy_payload_receives_correct_job_specific_tags(self) -> None:
         job = self.job(*PRODUCTS[1])
         files = self.write_final_images(job)
@@ -205,6 +231,7 @@ class ProductSpecificSEOTest(unittest.TestCase):
 
         self.assertEqual(payload.tags, package.tags)
         self.assertEqual(payload.title, package.title)
+        self.assertEqual(payload.description, package.description)
         self.assertIn("wildflower", payload.tags)
         self.assertNotIn("spring bunny", payload.tags)
 
@@ -299,6 +326,41 @@ class ProductSpecificSEOTest(unittest.TestCase):
             self.assertEqual(tuple(fields.keys()), ("title",))
             self.assertNotIn("Summer Berry Invitation", fields["title"])
             self.assertNotIn("Cupcake Toppers", fields["title"])
+
+    def test_description_repair_patches_only_description(self) -> None:
+        jobs = [self.job(*product) for product in FIVE_PRODUCTS]
+        for index, job in enumerate(jobs, start=1):
+            self.save_verified_report(job, f"listing-{index}")
+        client = FakePatchClient(
+            tuple(
+                {
+                    "listing_id": f"listing-{index}",
+                    "state": "draft",
+                    "title": "Current title",
+                    "description": "Old generic strawberry description",
+                    "tags": ["old tag"],
+                }
+                for index in range(1, 6)
+            )
+        )
+
+        with redirect_stdout(StringIO()):
+            report = repair_existing_etsy_descriptions(
+                self.memory,
+                client,  # type: ignore[arg-type]
+                input_fn=lambda _prompt: "FIX 5 DESCRIPTIONS",
+            )
+
+        self.assertEqual(report["status"], "SUCCESS")
+        self.assertEqual(len(client.calls), 5)
+        descriptions = []
+        for _listing_id, fields in client.calls:
+            self.assertEqual(tuple(fields.keys()), ("description",))
+            description = fields["description"]
+            descriptions.append(description)
+            self.assertIn(PURCHASE_SECTION, description)
+            self.assertIn(DOWNLOAD_DISCLAIMER_SECTION, description)
+        self.assertEqual(len({str(item) for item in descriptions}), 5)
 
     def test_published_listing_is_skipped_before_patch(self) -> None:
         jobs = [self.job(*product) for product in FIVE_PRODUCTS]

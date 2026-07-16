@@ -11,7 +11,10 @@ from project_aurora.image_generation.commercial_image_exporter import (
     validate_commercial_png,
 )
 from project_aurora.listing.listing_package import ListingPackage
-from project_aurora.seo.description_builder import RAINBOW_MILK_STUDIO_DESCRIPTION
+from project_aurora.seo.description_builder import (
+    DOWNLOAD_DISCLAIMER_SECTION,
+    PURCHASE_SECTION,
+)
 from project_aurora.seo.seo_package import SEOPackage
 
 
@@ -148,8 +151,10 @@ class EtsyListingMapper:
             errors.append("RainbowMilkStudio listing price must be 1.99.")
         if payload.quantity <= 0:
             errors.append("Quantity must be greater than zero.")
-        if payload.description != RAINBOW_MILK_STUDIO_DESCRIPTION:
-            errors.append("Required RainbowMilkStudio listing description is missing.")
+        if PURCHASE_SECTION not in payload.description:
+            errors.append("Required RainbowMilkStudio purchase section is missing.")
+        if DOWNLOAD_DISCLAIMER_SECTION not in payload.description:
+            errors.append("Required RainbowMilkStudio download disclaimer is missing.")
         if "FREE COMMERCIAL LICENSE" not in payload.description:
             errors.append("FREE COMMERCIAL LICENSE is required in the description.")
         if payload.ai_disclosure != DEFAULT_AI_DISCLOSURE:

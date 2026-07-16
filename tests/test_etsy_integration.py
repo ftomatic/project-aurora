@@ -32,6 +32,8 @@ from project_aurora.integrations.etsy.etsy_result import (  # noqa: E402
     EtsyDraftResult,
 )
 from project_aurora.seo.description_builder import (  # noqa: E402
+    DOWNLOAD_DISCLAIMER_SECTION,
+    PURCHASE_SECTION,
     RAINBOW_MILK_STUDIO_DESCRIPTION,
 )
 from project_aurora.listing.listing_package import (  # noqa: E402
@@ -152,7 +154,9 @@ class EtsyIntegrationTest(unittest.TestCase):
         self.assertEqual(payload.listing_type, "download")
         self.assertEqual(payload.price, 1.99)
         self.assertEqual(payload.quantity, 999)
-        self.assertEqual(payload.description, RAINBOW_MILK_STUDIO_DESCRIPTION)
+        self.assertNotEqual(payload.description, RAINBOW_MILK_STUDIO_DESCRIPTION)
+        self.assertIn(PURCHASE_SECTION, payload.description)
+        self.assertIn(DOWNLOAD_DISCLAIMER_SECTION, payload.description)
         self.assertIn("FREE COMMERCIAL LICENSE", payload.description)
         self.assertEqual(payload.who_made, "i_did")
         self.assertEqual(payload.when_made, "made_to_order")

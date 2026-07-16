@@ -12,6 +12,8 @@ SRC_PATH = PROJECT_ROOT / "src"
 sys.path.insert(0, str(SRC_PATH))
 
 from project_aurora.seo.description_builder import (  # noqa: E402
+    DOWNLOAD_DISCLAIMER_SECTION,
+    PURCHASE_SECTION,
     DescriptionBuilder,
     RAINBOW_MILK_STUDIO_DESCRIPTION,
 )
@@ -72,7 +74,9 @@ class SEOEngineTest(unittest.TestCase):
             tags=("strawberry party", "birthday printable"),
         )
 
-        self.assertEqual(description, RAINBOW_MILK_STUDIO_DESCRIPTION)
+        self.assertNotEqual(description, RAINBOW_MILK_STUDIO_DESCRIPTION)
+        self.assertIn(PURCHASE_SECTION, description)
+        self.assertIn(DOWNLOAD_DISCLAIMER_SECTION, description)
         self.assertIn("4 high-quality 300 DPI PNG files", description)
         self.assertIn("3600 × 3600 pixels", description)
 
@@ -86,7 +90,7 @@ class SEOEngineTest(unittest.TestCase):
         )
         self.assertEqual(len(package.tags), 13)
         self.assertGreaterEqual(package.seo_score, 90)
-        self.assertEqual(package.description, RAINBOW_MILK_STUDIO_DESCRIPTION)
+        self.assertIn(PURCHASE_SECTION, package.description)
         self.assertEqual(package.warnings, ())
 
     def test_seo_engine_saves_package_to_memory(self) -> None:

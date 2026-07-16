@@ -122,10 +122,24 @@ class SEOEngine:
         product_name: str,
         product_type: str,
     ) -> str:
-        return (
-            f"Cute cottagecore strawberry {product_type.lower()} for summer "
-            f"birthday celebrations, centered on {product_name}."
-        )
+        lowered = f"{product_name} {product_type}".casefold()
+        if "wedding" in lowered or "invitation" in lowered:
+            theme = "romantic floral"
+        elif "nursery" in lowered or "baby" in lowered:
+            theme = "soft nursery"
+        elif "dark academia" in lowered:
+            theme = "moody vintage academic"
+        elif "sticker" in lowered or "planner" in lowered:
+            theme = "organized planner"
+        elif "paper" in lowered:
+            theme = "coordinated patterned"
+        elif "birthday" in lowered or "party" in lowered:
+            theme = "celebration-ready party"
+        elif "clipart" in lowered:
+            theme = "commercial graphics"
+        else:
+            theme = "handmade-style digital"
+        return f"{theme} {product_type.lower()} centered on {product_name}."
 
     @staticmethod
     def _warnings(title: str, tags: tuple[str, ...]) -> tuple[str, ...]:

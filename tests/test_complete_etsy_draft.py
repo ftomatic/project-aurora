@@ -32,6 +32,7 @@ from project_aurora.integrations.etsy.etsy_result import (  # noqa: E402
     EtsyDigitalFileUploadResult,
 )
 from project_aurora.seo.description_builder import (  # noqa: E402
+    PURCHASE_SECTION,
     RAINBOW_MILK_STUDIO_DESCRIPTION,
 )
 from project_aurora.storage.csv_storage import CSVStorage  # noqa: E402
@@ -176,7 +177,8 @@ class CompleteEtsyDraftTest(unittest.TestCase):
         self.assertEqual(payload["price"], 1.99)
         self.assertEqual(payload["quantity"], 999)
         self.assertEqual(payload["taxonomy_id"], 1250)
-        self.assertEqual(payload["description"], RAINBOW_MILK_STUDIO_DESCRIPTION)
+        self.assertNotEqual(payload["description"], RAINBOW_MILK_STUDIO_DESCRIPTION)
+        self.assertIn(PURCHASE_SECTION, payload["description"])
         self.assertEqual(len(payload["tags"]), 13)
         self.assertEqual(payload["should_auto_renew"], True)
         self.assertNotIn("ai_generated_summary", payload)

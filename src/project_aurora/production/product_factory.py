@@ -816,6 +816,7 @@ def _validate_job_seo_package(
     product_name = getattr(package, "product_name", "")
     tags = tuple(str(tag).strip() for tag in getattr(package, "tags", ()))
     title = str(getattr(package, "title", "")).strip()
+    description = str(getattr(package, "description", "")).strip()
     if job_id != job.id:
         raise RuntimeError("SEO package job_id does not match ProductionJob id.")
     if product_name != job.product_name:
@@ -834,6 +835,8 @@ def _validate_job_seo_package(
         raise RuntimeError("SEO package title is not relevant to the current product.")
     if previous_title and title.casefold() == previous_title.casefold():
         raise RuntimeError("SEO package title is identical to the immediately previous product.")
+    if not _description_is_relevant_to_job(description, job):
+        raise RuntimeError("SEO package description is not relevant to the current product.")
     if previous_tags and tuple(tag.casefold() for tag in tags) == tuple(
         tag.casefold() for tag in previous_tags
     ):
@@ -968,5 +971,41 @@ def _title_is_relevant_to_job(title: str, job: ProductionJob) -> bool:
     if "birthday" in product_lower and ({"wall", "art"} <= title_tokens):
         return False
     if "clipart" in product_lower and ({"wall", "art"} <= title_tokens):
+        return False
+    return True
+
+
+def _description_is_relevant_to_job(description: str, job: ProductionJob) -> bool:
+    from project_aurora.seo.description_builder import (
+        DOWNLOAD_DISCLAIMER_SECTION,
+        PURCHASE_SECTION,
+        RAINBOW_MILK_STUDIO_DESCRIPTION,
+    )
+
+    if not description or len(description) > 13000:
+        return False
+    if description == RAINBOW_MILK_STUDIO_DESCRIPTION:
+        return False
+    if PURCHASE_SECTION not in description:
+        return False
+    if DOWNLOAD_DISCLAIMER_SECTION not in description:
+        return False
+    lowered = description.casefold()
+    product_lower = job.product_name.casefold()
+    product_tokens = {
+        token
+        for token in re.split(r"[^a-z0-9]+", product_lower)
+        if len(token) > 2
+    }
+    if not (product_tokens & set(re.split(r"[^a-z0-9]+", lowered))):
+        return False
+    legacy_terms = ("summer berry", "girls party decor")
+    if any(term in lowered for term in legacy_terms):
+        return False
+    strawberry_terms = ("strawberry", "berry")
+    party_terms = ("cupcake", "favor tag")
+    if "strawberry" not in product_lower and any(term in lowered for term in strawberry_terms):
+        return False
+    if "party" not in product_lower and "birthday" not in product_lower and any(term in lowered for term in party_terms):
         return False
     return True
