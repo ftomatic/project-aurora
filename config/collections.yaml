@@ -1,0 +1,4 @@
+collection_size: 5
+minimum_collection_score: 80
+allow_single_products: false
+cross_sell_weight: 15

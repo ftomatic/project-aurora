@@ -46,6 +46,10 @@ class MuseEngine:
         """Return available styles."""
         return self._library.profiles
 
+    def style_profile(self, style_name: str) -> MuseStyleProfile:
+        """Return a style profile by name."""
+        return self._library.get(style_name)
+
     def select_style(
         self,
         product: str,
