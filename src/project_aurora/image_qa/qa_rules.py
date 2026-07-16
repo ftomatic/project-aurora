@@ -251,6 +251,56 @@ class RenderingConsistencyRule:
         )
 
 
+class BackgroundTreatmentRule:
+    """Ensure generated metadata matches the chosen background treatment."""
+
+    name = "Background Treatment"
+
+    def evaluate(self, context: AssetContext) -> RuleResult:
+        expected = context.metadata.get("expected_background_treatment")
+        actual = context.metadata.get("background_treatment")
+        if expected is None or expected == "":
+            return RuleResult(self.name, True, message="No background expectation provided.")
+        passed = str(expected).casefold() in str(actual).casefold()
+        return RuleResult(
+            rule_name=self.name,
+            passed=passed,
+            message="Image metadata matches chosen background." if passed else "Image metadata does not match chosen background.",
+        )
+
+
+class ProductTypeSuitabilityRule:
+    """Ensure composition metadata is suitable for product type."""
+
+    name = "Product Type Suitability"
+
+    def evaluate(self, context: AssetContext) -> RuleResult:
+        product_type = str(context.metadata.get("expected_product_type", "")).casefold()
+        composition = str(context.metadata.get("composition", "")).casefold()
+        background = str(context.metadata.get("background_treatment", "")).casefold()
+        if not product_type:
+            return RuleResult(self.name, True, message="No product type expectation provided.")
+        if "digital paper" in product_type:
+            passed = "pattern" in composition or "tile" in composition or "seamless" in composition
+            message = "Digital paper is pattern-like." if passed else "Digital paper is not tileable/pattern-like."
+        elif "clipart" in product_type:
+            passed = ("isolated" in composition or "elements" in composition) and "room mockup" not in background
+            message = "Clipart uses isolated elements." if passed else "Clipart is not presented as isolated elements."
+        elif "wall art" in product_type:
+            passed = "isolated clipart" not in composition
+            message = "Wall art composition is suitable." if passed else "Wall art is presented only as isolated clipart."
+        elif "sticker" in product_type:
+            passed = "sticker" in composition or "grid" in composition or "cluster" in composition
+            message = "Sticker sheet composition is suitable." if passed else "Sticker sheet lacks grid/cluster layout."
+        elif "invitation" in product_type:
+            passed = "invitation" in composition or "layout" in composition or "typography" in composition
+            message = "Invitation layout is suitable." if passed else "Invitation lacks layout/typography hierarchy."
+        else:
+            passed = True
+            message = "Product type has no specific suitability rule."
+        return RuleResult(rule_name=self.name, passed=passed, message=message)
+
+
 DEFAULT_QA_RULES: tuple[QARule, ...] = (
     FileExistsRule(),
     DuplicateFilenameRule(),
@@ -263,4 +313,6 @@ DEFAULT_QA_RULES: tuple[QARule, ...] = (
     PaletteMatchRule(),
     CompositionMatchRule(),
     RenderingConsistencyRule(),
+    BackgroundTreatmentRule(),
+    ProductTypeSuitabilityRule(),
 )

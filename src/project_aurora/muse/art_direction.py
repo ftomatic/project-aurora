@@ -20,6 +20,18 @@ class ArtDirection:
     mood: str
     trend_score: int
     portfolio_diversity: str
+    category: str = ""
+    rendering_family: str = ""
+    background_treatment: str = ""
+    lighting: str = ""
+    texture: str = ""
+    typography_direction: str = ""
+    commercial_rationale: str = ""
+    proven_winner_evidence_used: str = "none"
+    diversity_penalty_applied: int = 0
+    dominant_palette_family: str = ""
+    texture_family: str = ""
+    negative_style_constraints: tuple[str, ...] = field(default_factory=tuple)
     alternative_styles: tuple[tuple[str, int], ...] = field(default_factory=tuple)
     created_at: datetime = field(default_factory=datetime.now)
 
@@ -31,6 +43,7 @@ class ArtDirection:
         if not 0 <= self.confidence <= 100:
             raise ValueError("confidence must be between 0 and 100.")
         object.__setattr__(self, "alternative_styles", tuple(self.alternative_styles))
+        object.__setattr__(self, "negative_style_constraints", tuple(self.negative_style_constraints))
 
     @property
     def status(self) -> str:

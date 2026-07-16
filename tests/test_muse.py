@@ -13,8 +13,10 @@ sys.path.insert(0, str(SRC_PATH))
 
 from project_aurora.image_qa.qa_rules import (  # noqa: E402
     AssetContext,
+    BackgroundTreatmentRule,
     CompositionMatchRule,
     PaletteMatchRule,
+    ProductTypeSuitabilityRule,
     RenderingConsistencyRule,
     StyleMatchRule,
 )
@@ -55,6 +57,46 @@ class MuseTest(unittest.TestCase):
         self.assertIn("Flat Vector", names)
         self.assertIn("Dark Academia", names)
 
+    def test_category_playbook_ranking(self) -> None:
+        direction = self.engine.select_style(
+            product="Teacher Reward Stickers",
+            audience="teachers",
+            season="Back to School",
+            product_type="teacher printables",
+        )
+
+        self.assertEqual(direction.recommended_style, "Flat Vector")
+        self.assertEqual(direction.rendering_family, "vector")
+        self.assertIn("no watercolor bleed", direction.negative_style_constraints)
+
+    def test_proven_winner_raises_related_coastal_style_score(self) -> None:
+        direction = self.engine.select_style(
+            product="Coastal Beach Wall Art",
+            audience="home decor buyers",
+            season="Summer",
+            product_type="coastal wall art",
+        )
+
+        self.assertEqual(direction.recommended_style, "Coastal Watercolor")
+        self.assertIn("Coastal Beach Watercolor", direction.proven_winner_evidence_used)
+
+    def test_proven_winner_does_not_force_coastal_on_unrelated_categories(self) -> None:
+        teacher = self.engine.select_style(
+            product="Teacher Stickers",
+            audience="teachers",
+            season="Back to School",
+            product_type="teacher printables",
+        )
+        wedding = self.engine.select_style(
+            product="Wedding Invitation",
+            audience="brides",
+            season="Wedding Season",
+            product_type="wedding",
+        )
+
+        self.assertNotEqual(teacher.recommended_style, "Coastal Watercolor")
+        self.assertNotEqual(wedding.recommended_style, "Coastal Watercolor")
+
     def test_different_products_choose_different_styles(self) -> None:
         chosen: list[str] = []
         for product, audience, season, competition, product_type in PRODUCTS:
@@ -73,20 +115,40 @@ class MuseTest(unittest.TestCase):
         self.assertIn("Pressed Flowers", chosen)
 
     def test_same_style_not_overused_in_batch(self) -> None:
-        chosen: list[str] = []
-        for product, audience, season, competition, product_type in PRODUCTS:
-            direction = self.engine.select_style(
-                product=product,
-                audience=audience,
-                season=season,
-                competition=competition,
-                current_portfolio=tuple(chosen),
-                product_type=product_type,
+        directions = self.engine.select_batch(
+            tuple(
+                {
+                    "product": product,
+                    "audience": audience,
+                    "season": season,
+                    "competition": competition,
+                    "product_type": product_type,
+                }
+                for product, audience, season, competition, product_type in PRODUCTS
             )
-            chosen.append(direction.recommended_style)
+        )
 
-        for style in set(chosen):
-            self.assertLessEqual(chosen.count(style), 2)
+        for dimension in (
+            "rendering_family",
+            "background_treatment",
+            "composition",
+            "dominant_palette_family",
+            "texture_family",
+        ):
+            values = [str(getattr(direction, dimension)) for direction in directions]
+            for value in set(values):
+                self.assertLessEqual(values.count(value), 2)
+
+    def test_composition_varies_by_product_type(self) -> None:
+        clipart = self.engine.select_style("Mushroom Clipart", product_type="clipart")
+        paper = self.engine.select_style("Coastal Digital Paper", product_type="digital paper")
+        invitation = self.engine.select_style("Wedding Invitation", product_type="invitations")
+        sticker = self.engine.select_style("Teacher Stickers", product_type="sticker sheets")
+
+        self.assertIn("isolated", clipart.composition)
+        self.assertIn("seamless pattern", paper.composition)
+        self.assertIn("invitation", invitation.composition)
+        self.assertIn("grid", sticker.composition)
 
     def test_prompt_contains_muse_style_information(self) -> None:
         direction = self.engine.select_style(
@@ -103,14 +165,24 @@ class MuseTest(unittest.TestCase):
             rendering_method=direction.rendering_method,
             composition=direction.composition,
             mood=direction.mood,
+            background_treatment=direction.background_treatment,
+            lighting=direction.lighting,
+            texture=direction.texture,
+            typography_direction=direction.typography_direction,
+            negative_style_constraints=direction.negative_style_constraints,
         )
 
         self.assertIn("Product: Autumn Mushroom", recipe.final_prompt)
         self.assertIn(f"Style: {direction.recommended_style}", recipe.final_prompt)
         self.assertIn(f"Palette: {direction.palette}", recipe.final_prompt)
-        self.assertIn(f"Rendering: {direction.rendering_method}", recipe.final_prompt)
+        self.assertIn(f"Rendering Family: {direction.rendering_method}", recipe.final_prompt)
         self.assertIn(f"Composition: {direction.composition}", recipe.final_prompt)
+        self.assertIn(f"Background: {direction.background_treatment}", recipe.final_prompt)
+        self.assertIn(f"Lighting: {direction.lighting}", recipe.final_prompt)
+        self.assertIn(f"Texture: {direction.texture}", recipe.final_prompt)
         self.assertIn(f"Mood: {direction.mood}", recipe.final_prompt)
+        for constraint in direction.negative_style_constraints:
+            self.assertIn(constraint, recipe.final_prompt)
 
     def test_style_memory_updates(self) -> None:
         direction = self.engine.select_style(
@@ -137,6 +209,9 @@ class MuseTest(unittest.TestCase):
                 "composition": "Sticker sheet with clear individual icons",
                 "expected_rendering": "Flat vector",
                 "rendering": "Flat vector illustration",
+                "expected_background_treatment": "white cuttable background",
+                "background_treatment": "white cuttable background",
+                "expected_product_type": "sticker sheets",
             },
         )
 
@@ -144,6 +219,8 @@ class MuseTest(unittest.TestCase):
         self.assertTrue(PaletteMatchRule().evaluate(context).passed)
         self.assertTrue(CompositionMatchRule().evaluate(context).passed)
         self.assertTrue(RenderingConsistencyRule().evaluate(context).passed)
+        self.assertTrue(BackgroundTreatmentRule().evaluate(context).passed)
+        self.assertTrue(ProductTypeSuitabilityRule().evaluate(context).passed)
 
     def test_image_qa_rejects_style_mismatch(self) -> None:
         context = AssetContext(
@@ -153,6 +230,18 @@ class MuseTest(unittest.TestCase):
         )
 
         self.assertFalse(StyleMatchRule().evaluate(context).passed)
+
+    def test_image_qa_rejects_product_type_mismatch(self) -> None:
+        context = AssetContext(
+            asset_path=Path("mock.png"),
+            all_asset_paths=(Path("mock.png"),),
+            metadata={
+                "expected_product_type": "digital paper",
+                "composition": "isolated clipart collage",
+            },
+        )
+
+        self.assertFalse(ProductTypeSuitabilityRule().evaluate(context).passed)
 
 
 if __name__ == "__main__":

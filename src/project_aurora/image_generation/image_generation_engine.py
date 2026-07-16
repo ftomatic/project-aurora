@@ -102,6 +102,13 @@ class ImageGenerationEngine:
                 "estimated_cost": estimate.total_cost,
                 "cost_per_image": estimate.cost_per_image,
                 "prompt_version": self._provider_config.prompt_version,
+                "expected_style": prompt_package.get("style", ""),
+                "expected_palette": prompt_package.get("palette", ""),
+                "expected_composition": prompt_package.get("composition", ""),
+                "expected_rendering": prompt_package.get("rendering_family")
+                or prompt_package.get("rendering_method", ""),
+                "expected_background_treatment": prompt_package.get("background_treatment", ""),
+                "expected_product_type": prompt_package.get("product_type", ""),
             },
         )
         self._memory.save_image_result(enriched_result)

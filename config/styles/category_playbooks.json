@@ -1,0 +1,15 @@
+{
+  "playbooks": {
+    "coastal wall art": ["coastal_watercolor", "airy_watercolor_landscape", "oil_painting", "fine_line_floral"],
+    "nursery": ["storybook_watercolor", "hand_painted_gouache", "kawaii", "scandinavian_minimal"],
+    "teacher printables": ["flat_vector", "kawaii", "retro_70s", "storybook_watercolor"],
+    "wedding": ["pressed_flower", "editorial_minimal", "fine_line_floral", "vintage_botanical"],
+    "clipart": ["hand_painted_gouache", "storybook_watercolor", "vintage_botanical", "flat_vector"],
+    "digital paper": ["coastal_watercolor", "vintage_botanical", "retro_70s", "scandinavian_minimal"],
+    "sticker sheets": ["flat_vector", "kawaii", "retro_70s", "hand_painted_gouache"],
+    "kitchen wall art": ["vintage_botanical", "folk_art", "scandinavian_minimal", "oil_painting"],
+    "seasonal holiday": ["folk_art", "retro_70s", "hand_painted_gouache", "victorian_engraving"],
+    "dark academia": ["victorian_engraving", "oil_painting", "editorial_minimal", "fine_line_floral"],
+    "invitations": ["pressed_flower", "editorial_minimal", "fine_line_floral", "storybook_watercolor"]
+  }
+}

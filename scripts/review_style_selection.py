@@ -45,13 +45,26 @@ def main() -> None:
         print(product)
         print("Chosen Style")
         print(direction.recommended_style)
-        print("Why Chosen")
-        print(direction.reason)
+        print("Rendering Family")
+        print(direction.rendering_family)
+        print("Palette")
+        print(direction.palette)
+        print("Composition")
+        print(direction.composition)
+        print("Background")
+        print(direction.background_treatment)
+        print("Commercial Rationale")
+        print(direction.commercial_rationale or direction.reason)
+        print("Proven Winner Influence")
+        print(direction.proven_winner_evidence_used)
         print("Alternative Styles")
         for style, score in direction.alternative_styles:
             print(f"{style}: {score}")
-        print("Portfolio Diversity")
-        print(direction.portfolio_diversity)
+        print("Diversity Summary")
+        print(
+            f"{direction.portfolio_diversity}; penalty "
+            f"{direction.diversity_penalty_applied}"
+        )
         print("")
 
 

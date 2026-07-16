@@ -66,16 +66,26 @@ class PromptComposer:
         rendering_method: str,
         composition: str,
         mood: str,
+        background_treatment: str = "",
+        lighting: str = "",
+        texture: str = "",
+        typography_direction: str = "",
+        negative_style_constraints: tuple[str, ...] = (),
         recipe_id: str = "latest",
     ) -> PromptRecipe:
         """Compose a prompt from Muse art-direction fields."""
         final_prompt = (
             f"Product: {product},\n"
             f"Style: {style},\n"
+            f"Rendering Family: {rendering_method},\n"
             f"Palette: {palette},\n"
-            f"Rendering: {rendering_method},\n"
             f"Composition: {composition},\n"
+            f"Background: {background_treatment or 'style-appropriate production background'},\n"
+            f"Lighting: {lighting or 'style-appropriate professional lighting'},\n"
+            f"Texture: {texture or 'style-consistent texture'},\n"
             f"Mood: {mood},\n"
+            f"Typography Direction: {typography_direction or 'none unless product type requires it'},\n"
+            f"Negative Style Constraints: {', '.join(negative_style_constraints) if negative_style_constraints else 'avoid mismatched rendering styles'},\n"
             "commercial digital printable artwork, cohesive product collection, "
             "high detail, clean production-ready assets."
         )
@@ -84,15 +94,16 @@ class PromptComposer:
             character=f"{product} cohesive product assets",
             style=style,
             color_palette=palette,
-            lighting="style-appropriate professional lighting",
+            lighting=lighting or "style-appropriate professional lighting",
             composition=composition,
-            background="transparent or clean printable background as appropriate",
+            background=background_treatment or "transparent or clean printable background as appropriate",
             rendering=rendering_method,
             commercial_requirements="commercial use digital download ready",
             consistency_rules="consistent palette, rendering method, composition, and mood",
             negative_prompt=(
                 "No text, No watermark, No logo, No cropped objects, "
-                "No inconsistent style, No mismatched palette"
+                "No inconsistent style, No mismatched palette, "
+                + ", ".join(negative_style_constraints)
             ),
             provider_formatting="single image prompt, comma-separated descriptive phrases",
             final_prompt=final_prompt,
