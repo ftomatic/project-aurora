@@ -245,16 +245,19 @@ class MuseTest(unittest.TestCase):
             all_asset_paths=(Path("mock.png"),),
             metadata={
                 "expected_style": "Flat Vector",
-                "style": "Flat Vector",
                 "expected_palette": "bright primary",
-                "palette": "bright primary, teal",
                 "expected_composition": "Sticker sheet",
-                "composition": "Sticker sheet with clear individual icons",
                 "expected_rendering": "Flat vector",
-                "rendering": "Flat vector illustration",
                 "expected_background_treatment": "white cuttable background",
-                "background_treatment": "white cuttable background",
                 "expected_product_type": "sticker sheets",
+                "visual_semantic_evaluation": {
+                    "style": {"status": "PASS", "score": 92},
+                    "palette": {"status": "PASS", "score": 90},
+                    "composition": {"status": "PASS", "score": 91},
+                    "rendering_family": {"status": "PASS", "score": 93},
+                    "background": {"status": "PASS", "score": 88},
+                    "product_type_suitability": {"status": "PASS", "score": 94},
+                },
             },
         )
 
@@ -269,7 +272,12 @@ class MuseTest(unittest.TestCase):
         context = AssetContext(
             asset_path=Path("mock.png"),
             all_asset_paths=(Path("mock.png"),),
-            metadata={"expected_style": "Flat Vector", "style": "Oil Painting"},
+            metadata={
+                "expected_style": "Flat Vector",
+                "visual_semantic_evaluation": {
+                    "style": {"status": "FAIL", "score": 20},
+                },
+            },
         )
 
         self.assertFalse(StyleMatchRule().evaluate(context).passed)
@@ -280,7 +288,9 @@ class MuseTest(unittest.TestCase):
             all_asset_paths=(Path("mock.png"),),
             metadata={
                 "expected_product_type": "digital paper",
-                "composition": "isolated clipart collage",
+                "visual_semantic_evaluation": {
+                    "product_type_suitability": {"status": "FAIL", "score": 18},
+                },
             },
         )
 

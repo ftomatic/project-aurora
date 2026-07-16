@@ -108,7 +108,8 @@ class ImageGenerationEngine:
                 "expected_rendering": prompt_package.get("rendering_family")
                 or prompt_package.get("rendering_method", ""),
                 "expected_background_treatment": prompt_package.get("background_treatment", ""),
-                "expected_product_type": prompt_package.get("product_type", ""),
+                "expected_product_type": prompt_package.get("product_type")
+                or prompt_package.get("category", ""),
             },
         )
         self._memory.save_image_result(enriched_result)

@@ -15,6 +15,7 @@ from project_aurora.image_qa.qa_result import (
     WARNING,
     QAResult,
 )
+from project_aurora.image_qa.qa_policy import ImageQAPolicy
 from project_aurora.image_qa.qa_rules import (
     DEFAULT_QA_RULES,
     AssetContext,
@@ -31,9 +32,11 @@ class ImageQAEngine:
         self,
         memory: MemoryManager,
         rules: tuple[QARule, ...] | None = None,
+        policy: ImageQAPolicy | None = None,
     ) -> None:
         self._memory = memory
         self._rules = rules or DEFAULT_QA_RULES
+        self._policy = policy or ImageQAPolicy()
 
     def run(self, image_result_id: str = "latest") -> tuple[QAResult, ...]:
         """Load generated image assets, evaluate them, and save QA results."""
@@ -81,7 +84,7 @@ class ImageQAEngine:
             metadata=metadata,
         )
         rule_results = tuple(rule.evaluate(context) for rule in self._rules)
-        return self._build_result(asset_path, rule_results)
+        return self._build_result(asset_path, rule_results, self._policy)
 
     def evaluate_image_findings(
         self,
@@ -112,20 +115,35 @@ class ImageQAEngine:
     def _build_result(
         asset_path: Path,
         rule_results: tuple[RuleResult, ...],
+        policy: ImageQAPolicy | None = None,
     ) -> QAResult:
+        resolved_policy = policy or ImageQAPolicy()
+        if resolved_policy.semantic_style_qa_mode == "off":
+            effective_results = tuple(
+                result
+                for result in rule_results
+                if result.rule_family != "style"
+            )
+        elif resolved_policy.semantic_style_qa_mode == "strict":
+            effective_results = tuple(
+                _strict_semantic_result(result)
+                for result in rule_results
+            )
+        else:
+            effective_results = rule_results
         checks_passed = tuple(
             result.rule_name
-            for result in rule_results
+            for result in effective_results
             if result.passed
         )
         checks_failed = tuple(
             result.rule_name
-            for result in rule_results
+            for result in effective_results
             if not result.passed and not result.warning
         )
         warnings = tuple(
             result.message
-            for result in rule_results
+            for result in effective_results
             if result.warning and result.message
         )
 
@@ -201,6 +219,11 @@ def _structured_finding(
             result.rule_name: int(result.confidence)
             for result in rule_results
         },
+        "semantic_evaluation_status": (
+            "NOT_EVALUATED"
+            if any(result.semantic_status == "NOT_EVALUATED" for result in rule_results)
+            else "EVALUATED"
+        ),
     }
     for rule_name, field_name in STYLE_RULE_FIELDS.items():
         result = by_name.get(rule_name)
@@ -212,8 +235,24 @@ def _structured_finding(
             }
         else:
             finding[field_name] = {
-                "status": "PASS" if result.passed else "FAIL",
+                "status": result.semantic_status or ("PASS" if result.passed else "FAIL"),
                 "message": result.message,
                 "confidence": int(result.confidence),
             }
     return finding
+
+
+def _strict_semantic_result(result: RuleResult) -> RuleResult:
+    if result.rule_family == "style" and result.semantic_status == "NOT_EVALUATED":
+        return RuleResult(
+            rule_name=result.rule_name,
+            passed=False,
+            warning=False,
+            message=(
+                f"{result.rule_name} requires visual semantic evaluation in strict mode."
+            ),
+            confidence=result.confidence,
+            rule_family=result.rule_family,
+            semantic_status=result.semantic_status,
+        )
+    return result

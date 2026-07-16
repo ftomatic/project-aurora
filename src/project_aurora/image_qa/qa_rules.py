@@ -27,6 +27,7 @@ class RuleResult:
     message: str = ""
     confidence: int = 100
     rule_family: str = "technical"
+    semantic_status: str = ""
 
 
 class QARule(Protocol):
@@ -189,171 +190,141 @@ class MetadataPresentRule:
 
 
 class StyleMatchRule:
-    """Ensure generated metadata matches the chosen Muse style."""
+    """Evaluate style only when visual semantic evidence is present."""
 
     name = "Style Match"
+    evidence_key = "style"
+    expectation_key = "expected_style"
 
     def evaluate(self, context: AssetContext) -> RuleResult:
-        expected = context.metadata.get("expected_style")
-        actual = context.metadata.get("style")
-        if expected is None:
-            return RuleResult(
-                self.name,
-                True,
-                message="No style expectation provided.",
-                rule_family="style",
-            )
-        passed = str(actual).casefold() == str(expected).casefold()
-        return RuleResult(
-            rule_name=self.name,
-            passed=passed,
-            message="Image metadata matches chosen style." if passed else "Image metadata does not match chosen style.",
-            confidence=100 if passed else 0,
-            rule_family="style",
-        )
+        return _semantic_rule_result(self.name, self.evidence_key, self.expectation_key, context)
 
 
 class PaletteMatchRule:
-    """Ensure generated metadata matches the chosen palette."""
+    """Evaluate palette only when visual semantic evidence is present."""
 
     name = "Palette Match"
+    evidence_key = "palette"
+    expectation_key = "expected_palette"
 
     def evaluate(self, context: AssetContext) -> RuleResult:
-        expected = context.metadata.get("expected_palette")
-        actual = context.metadata.get("palette")
-        if expected is None:
-            return RuleResult(
-                self.name,
-                True,
-                message="No palette expectation provided.",
-                rule_family="style",
-            )
-        passed = str(expected).casefold() in str(actual).casefold()
-        return RuleResult(
-            rule_name=self.name,
-            passed=passed,
-            message="Image metadata matches chosen palette." if passed else "Image metadata does not match chosen palette.",
-            confidence=100 if passed else 0,
-            rule_family="style",
-        )
+        return _semantic_rule_result(self.name, self.evidence_key, self.expectation_key, context)
 
 
 class CompositionMatchRule:
-    """Ensure generated metadata matches the chosen composition."""
+    """Evaluate composition only when visual semantic evidence is present."""
 
     name = "Composition Match"
+    evidence_key = "composition"
+    expectation_key = "expected_composition"
 
     def evaluate(self, context: AssetContext) -> RuleResult:
-        expected = context.metadata.get("expected_composition")
-        actual = context.metadata.get("composition")
-        if expected is None:
-            return RuleResult(
-                self.name,
-                True,
-                message="No composition expectation provided.",
-                rule_family="style",
-            )
-        passed = str(expected).casefold() in str(actual).casefold()
-        return RuleResult(
-            rule_name=self.name,
-            passed=passed,
-            message="Image metadata matches chosen composition." if passed else "Image metadata does not match chosen composition.",
-            confidence=100 if passed else 0,
-            rule_family="style",
-        )
+        return _semantic_rule_result(self.name, self.evidence_key, self.expectation_key, context)
 
 
 class RenderingConsistencyRule:
-    """Ensure generated metadata matches the chosen rendering method."""
+    """Evaluate rendering only when visual semantic evidence is present."""
 
     name = "Rendering Consistency"
+    evidence_key = "rendering_family"
+    expectation_key = "expected_rendering"
 
     def evaluate(self, context: AssetContext) -> RuleResult:
-        expected = context.metadata.get("expected_rendering")
-        actual = context.metadata.get("rendering")
-        if expected is None:
-            return RuleResult(
-                self.name,
-                True,
-                message="No rendering expectation provided.",
-                rule_family="style",
-            )
-        passed = str(expected).casefold() in str(actual).casefold()
-        return RuleResult(
-            rule_name=self.name,
-            passed=passed,
-            message="Image metadata matches chosen rendering." if passed else "Image metadata does not match chosen rendering.",
-            confidence=100 if passed else 0,
-            rule_family="style",
-        )
+        return _semantic_rule_result(self.name, self.evidence_key, self.expectation_key, context)
 
 
 class BackgroundTreatmentRule:
-    """Ensure generated metadata matches the chosen background treatment."""
+    """Evaluate background only when visual semantic evidence is present."""
 
     name = "Background Treatment"
+    evidence_key = "background"
+    expectation_key = "expected_background_treatment"
 
     def evaluate(self, context: AssetContext) -> RuleResult:
-        expected = context.metadata.get("expected_background_treatment")
-        actual = context.metadata.get("background_treatment")
-        if expected is None or expected == "":
-            return RuleResult(
-                self.name,
-                True,
-                message="No background expectation provided.",
-                rule_family="style",
-            )
-        passed = str(expected).casefold() in str(actual).casefold()
-        return RuleResult(
-            rule_name=self.name,
-            passed=passed,
-            message="Image metadata matches chosen background." if passed else "Image metadata does not match chosen background.",
-            confidence=100 if passed else 0,
-            rule_family="style",
-        )
+        return _semantic_rule_result(self.name, self.evidence_key, self.expectation_key, context)
 
 
 class ProductTypeSuitabilityRule:
-    """Ensure composition metadata is suitable for product type."""
+    """Evaluate product suitability only when visual semantic evidence is present."""
 
     name = "Product Type Suitability"
+    evidence_key = "product_type_suitability"
+    expectation_key = "expected_product_type"
 
     def evaluate(self, context: AssetContext) -> RuleResult:
-        product_type = str(context.metadata.get("expected_product_type", "")).casefold()
-        composition = str(context.metadata.get("composition", "")).casefold()
-        background = str(context.metadata.get("background_treatment", "")).casefold()
-        if not product_type:
-            return RuleResult(
-                self.name,
-                True,
-                message="No product type expectation provided.",
-                rule_family="style",
-            )
-        if "digital paper" in product_type:
-            passed = "pattern" in composition or "tile" in composition or "seamless" in composition
-            message = "Digital paper is pattern-like." if passed else "Digital paper is not tileable/pattern-like."
-        elif "clipart" in product_type:
-            passed = ("isolated" in composition or "elements" in composition) and "room mockup" not in background
-            message = "Clipart uses isolated elements." if passed else "Clipart is not presented as isolated elements."
-        elif "wall art" in product_type:
-            passed = "isolated clipart" not in composition
-            message = "Wall art composition is suitable." if passed else "Wall art is presented only as isolated clipart."
-        elif "sticker" in product_type:
-            passed = "sticker" in composition or "grid" in composition or "cluster" in composition
-            message = "Sticker sheet composition is suitable." if passed else "Sticker sheet lacks grid/cluster layout."
-        elif "invitation" in product_type:
-            passed = "invitation" in composition or "layout" in composition or "typography" in composition
-            message = "Invitation layout is suitable." if passed else "Invitation lacks layout/typography hierarchy."
-        else:
-            passed = True
-            message = "Product type has no specific suitability rule."
+        return _semantic_rule_result(self.name, self.evidence_key, self.expectation_key, context)
+
+
+def _semantic_rule_result(
+    rule_name: str,
+    evidence_key: str,
+    expectation_key: str,
+    context: AssetContext,
+) -> RuleResult:
+    if not str(context.metadata.get(expectation_key, "")).strip():
         return RuleResult(
-            rule_name=self.name,
-            passed=passed,
-            message=message,
-            confidence=100 if passed else 0,
+            rule_name=rule_name,
+            passed=True,
+            message=f"{rule_name} skipped: no configured expectation.",
+            confidence=0,
             rule_family="style",
+            semantic_status="NO_EXPECTATION",
         )
+    evaluation = context.metadata.get("visual_semantic_evaluation")
+    if not isinstance(evaluation, dict):
+        return RuleResult(
+            rule_name=rule_name,
+            passed=True,
+            warning=True,
+            message=(
+                f"{rule_name} NOT_EVALUATED: no visual semantic evaluator "
+                "result is available."
+            ),
+            confidence=0,
+            rule_family="style",
+            semantic_status="NOT_EVALUATED",
+        )
+    record = evaluation.get(evidence_key)
+    if not isinstance(record, dict):
+        return RuleResult(
+            rule_name=rule_name,
+            passed=True,
+            warning=True,
+            message=f"{rule_name} NOT_EVALUATED: visual evaluator did not score this criterion.",
+            confidence=0,
+            rule_family="style",
+            semantic_status="NOT_EVALUATED",
+        )
+    status = str(record.get("status", "NOT_EVALUATED")).upper()
+    score = int(record.get("score", 0) or 0)
+    reason = str(record.get("reason", "")).strip()
+    if status == "PASS":
+        return RuleResult(
+            rule_name=rule_name,
+            passed=True,
+            message=reason or f"{rule_name} passed visual semantic evaluation.",
+            confidence=score,
+            rule_family="style",
+            semantic_status="PASS",
+        )
+    if status == "FAIL":
+        return RuleResult(
+            rule_name=rule_name,
+            passed=False,
+            message=reason or f"{rule_name} failed visual semantic evaluation.",
+            confidence=score,
+            rule_family="style",
+            semantic_status="FAIL",
+        )
+    return RuleResult(
+        rule_name=rule_name,
+        passed=True,
+        warning=True,
+        message=reason or f"{rule_name} NOT_EVALUATED by visual semantic evaluator.",
+        confidence=score,
+        rule_family="style",
+        semantic_status="NOT_EVALUATED",
+    )
 
 
 DEFAULT_QA_RULES: tuple[QARule, ...] = (

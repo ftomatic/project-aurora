@@ -13,6 +13,7 @@ sys.path.insert(0, str(SRC_PATH))
 
 from project_aurora.image_generation.image_result import ImageResult  # noqa: E402
 from project_aurora.image_qa.qa_engine import ImageQAEngine  # noqa: E402
+from project_aurora.image_qa.qa_policy import ImageQAPolicy  # noqa: E402
 from project_aurora.image_qa.qa_report import QAReport  # noqa: E402
 from project_aurora.image_qa.qa_result import (  # noqa: E402
     APPROVE,
@@ -141,7 +142,7 @@ class ImageQATest(unittest.TestCase):
         self.assertEqual(results[0].status, FAIL)
         self.assertIn("File Exists", results[0].checks_failed)
 
-    def test_structured_qa_findings_include_style_rule_reasons(self) -> None:
+    def test_absent_png_metadata_does_not_cause_semantic_failure(self) -> None:
         image_result = {
             "generated_files": [str(self.image_path)],
             "metadata": {
@@ -160,25 +161,66 @@ class ImageQATest(unittest.TestCase):
             },
         }
 
+        results = ImageQAEngine(memory=self.memory).evaluate_image_result(image_result)
         findings = ImageQAEngine(memory=self.memory).evaluate_image_findings(image_result)
 
+        self.assertEqual(results[0].status, WARNING)
         self.assertEqual(len(findings), 1)
         finding = findings[0]
         self.assertEqual(finding["selected_style"], "Flat Vector")
-        self.assertEqual(finding["rendering_family_result"]["status"], "FAIL")
-        self.assertEqual(finding["palette_result"]["status"], "FAIL")
-        self.assertEqual(finding["composition_result"]["status"], "FAIL")
-        self.assertEqual(finding["background_result"]["status"], "FAIL")
-        self.assertIn("Composition Match", finding["failed_rules"])
-        self.assertEqual(finding["rule_confidence"]["Composition Match"], 0)
+        self.assertEqual(finding["rendering_family_result"]["status"], "NOT_EVALUATED")
+        self.assertEqual(finding["palette_result"]["status"], "NOT_EVALUATED")
+        self.assertEqual(finding["composition_result"]["status"], "NOT_EVALUATED")
+        self.assertEqual(finding["background_result"]["status"], "NOT_EVALUATED")
+        self.assertNotIn("Composition Match", finding["failed_rules"])
+        self.assertIn("Composition Match", results[0].checks_passed)
 
-    def test_technical_pass_but_style_fail_is_explained(self) -> None:
+    def test_advisory_not_evaluated_does_not_block_technically_valid_images(self) -> None:
         image_result = {
             "generated_files": [str(self.image_path)],
             "metadata": {
                 **self.metadata,
                 "expected_style": "Flat Vector",
-                "style": "Oil Painting",
+            },
+        }
+
+        results = ImageQAEngine(memory=self.memory).evaluate_image_result(image_result)
+        findings = ImageQAEngine(memory=self.memory).evaluate_image_findings(image_result)
+
+        self.assertEqual(results[0].status, WARNING)
+        self.assertNotIn("File Exists", findings[0]["technical_failed_rules"])
+        self.assertEqual(findings[0]["semantic_evaluation_status"], "NOT_EVALUATED")
+
+    def test_strict_mode_requires_visual_semantic_evaluation(self) -> None:
+        image_result = {
+            "generated_files": [str(self.image_path)],
+            "metadata": {
+                **self.metadata,
+                "expected_style": "Flat Vector",
+            },
+        }
+
+        results = ImageQAEngine(
+            memory=self.memory,
+            policy=ImageQAPolicy(semantic_style_qa_mode="strict"),
+        ).evaluate_image_result(image_result)
+
+        self.assertEqual(results[0].status, FAIL)
+        self.assertIn("Style Match", results[0].checks_failed)
+
+    def test_visual_semantic_failure_blocks_in_advisory_mode(self) -> None:
+        image_result = {
+            "generated_files": [str(self.image_path)],
+            "metadata": {
+                **self.metadata,
+                "expected_style": "Flat Vector",
+                "visual_semantic_evaluation": {
+                    "style": {
+                        "status": "FAIL",
+                        "score": 12,
+                        "reason": "Actual image is painterly, not flat vector.",
+                    }
+                },
             },
         }
 
@@ -188,6 +230,17 @@ class ImageQATest(unittest.TestCase):
         self.assertEqual(results[0].status, FAIL)
         self.assertNotIn("File Exists", findings[0]["technical_failed_rules"])
         self.assertIn("Style Match", findings[0]["style_failed_rules"])
+
+    def test_real_technical_failure_still_blocks(self) -> None:
+        image_result = {
+            "generated_files": [str(self.base_path / "missing_asset_01.png")],
+            "metadata": self.metadata,
+        }
+
+        results = ImageQAEngine(memory=self.memory).evaluate_image_result(image_result)
+
+        self.assertEqual(results[0].status, FAIL)
+        self.assertIn("File Exists", results[0].checks_failed)
 
     def test_memory_saving(self) -> None:
         image_result = ImageResult(

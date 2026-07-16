@@ -242,6 +242,25 @@ class ProductFactoryTest(unittest.TestCase):
         self.assertEqual(report.queue_status, COMPLETED)
         self.assertEqual(report.to_dict()["draft_id"], "4537338498")
 
+    def test_missing_product_type_expectation_fails_before_paid_generation(self) -> None:
+        runner = DefaultProductFactoryStageRunner(
+            memory=self.memory,
+            etsy_config=EtsyConfig(mode="mock"),
+            paths=ProductFactoryPaths(jobs_dir=self.base_path / "jobs"),
+            image_config=ImageProviderConfig(provider="openai", number_of_images=4),
+        )
+        self.memory.save_prompt_package(
+            {
+                "product_name": self.job.product_name,
+                "style": "Storybook Watercolor",
+                "image_prompt": "prompt",
+            },
+            package_id=self.job.id,
+        )
+
+        with self.assertRaisesRegex(RuntimeError, "Missing product-type expectation"):
+            runner.generate_images(self.job)
+
     def test_factory_success_marks_queue_complete_and_saves_report(self) -> None:
         paths = ProductFactoryPaths(jobs_dir=self.base_path / "jobs")
         runner = PathAwareFakeStageRunner(paths)
@@ -388,6 +407,16 @@ class ProductFactoryTest(unittest.TestCase):
                 number_of_images=4,
             ),
         )
+        self.memory.save_prompt_package(
+            {
+                "product_name": self.job.product_name,
+                "collection": self.job.product_name,
+                "product_type": self.job.category,
+                "style": self.job.style,
+                "image_prompt": "Visible test prompt.",
+            },
+            package_id=self.job.id,
+        )
 
         with patch(
             "project_aurora.image_generation.image_generation_engine.ImageGenerationEngine",
@@ -406,6 +435,7 @@ class ProductFactoryTest(unittest.TestCase):
             {
                 "product_name": self.job.product_name,
                 "collection": self.job.product_name,
+                "product_type": self.job.category,
                 "style": self.job.style,
                 "image_prompt": "Visible test prompt.",
             },
@@ -508,6 +538,7 @@ class ProductFactoryTest(unittest.TestCase):
             {
                 "product_name": self.job.product_name,
                 "collection": self.job.product_name,
+                "product_type": self.job.category,
                 "style": self.job.style,
                 "image_prompt": "Visible test prompt.",
             },
@@ -625,6 +656,7 @@ class ProductFactoryTest(unittest.TestCase):
             {
                 "product_name": self.job.product_name,
                 "collection": self.job.product_name,
+                "product_type": self.job.category,
                 "style": self.job.style,
                 "image_prompt": "Visible test prompt.",
             },

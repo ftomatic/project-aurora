@@ -178,6 +178,7 @@ class DefaultProductFactoryStageRunner:
                 "product_name": job.product_name,
                 "collection": job.product_name,
                 "theme": job.seasonal_theme,
+                "product_type": job.category,
                 "style": art_direction.recommended_style,
                 "palette": art_direction.palette,
                 "rendering_family": art_direction.rendering_family,
@@ -227,6 +228,7 @@ class DefaultProductFactoryStageRunner:
             prompt_package = self._memory.load_prompt_package(job.id)
         except FileNotFoundError:
             prompt_package = {}
+        _validate_product_type_expectation(job, prompt_package)
         _print_art_direction_diagnostics(prompt_package, job)
         return ImageGenerationEngine(
             memory=self._memory,
@@ -1113,6 +1115,36 @@ def _print_qa_findings(findings: Any) -> None:
         print("Exact Failed Rules")
         for rule in finding.get("failed_rules", ()):
             print(rule)
+
+
+SUPPORTED_PRODUCT_TYPE_EXPECTATIONS = {
+    "wall art",
+    "invitation",
+    "party printable",
+    "sticker sheet",
+    "sticker sheets",
+    "clipart",
+    "digital paper",
+    "teacher printable",
+    "teacher printables",
+    "teacher wall art",
+    "bridal shower printable",
+}
+
+
+def _validate_product_type_expectation(
+    job: ProductionJob,
+    prompt_package: dict[str, Any],
+) -> None:
+    product_type = str(prompt_package.get("product_type") or "").strip()
+    normalized = product_type.casefold()
+    if not normalized:
+        raise RuntimeError("Missing product-type expectation before image generation.")
+    if not any(expected in normalized for expected in SUPPORTED_PRODUCT_TYPE_EXPECTATIONS):
+        raise RuntimeError(
+            "Unsupported product-type expectation before image generation: "
+            f"{product_type}."
+        )
 
 
 def _title_is_relevant_to_job(title: str, job: ProductionJob) -> bool:
