@@ -35,6 +35,11 @@ class SEOEngine:
         product_type = self._get_value(product_data, "product_type")
         target_buyer = self._get_value(product_data, "target_buyer")
         job_id = str(product_data.get("job_id") or "")
+        etsy_listing_id = str(product_data.get("etsy_listing_id") or "")
+        category = str(product_data.get("category") or product_type)
+        audience = str(product_data.get("audience") or target_buyer)
+        style = str(product_data.get("style") or "")
+        source = str(product_data.get("source") or "")
         buyer_use_case = self._buyer_use_case(target_buyer)
         product_positioning = self._product_positioning(
             product_name,
@@ -79,6 +84,11 @@ class SEOEngine:
             seo_score=score,
             warnings=warnings,
             job_id=job_id,
+            etsy_listing_id=etsy_listing_id,
+            category=category,
+            audience=audience,
+            style=style,
+            source=source,
         )
 
     def run(

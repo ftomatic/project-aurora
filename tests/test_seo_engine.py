@@ -58,8 +58,8 @@ class SEOEngineTest(unittest.TestCase):
             keywords=(),
         )
 
-        self.assertIn("Strawberry Birthday Party Printable Bundle", title)
-        self.assertIn("Cupcake Toppers", title)
+        self.assertIn("Summer Strawberry Birthday Collection", title)
+        self.assertNotIn("Cupcake Toppers", title)
         self.assertLessEqual(len(title), 140)
 
     def test_description_builder_returns_required_description(self) -> None:

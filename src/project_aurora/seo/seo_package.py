@@ -21,6 +21,11 @@ class SEOPackage:
     product_positioning: str
     seo_score: int
     job_id: str = ""
+    etsy_listing_id: str = ""
+    category: str = ""
+    audience: str = ""
+    style: str = ""
+    source: str = ""
     warnings: tuple[str, ...] = field(default_factory=tuple)
     created_at: datetime = field(default_factory=datetime.now)
     generated_at: datetime | None = None

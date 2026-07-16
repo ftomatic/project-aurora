@@ -36,6 +36,7 @@ from project_aurora.production.production_report import ProductionReport  # noqa
 from project_aurora.seo.seo_audit import audit_listing_seo  # noqa: E402
 from project_aurora.storage.csv_storage import CSVStorage  # noqa: E402
 from project_aurora.storage.memory_manager import MemoryManager  # noqa: E402
+from scripts.fix_existing_etsy_titles import repair_existing_etsy_titles  # noqa: E402
 from scripts.fix_existing_etsy_tags import repair_existing_etsy_tags  # noqa: E402
 
 
@@ -45,9 +46,11 @@ PRODUCTS = (
     ("job-moody", "Moody Dark Academia Prints", "wall art"),
 )
 FIVE_PRODUCTS = (
-    *PRODUCTS,
+    ("job-spring", "Spring Bunny Nursery Art", "wall art"),
     ("job-pastel", "Pastel Baby Animal Clipart", "clipart"),
+    ("job-wildflower", "Wildflower Wedding Invitation", "party printable"),
     ("job-new-year", "New Year Planner Stickers", "sticker sheet"),
+    ("job-moody", "Moody Dark Academia Prints", "wall art"),
 )
 
 
@@ -154,6 +157,30 @@ class ProductSpecificSEOTest(unittest.TestCase):
             ).job_root / "seo" / "seo_package.json"
             self.assertTrue(seo_path.exists())
 
+    def test_five_products_receive_distinct_job_specific_titles(self) -> None:
+        packages = [
+            self.runner.generate_seo(self.job(job_id, product_name, category))
+            for job_id, product_name, category in FIVE_PRODUCTS
+        ]
+        titles = tuple(package.title for package in packages)
+
+        self.assertEqual(len(set(titles)), 5)
+        for package, (_job_id, product_name, _category) in zip(packages, FIVE_PRODUCTS):
+            lowered = package.title.casefold()
+            self.assertIn(product_name.casefold().split()[0], lowered)
+            if "strawberry" not in product_name.casefold():
+                self.assertNotIn("summer berry invitation", lowered)
+                self.assertNotIn("cupcake toppers", lowered)
+                self.assertNotIn("favor tags", lowered)
+                self.assertNotIn("girls party decor", lowered)
+        wildflower = next(package for package in packages if "Wildflower" in package.product_name)
+        wildflower_title = wildflower.title.casefold()
+        self.assertIn("wildflower", wildflower_title)
+        self.assertIn("wedding", wildflower_title)
+        self.assertIn("invitation", wildflower_title)
+        self.assertIn("floral", wildflower_title)
+        self.assertTrue("printable" in wildflower_title or "digital" in wildflower_title)
+
     def test_etsy_payload_receives_correct_job_specific_tags(self) -> None:
         job = self.job(*PRODUCTS[1])
         files = self.write_final_images(job)
@@ -177,6 +204,7 @@ class ProductSpecificSEOTest(unittest.TestCase):
         )
 
         self.assertEqual(payload.tags, package.tags)
+        self.assertEqual(payload.title, package.title)
         self.assertIn("wildflower", payload.tags)
         self.assertNotIn("spring bunny", payload.tags)
 
@@ -194,7 +222,9 @@ class ProductSpecificSEOTest(unittest.TestCase):
         loaded = restarted.generate_seo(second)
 
         self.assertEqual(loaded.tags, second_package.tags)
+        self.assertEqual(loaded.title, second_package.title)
         self.assertNotEqual(loaded.tags, first_package.tags)
+        self.assertNotEqual(loaded.title, first_package.title)
 
     def test_mismatched_seo_package_fails_before_etsy_draft(self) -> None:
         spring = self.job(*PRODUCTS[0])
@@ -239,6 +269,36 @@ class ProductSpecificSEOTest(unittest.TestCase):
         for _listing_id, fields in client.calls:
             self.assertEqual(tuple(fields.keys()), ("tags",))
             self.assertEqual(len(fields["tags"]), 13)
+
+    def test_title_repair_patches_only_title(self) -> None:
+        jobs = [self.job(*product) for product in FIVE_PRODUCTS]
+        for index, job in enumerate(jobs, start=1):
+            self.save_verified_report(job, f"listing-{index}")
+        client = FakePatchClient(
+            tuple(
+                {
+                    "listing_id": f"listing-{index}",
+                    "state": "draft",
+                    "title": "Bad Strawberry Title, Summer Berry Invitation, Cupcake Toppers, Favor Tags, Girls Party Decor",
+                    "tags": ["old tag"],
+                }
+                for index in range(1, 6)
+            )
+        )
+
+        with redirect_stdout(StringIO()):
+            report = repair_existing_etsy_titles(
+                self.memory,
+                client,  # type: ignore[arg-type]
+                input_fn=lambda _prompt: "FIX 5 TITLES",
+            )
+
+        self.assertEqual(report["status"], "SUCCESS")
+        self.assertEqual(len(client.calls), 5)
+        for _listing_id, fields in client.calls:
+            self.assertEqual(tuple(fields.keys()), ("title",))
+            self.assertNotIn("Summer Berry Invitation", fields["title"])
+            self.assertNotIn("Cupcake Toppers", fields["title"])
 
     def test_published_listing_is_skipped_before_patch(self) -> None:
         jobs = [self.job(*product) for product in FIVE_PRODUCTS]

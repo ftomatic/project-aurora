@@ -13,17 +13,31 @@ class TitleBuilder:
         keywords: tuple[str, ...],
     ) -> str:
         """Return an Etsy-ready listing title."""
-        title_parts = [
-            "Strawberry Birthday Party Printable Bundle",
-            "Summer Berry Invitation",
-            "Cupcake Toppers",
-            "Favor Tags",
-            "Girls Party Decor",
-        ]
-        if "Strawberry" not in product_name:
-            title_parts[0] = product_name
-        if "Party Printable" not in product_type:
-            title_parts.insert(1, product_type)
+        product_lower = product_name.casefold()
+        type_lower = product_type.casefold()
+        title_parts = [product_name]
+        if "invitation" in product_lower:
+            title_parts.extend(("Floral Printable Invitation", "Digital Wedding Invite"))
+        elif "clipart" in product_lower or "clipart" in type_lower:
+            title_parts.extend(("PNG Clipart Bundle", "Commercial Use Graphics"))
+        elif "sticker" in product_lower or "sticker" in type_lower:
+            title_parts.extend(("Printable Planner Stickers", "Digital Sticker Sheet"))
+        elif "paper" in product_lower or "digital paper" in type_lower:
+            title_parts.extend(("Digital Paper Pack", "Printable Scrapbook Paper"))
+        elif (
+            "wall art" in type_lower
+            or "print" in product_lower
+            or " art" in f" {product_lower} "
+        ):
+            title_parts.extend(("Printable Wall Art", "Digital Art Download"))
+        else:
+            title_parts.append(product_type)
+
+        for keyword in keywords:
+            if len(title_parts) >= 4:
+                break
+            if len(keyword) <= 32 and keyword.casefold() not in product_lower:
+                title_parts.append(keyword.title())
 
         title = ", ".join(title_parts)
         if len(title) <= 140:

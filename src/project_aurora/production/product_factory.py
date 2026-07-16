@@ -216,21 +216,39 @@ class DefaultProductFactoryStageRunner:
         seo_path = seo_dir / "seo_package.json"
         if seo_path.exists():
             package = _load_job_seo_package(seo_path)
-            _validate_job_seo_package(package, job, previous_tags=_previous_product_tags(self._memory, job.id))
-            if not getattr(self._etsy_config, "is_mock_mode", True):
-                _print_seo_diagnostics(job, package)
-            self._memory.save_seo_package(package, package_id=job.id)
-            return package
+            try:
+                _validate_job_seo_package(
+                    package,
+                    job,
+                    previous_tags=_previous_product_tags(self._memory, job.id),
+                    previous_title=_previous_product_title(self._memory, job.id),
+                )
+            except RuntimeError as error:
+                if "title" not in str(error).casefold():
+                    raise
+            else:
+                if not getattr(self._etsy_config, "is_mock_mode", True):
+                    _print_seo_diagnostics(job, package)
+                self._memory.save_seo_package(package, package_id=job.id)
+                return package
         package = SEOEngine(memory=self._memory).run(
             {
                 "job_id": job.id,
                 "product_name": job.product_name,
                 "product_type": job.category,
+                "category": job.category,
                 "target_buyer": "digital printable buyers",
+                "audience": "digital printable buyers",
+                "style": job.style,
             },
             package_id=job.id,
         )
-        _validate_job_seo_package(package, job, previous_tags=_previous_product_tags(self._memory, job.id))
+        _validate_job_seo_package(
+            package,
+            job,
+            previous_tags=_previous_product_tags(self._memory, job.id),
+            previous_title=_previous_product_title(self._memory, job.id),
+        )
         seo_dir.mkdir(parents=True, exist_ok=True)
         seo_path.write_text(
             json.dumps(_seo_package_to_record(package), indent=2, sort_keys=True),
@@ -252,6 +270,7 @@ class DefaultProductFactoryStageRunner:
             seo_package,
             job,
             previous_tags=_previous_product_tags(self._memory, job.id),
+            previous_title=_previous_product_title(self._memory, job.id),
         )
         final_files = tuple(
             str(path)
@@ -776,6 +795,11 @@ def _load_job_seo_package(path: Path) -> Any:
         buyer_use_case=str(data["buyer_use_case"]),
         product_positioning=str(data["product_positioning"]),
         seo_score=int(data["seo_score"]),
+        etsy_listing_id=str(data.get("etsy_listing_id", "")),
+        category=str(data.get("category", data.get("product_type", ""))),
+        audience=str(data.get("audience", data.get("target_buyer", ""))),
+        style=str(data.get("style", "")),
+        source=str(data.get("source", "")),
         warnings=tuple(str(item) for item in data.get("warnings", ())),
         created_at=datetime.fromisoformat(str(data["created_at"])),
         generated_at=datetime.fromisoformat(str(data.get("generated_at") or data["created_at"])),
@@ -786,10 +810,12 @@ def _validate_job_seo_package(
     package: Any,
     job: ProductionJob,
     previous_tags: tuple[str, ...] = (),
+    previous_title: str = "",
 ) -> None:
     job_id = getattr(package, "job_id", "")
     product_name = getattr(package, "product_name", "")
     tags = tuple(str(tag).strip() for tag in getattr(package, "tags", ()))
+    title = str(getattr(package, "title", "")).strip()
     if job_id != job.id:
         raise RuntimeError("SEO package job_id does not match ProductionJob id.")
     if product_name != job.product_name:
@@ -800,6 +826,14 @@ def _validate_job_seo_package(
         raise RuntimeError("SEO package contains empty tags.")
     if len(set(tag.casefold() for tag in tags)) != len(tags):
         raise RuntimeError("SEO package contains duplicate tags.")
+    if not title:
+        raise RuntimeError("SEO package title is empty.")
+    if len(title) > 140:
+        raise RuntimeError("SEO package title exceeds Etsy title length.")
+    if not _title_is_relevant_to_job(title, job):
+        raise RuntimeError("SEO package title is not relevant to the current product.")
+    if previous_title and title.casefold() == previous_title.casefold():
+        raise RuntimeError("SEO package title is identical to the immediately previous product.")
     if previous_tags and tuple(tag.casefold() for tag in tags) == tuple(
         tag.casefold() for tag in previous_tags
     ):
@@ -866,10 +900,73 @@ def _previous_product_tags(memory: MemoryManager, current_job_id: str) -> tuple[
     return ()
 
 
+def _previous_product_title(memory: MemoryManager, current_job_id: str) -> str:
+    try:
+        latest = memory.load_record(REPORT_COLLECTION, "latest")
+    except FileNotFoundError:
+        return ""
+    if latest.get("job_id") == current_job_id:
+        return ""
+    metadata = latest.get("metadata")
+    if not isinstance(metadata, dict):
+        return ""
+    seo = metadata.get("seo_generation")
+    if isinstance(seo, dict) and isinstance(seo.get("title"), str):
+        return seo["title"]
+    return ""
+
+
 def _print_seo_diagnostics(job: ProductionJob, package: Any) -> None:
     print("SEO JOB")
     print(job.product_name)
     print("")
+    print("SEO TITLE")
+    print(getattr(package, "title", ""))
+    print("")
     print("SEO TAGS")
     for tag in getattr(package, "tags", ()):
         print(tag)
+
+
+def _title_is_relevant_to_job(title: str, job: ProductionJob) -> bool:
+    lowered = title.casefold()
+    product_lower = job.product_name.casefold()
+    unrelated = (
+        "summer berry",
+        "cupcake toppers",
+        "favor tags",
+        "girls party decor",
+        "birthday invitation",
+    )
+    if any(term in lowered for term in unrelated):
+        return False
+    product_tokens = {
+        token
+        for token in re.split(r"[^a-z0-9]+", job.product_name.casefold())
+        if len(token) > 2
+    }
+    title_tokens = {
+        token
+        for token in re.split(r"[^a-z0-9]+", lowered)
+        if len(token) > 2
+    }
+    if not (product_tokens & title_tokens):
+        return False
+    if "wildflower wedding invitation" in product_lower:
+        if not {"wildflower", "wedding", "invitation"} <= title_tokens:
+            return False
+        if not ({"floral"} & title_tokens):
+            return False
+        if not ({"printable", "digital"} & title_tokens):
+            return False
+    if "clipart" in product_lower and not ({"clipart", "graphics"} & title_tokens):
+        return False
+    if "sticker" in product_lower and "sticker" not in title_tokens and "stickers" not in title_tokens:
+        return False
+    if "paper" in product_lower and "paper" not in title_tokens:
+        return False
+    if "birthday" in product_lower and ({"wall", "art"} <= title_tokens):
+        return False
+    if "clipart" in product_lower and ({"wall", "art"} <= title_tokens):
+        return False
+    return True

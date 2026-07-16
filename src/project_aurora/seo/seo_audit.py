@@ -10,6 +10,13 @@ from project_aurora.seo.seo_engine import SEOEngine
 from project_aurora.storage.memory_manager import MemoryManager
 
 RECONSTRUCTED_SEO_SOURCE = "RECONSTRUCTED_FROM_VERIFIED_JOB_DATA"
+UNRELATED_TITLE_TERMS = (
+    "summer berry",
+    "cupcake toppers",
+    "favor tags",
+    "girls party decor",
+    "birthday invitation",
+)
 
 
 def audit_listing_seo(
@@ -20,6 +27,7 @@ def audit_listing_seo(
     """Return SEO audit records for saved production reports."""
     records: list[dict[str, Any]] = []
     seen_tags: dict[tuple[str, ...], str] = {}
+    seen_titles: dict[str, str] = {}
     for key in sorted(memory.list_records("production_reports")):
         try:
             report = memory.load_record("production_reports", key)
@@ -37,24 +45,47 @@ def audit_listing_seo(
             _reconstruct_job_seo_if_possible(report)
         seo = _load_job_seo(report)
         tags = tuple(str(tag) for tag in seo.get("tags", ())) if seo else ()
+        title = str(seo.get("title", "")) if seo else ""
         tag_key = tuple(tag.casefold() for tag in tags)
         duplicate_with = seen_tags.get(tag_key, "") if tag_key else ""
         if tag_key and not duplicate_with:
             seen_tags[tag_key] = product
+        title_key = title.casefold()
+        duplicate_title_with = seen_titles.get(title_key, "") if title_key else ""
+        if title_key and not duplicate_title_with:
+            seen_titles[title_key] = product
         status = "VERIFIED"
+        title_status = "MATCH"
+        tags_status = "MATCH"
         if not seo:
             status = "MISSING_SEO"
+            title_status = "MISSING"
+            tags_status = "MISSING"
         elif not _seo_matches_report(seo, report):
             status = "MISMATCH"
+            title_status = "MISMATCH"
         elif not _valid_tags(tags):
             status = "INVALID_TAGS"
+            tags_status = "INVALID"
+        elif not _valid_title(title, product):
+            status = "INVALID_TITLE"
+            title_status = "INVALID"
+        elif duplicate_title_with:
+            status = "DUPLICATE_TITLE"
+            title_status = "DUPLICATE"
         elif duplicate_with:
             status = "DUPLICATE_TAGS"
+            tags_status = "DUPLICATE"
         records.append(
             {
                 "product": product,
                 "etsy_listing_id": listing_id_text,
+                "current_etsy_title": _current_title_from_report(report),
+                "proposed_title": title,
                 "seo_package_job_id": str(seo.get("job_id", "")) if seo else "",
+                "title_match_status": title_status,
+                "tags_match_status": tags_status,
+                "overall_status": status,
                 "tags": tags,
                 "proposed_tags": tags,
                 "duplicate_with_other_listing": duplicate_with,
@@ -71,18 +102,18 @@ def print_audit(records: tuple[dict[str, Any], ...]) -> None:
         print(record["product"])
         print("Etsy Listing ID")
         print(record["etsy_listing_id"])
+        print("Current Etsy Title")
+        print(record["current_etsy_title"])
+        print("Proposed Job-Specific Title")
+        print(record["proposed_title"])
         print("SEO Package Job ID")
         print(record["seo_package_job_id"])
-        print("Tags")
-        for tag in record["tags"]:
-            print(tag)
-        print("Proposed Tags")
-        for tag in record["proposed_tags"]:
-            print(tag)
-        print("Duplicate With Other Listing")
-        print(record["duplicate_with_other_listing"] or "None")
-        print("Status")
-        print(record["status"])
+        print("Title Match Status")
+        print(record["title_match_status"])
+        print("Tags Match Status")
+        print(record["tags_match_status"])
+        print("Overall Status")
+        print(record["overall_status"])
         print("")
 
 
@@ -114,14 +145,27 @@ def _reconstruct_job_seo_if_possible(report: dict[str, Any]) -> None:
         return
     seo_path = job_root / "seo" / "seo_package.json"
     if seo_path.exists():
+        existing = _load_job_seo(report)
+        if existing and _seo_matches_report(existing, report) and _valid_tags(
+            tuple(str(tag) for tag in existing.get("tags", ()))
+        ) and _valid_title(str(existing.get("title", "")), product_name):
+            return
+    else:
+        existing = {}
+    if seo_path.exists() and not existing:
         return
 
     package = SEOEngine().build_package(
         {
             "job_id": job_id,
+            "etsy_listing_id": listing_id,
             "product_name": product_name,
             "product_type": _infer_product_type(product_name),
+            "category": _infer_product_type(product_name),
             "target_buyer": "digital printable buyers",
+            "audience": "digital printable buyers",
+            "style": str(report.get("style") or ""),
+            "source": RECONSTRUCTED_SEO_SOURCE,
         }
     )
     record = {
@@ -129,7 +173,10 @@ def _reconstruct_job_seo_if_possible(report: dict[str, Any]) -> None:
         "product_name": package.product_name,
         "etsy_listing_id": listing_id,
         "product_type": package.product_type,
+        "category": package.category,
         "target_buyer": package.target_buyer,
+        "audience": package.audience,
+        "style": package.style,
         "title": package.title,
         "description": package.description,
         "tags": list(package.tags),
@@ -145,6 +192,8 @@ def _reconstruct_job_seo_if_possible(report: dict[str, Any]) -> None:
     if not _seo_matches_report(record, report):
         return
     if not _valid_tags(tuple(record["tags"])):
+        return
+    if not _valid_title(str(record["title"]), product_name):
         return
     seo_path.parent.mkdir(parents=True, exist_ok=True)
     seo_path.write_text(
@@ -170,6 +219,53 @@ def _valid_tags(tags: tuple[str, ...]) -> bool:
         and all(len(tag) <= 20 for tag in normalized)
         and len({tag.casefold() for tag in normalized}) == 13
     )
+
+
+def _valid_title(title: str, product_name: str) -> bool:
+    normalized = title.strip()
+    if not normalized or len(normalized) > 140:
+        return False
+    lowered = normalized.casefold()
+    product_lower = product_name.casefold()
+    if any(term in lowered for term in UNRELATED_TITLE_TERMS):
+        return False
+    product_tokens = {
+        token
+        for token in product_lower.replace("-", " ").split()
+        if len(token) > 2
+    }
+    title_tokens = set(lowered.replace("-", " ").replace(",", " ").split())
+    if not (product_tokens & title_tokens):
+        return False
+    if "wildflower wedding invitation" in product_lower:
+        required = ({"wildflower", "wedding", "invitation"}, {"floral"}, {"printable", "digital"})
+        if not all(group & title_tokens for group in required):
+            return False
+    if "clipart" in product_lower and not ({"clipart", "graphics"} & title_tokens):
+        return False
+    if "sticker" in product_lower and "sticker" not in title_tokens and "stickers" not in title_tokens:
+        return False
+    if "paper" in product_lower and "paper" not in title_tokens:
+        return False
+    if "birthday" in product_lower and ({"wall", "art"} <= title_tokens):
+        return False
+    if "clipart" in product_lower and ({"wall", "art"} <= title_tokens):
+        return False
+    return True
+
+
+def _current_title_from_report(report: dict[str, Any]) -> str:
+    metadata = report.get("metadata")
+    if not isinstance(metadata, dict):
+        return "UNKNOWN_NOT_QUERIED"
+    etsy_draft = metadata.get("etsy_draft")
+    if isinstance(etsy_draft, dict):
+        response = etsy_draft.get("response")
+        if isinstance(response, dict) and isinstance(response.get("title"), str):
+            return response["title"]
+        if isinstance(etsy_draft.get("title"), str):
+            return etsy_draft["title"]
+    return "UNKNOWN_NOT_QUERIED"
 
 
 def _job_root(report: dict[str, Any]) -> Path | None:
