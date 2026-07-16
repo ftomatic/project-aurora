@@ -1,0 +1,331 @@
+styles:
+  - name: Storybook Watercolor
+    description: Whimsical hand-painted illustration with gentle storybook charm.
+    typical_color_palette: [soft greens, blush, warm cream, gentle blue]
+    rendering_method: Hand painted watercolor
+    target_audience: [parents, children, nursery buyers, printable buyers]
+    products_it_fits: [nursery art, clipart, birthday, baby shower, woodland]
+    avoid_using_with: [dark academia, minimalist office]
+    commercial_appeal: 92
+    difficulty: 55
+    trend_score: 88
+    seasonality: [Spring, Summer, Evergreen]
+  - name: Loose Watercolor
+    description: Airy watercolor washes with expressive organic edges.
+    typical_color_palette: [washed pastels, sage, dusty pink, sky blue]
+    rendering_method: Loose transparent watercolor
+    target_audience: [crafters, wedding buyers, printable buyers]
+    products_it_fits: [floral, wedding, clipart, wall art]
+    avoid_using_with: [teacher stickers, flat icons]
+    commercial_appeal: 86
+    difficulty: 45
+    trend_score: 82
+    seasonality: [Spring, Summer]
+  - name: Children's Book Illustration
+    description: Narrative character art with warm playful detail.
+    typical_color_palette: [warm yellow, grass green, soft brown, coral]
+    rendering_method: Illustrated storybook painting
+    target_audience: [parents, teachers, children]
+    products_it_fits: [nursery art, animals, teacher, birthday]
+    avoid_using_with: [luxury wedding, dark academia]
+    commercial_appeal: 90
+    difficulty: 65
+    trend_score: 84
+    seasonality: [Evergreen, Spring]
+  - name: Vintage Botanical
+    description: Elegant botanical artwork inspired by antique field guides.
+    typical_color_palette: [cream, olive, muted rose, sepia]
+    rendering_method: Detailed botanical illustration
+    target_audience: [gardeners, crafters, kitchen decor buyers]
+    products_it_fits: [kitchen art, botanical, digital paper, wall art]
+    avoid_using_with: [teacher stickers, kawaii]
+    commercial_appeal: 94
+    difficulty: 70
+    trend_score: 89
+    seasonality: [Spring, Autumn, Evergreen]
+  - name: Victorian Engraving
+    description: Ornate engraved linework with antique dramatic atmosphere.
+    typical_color_palette: [black, ivory, sepia, oxblood]
+    rendering_method: Vintage engraving
+    target_audience: [dark academia buyers, vintage buyers]
+    products_it_fits: [dark academia, wall art, gothic, bookish]
+    avoid_using_with: [baby nursery, kawaii]
+    commercial_appeal: 88
+    difficulty: 72
+    trend_score: 86
+    seasonality: [Autumn, Halloween, Evergreen]
+  - name: Oil Painting
+    description: Painterly fine-art surfaces with rich color and depth.
+    typical_color_palette: [deep umber, gold, muted green, cream]
+    rendering_method: Oil painting
+    target_audience: [home decor buyers, art print buyers]
+    products_it_fits: [wall art, dark academia, kitchen art]
+    avoid_using_with: [stickers, planner icons]
+    commercial_appeal: 82
+    difficulty: 85
+    trend_score: 70
+    seasonality: [Autumn, Winter, Evergreen]
+  - name: Dark Academia
+    description: Moody literary aesthetic with antique textures and scholarly drama.
+    typical_color_palette: [espresso, parchment, burgundy, forest green]
+    rendering_method: Moody vintage illustration
+    target_audience: [students, readers, vintage decor buyers]
+    products_it_fits: [dark academia, prints, stickers, wall art]
+    avoid_using_with: [nursery, baby shower]
+    commercial_appeal: 91
+    difficulty: 62
+    trend_score: 90
+    seasonality: [Autumn, Winter]
+  - name: French Vintage
+    description: Soft antique French ephemera with romantic decorative detail.
+    typical_color_palette: [ivory, dusty blue, faded pink, taupe]
+    rendering_method: Vintage collage illustration
+    target_audience: [journalers, wedding buyers, crafters]
+    products_it_fits: [junk journal, wedding, digital paper]
+    avoid_using_with: [teacher stickers, flat vector]
+    commercial_appeal: 84
+    difficulty: 58
+    trend_score: 78
+    seasonality: [Spring, Evergreen]
+  - name: Scandinavian Minimal
+    description: Calm simple forms with restrained modern Nordic color.
+    typical_color_palette: [white, soft gray, oat, muted blue]
+    rendering_method: Minimal geometric illustration
+    target_audience: [home decor buyers, minimalist buyers]
+    products_it_fits: [kitchen art, wall art, nursery art]
+    avoid_using_with: [ornate vintage, dark academia]
+    commercial_appeal: 80
+    difficulty: 35
+    trend_score: 74
+    seasonality: [Winter, Evergreen]
+  - name: Flat Vector
+    description: Clean vector shapes with bold readable color and crisp edges.
+    typical_color_palette: [bright primary, teal, coral, yellow]
+    rendering_method: Flat vector illustration
+    target_audience: [teachers, planners, sticker buyers]
+    products_it_fits: [teacher stickers, planner stickers, classroom, icons]
+    avoid_using_with: [oil painting, luxury wedding]
+    commercial_appeal: 93
+    difficulty: 30
+    trend_score: 87
+    seasonality: [Back to School, Evergreen]
+  - name: Minimal Line Art
+    description: Elegant contour lines and minimal negative space.
+    typical_color_palette: [black, ivory, beige, muted terracotta]
+    rendering_method: Fine digital line art
+    target_audience: [modern decor buyers, wedding buyers]
+    products_it_fits: [wall art, wedding, stickers]
+    avoid_using_with: [kawaii, children]
+    commercial_appeal: 78
+    difficulty: 28
+    trend_score: 72
+    seasonality: [Evergreen]
+  - name: Paper Cut
+    description: Layered paper shapes with tactile shadow and crafted depth.
+    typical_color_palette: [cream, coral, sage, sky blue]
+    rendering_method: Paper cut illustration
+    target_audience: [crafters, nursery buyers, teachers]
+    products_it_fits: [nursery, classroom, seasonal, clipart]
+    avoid_using_with: [engraving, oil painting]
+    commercial_appeal: 83
+    difficulty: 60
+    trend_score: 76
+    seasonality: [Spring, Christmas]
+  - name: Retro 70s
+    description: Rounded groovy shapes with nostalgic warm color.
+    typical_color_palette: [mustard, avocado, rust, cream]
+    rendering_method: Retro graphic illustration
+    target_audience: [planner buyers, apparel makers, decor buyers]
+    products_it_fits: [stickers, wall art, sublimation]
+    avoid_using_with: [luxury wedding, nursery]
+    commercial_appeal: 85
+    difficulty: 38
+    trend_score: 83
+    seasonality: [Summer, Autumn]
+  - name: Mid-century
+    description: Atomic modern shapes with refined vintage geometry.
+    typical_color_palette: [teal, ochre, charcoal, cream]
+    rendering_method: Mid-century graphic design
+    target_audience: [home decor buyers, kitchen decor buyers]
+    products_it_fits: [kitchen art, wall art, digital paper]
+    avoid_using_with: [storybook, kawaii]
+    commercial_appeal: 82
+    difficulty: 40
+    trend_score: 79
+    seasonality: [Evergreen]
+  - name: Boho
+    description: Relaxed organic motifs with earthy handmade warmth.
+    typical_color_palette: [terracotta, sand, sage, clay]
+    rendering_method: Boho hand-drawn illustration
+    target_audience: [nursery buyers, wedding buyers, crafters]
+    products_it_fits: [nursery, wedding, wall art, digital paper]
+    avoid_using_with: [teacher stickers, dark academia]
+    commercial_appeal: 84
+    difficulty: 42
+    trend_score: 77
+    seasonality: [Summer, Evergreen]
+  - name: Cottagecore
+    description: Cozy countryside florals and nostalgic handmade charm.
+    typical_color_palette: [sage, cream, berry red, soft pink]
+    rendering_method: Cottagecore hand-painted illustration
+    target_audience: [parents, crafters, garden buyers]
+    products_it_fits: [birthday, floral, clipart, digital paper]
+    avoid_using_with: [dark academia, flat vector]
+    commercial_appeal: 90
+    difficulty: 52
+    trend_score: 86
+    seasonality: [Spring, Summer]
+  - name: Whimsical Ink
+    description: Playful ink outlines with magical small details.
+    typical_color_palette: [black, cream, lavender, moss]
+    rendering_method: Ink and wash illustration
+    target_audience: [fantasy buyers, children, crafters]
+    products_it_fits: [mushroom, fairy, clipart, stickers]
+    avoid_using_with: [luxury wedding]
+    commercial_appeal: 86
+    difficulty: 50
+    trend_score: 82
+    seasonality: [Autumn, Spring]
+  - name: Kawaii
+    description: Cute expressive characters with simple friendly shapes.
+    typical_color_palette: [pink, mint, yellow, lavender]
+    rendering_method: Cute kawaii digital illustration
+    target_audience: [teachers, kids, planner buyers]
+    products_it_fits: [teacher stickers, planner stickers, kids clipart]
+    avoid_using_with: [wedding, dark academia]
+    commercial_appeal: 89
+    difficulty: 35
+    trend_score: 80
+    seasonality: [Back to School, Evergreen]
+  - name: Coastal
+    description: Breezy seaside art with relaxed natural textures.
+    typical_color_palette: [sea blue, sand, white, driftwood]
+    rendering_method: Coastal watercolor illustration
+    target_audience: [beach decor buyers, scrapbookers]
+    products_it_fits: [digital paper, wall art, summer clipart]
+    avoid_using_with: [dark academia, Christmas]
+    commercial_appeal: 79
+    difficulty: 45
+    trend_score: 75
+    seasonality: [Summer]
+  - name: Farmhouse
+    description: Rustic approachable decor style with homey vintage warmth.
+    typical_color_palette: [cream, black, sage, weathered wood]
+    rendering_method: Rustic farmhouse illustration
+    target_audience: [kitchen decor buyers, home decor buyers]
+    products_it_fits: [kitchen art, wall art, signs]
+    avoid_using_with: [kawaii, luxury wedding]
+    commercial_appeal: 88
+    difficulty: 44
+    trend_score: 81
+    seasonality: [Autumn, Evergreen]
+  - name: Hand Painted Gouache
+    description: Opaque painted shapes with rich handmade texture.
+    typical_color_palette: [warm cream, deep green, coral, ochre]
+    rendering_method: Hand painted gouache
+    target_audience: [crafters, nursery buyers, art print buyers]
+    products_it_fits: [mushroom, clipart, nursery, wall art]
+    avoid_using_with: [flat vector]
+    commercial_appeal: 87
+    difficulty: 67
+    trend_score: 84
+    seasonality: [Autumn, Evergreen]
+  - name: Editorial Minimal
+    description: Sophisticated sparse composition with premium design restraint.
+    typical_color_palette: [black, ivory, muted taupe, slate]
+    rendering_method: Editorial minimal design
+    target_audience: [luxury buyers, wedding buyers, decor buyers]
+    products_it_fits: [wedding, wall art, branding]
+    avoid_using_with: [teacher stickers, kawaii]
+    commercial_appeal: 80
+    difficulty: 36
+    trend_score: 73
+    seasonality: [Evergreen]
+  - name: Fine Line Floral
+    description: Delicate floral linework with graceful feminine detail.
+    typical_color_palette: [black, ivory, blush, sage]
+    rendering_method: Fine line floral drawing
+    target_audience: [wedding buyers, journalers, crafters]
+    products_it_fits: [wedding, floral, wall art, stickers]
+    avoid_using_with: [teacher classroom]
+    commercial_appeal: 86
+    difficulty: 48
+    trend_score: 82
+    seasonality: [Spring, Wedding Season]
+  - name: Pressed Flowers
+    description: Realistic delicate pressed botanical arrangements.
+    typical_color_palette: [cream, dried rose, sage, lavender]
+    rendering_method: Pressed flower composition
+    target_audience: [brides, wedding buyers, botanical buyers]
+    products_it_fits: [wedding invitation, floral, stationery]
+    avoid_using_with: [teacher stickers, dark academia]
+    commercial_appeal: 96
+    difficulty: 70
+    trend_score: 91
+    seasonality: [Spring, Wedding Season]
+  - name: Botanical Sketch
+    description: Observational botanical pencil and ink sketch style.
+    typical_color_palette: [graphite, cream, olive, muted green]
+    rendering_method: Botanical sketch
+    target_audience: [gardeners, kitchen decor buyers, crafters]
+    products_it_fits: [kitchen art, botanical, wall art]
+    avoid_using_with: [kawaii, planner stickers]
+    commercial_appeal: 89
+    difficulty: 58
+    trend_score: 84
+    seasonality: [Spring, Evergreen]
+  - name: Woodblock Print
+    description: Bold carved shapes with traditional printmaking texture.
+    typical_color_palette: [indigo, cream, rust, black]
+    rendering_method: Woodblock print texture
+    target_audience: [art print buyers, vintage buyers]
+    products_it_fits: [wall art, kitchen art, seasonal art]
+    avoid_using_with: [baby nursery, luxury wedding]
+    commercial_appeal: 78
+    difficulty: 63
+    trend_score: 74
+    seasonality: [Autumn, Winter]
+  - name: Folk Art
+    description: Decorative handmade motifs with charming traditional symmetry.
+    typical_color_palette: [red, navy, cream, green]
+    rendering_method: Folk art painting
+    target_audience: [home decor buyers, crafters]
+    products_it_fits: [kitchen art, holiday, wall art]
+    avoid_using_with: [minimal modern]
+    commercial_appeal: 83
+    difficulty: 52
+    trend_score: 79
+    seasonality: [Christmas, Autumn]
+  - name: Japanese Washi
+    description: Refined paper pattern aesthetic with soft decorative rhythm.
+    typical_color_palette: [indigo, blush, rice paper, gold]
+    rendering_method: Washi paper pattern design
+    target_audience: [journalers, scrapbookers, paper crafters]
+    products_it_fits: [digital paper, patterns, stationery]
+    avoid_using_with: [farmhouse, dark academia]
+    commercial_appeal: 81
+    difficulty: 56
+    trend_score: 76
+    seasonality: [Spring, Evergreen]
+  - name: Soft Pastel Nursery
+    description: Gentle baby-friendly art with rounded forms and calming tones.
+    typical_color_palette: [powder blue, blush, cream, mint]
+    rendering_method: Soft pastel nursery illustration
+    target_audience: [parents, nursery buyers, baby shower buyers]
+    products_it_fits: [nursery art, baby animals, baby shower]
+    avoid_using_with: [dark academia, gothic]
+    commercial_appeal: 95
+    difficulty: 45
+    trend_score: 88
+    seasonality: [Spring, Evergreen]
+  - name: Luxury Wedding
+    description: Premium romantic stationery style with elegant restrained detail.
+    typical_color_palette: [ivory, champagne, blush, muted gold]
+    rendering_method: Luxury stationery illustration
+    target_audience: [brides, wedding planners]
+    products_it_fits: [wedding invitation, bridal shower, stationery]
+    avoid_using_with: [teacher stickers, kawaii]
+    commercial_appeal: 94
+    difficulty: 58
+    trend_score: 87
+    seasonality: [Wedding Season, Spring, Summer]

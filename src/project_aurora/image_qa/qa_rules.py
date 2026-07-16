@@ -179,6 +179,78 @@ class MetadataPresentRule:
         )
 
 
+class StyleMatchRule:
+    """Ensure generated metadata matches the chosen Muse style."""
+
+    name = "Style Match"
+
+    def evaluate(self, context: AssetContext) -> RuleResult:
+        expected = context.metadata.get("expected_style")
+        actual = context.metadata.get("style")
+        if expected is None:
+            return RuleResult(self.name, True, message="No style expectation provided.")
+        passed = str(actual).casefold() == str(expected).casefold()
+        return RuleResult(
+            rule_name=self.name,
+            passed=passed,
+            message="Image metadata matches chosen style." if passed else "Image metadata does not match chosen style.",
+        )
+
+
+class PaletteMatchRule:
+    """Ensure generated metadata matches the chosen palette."""
+
+    name = "Palette Match"
+
+    def evaluate(self, context: AssetContext) -> RuleResult:
+        expected = context.metadata.get("expected_palette")
+        actual = context.metadata.get("palette")
+        if expected is None:
+            return RuleResult(self.name, True, message="No palette expectation provided.")
+        passed = str(expected).casefold() in str(actual).casefold()
+        return RuleResult(
+            rule_name=self.name,
+            passed=passed,
+            message="Image metadata matches chosen palette." if passed else "Image metadata does not match chosen palette.",
+        )
+
+
+class CompositionMatchRule:
+    """Ensure generated metadata matches the chosen composition."""
+
+    name = "Composition Match"
+
+    def evaluate(self, context: AssetContext) -> RuleResult:
+        expected = context.metadata.get("expected_composition")
+        actual = context.metadata.get("composition")
+        if expected is None:
+            return RuleResult(self.name, True, message="No composition expectation provided.")
+        passed = str(expected).casefold() in str(actual).casefold()
+        return RuleResult(
+            rule_name=self.name,
+            passed=passed,
+            message="Image metadata matches chosen composition." if passed else "Image metadata does not match chosen composition.",
+        )
+
+
+class RenderingConsistencyRule:
+    """Ensure generated metadata matches the chosen rendering method."""
+
+    name = "Rendering Consistency"
+
+    def evaluate(self, context: AssetContext) -> RuleResult:
+        expected = context.metadata.get("expected_rendering")
+        actual = context.metadata.get("rendering")
+        if expected is None:
+            return RuleResult(self.name, True, message="No rendering expectation provided.")
+        passed = str(expected).casefold() in str(actual).casefold()
+        return RuleResult(
+            rule_name=self.name,
+            passed=passed,
+            message="Image metadata matches chosen rendering." if passed else "Image metadata does not match chosen rendering.",
+        )
+
+
 DEFAULT_QA_RULES: tuple[QARule, ...] = (
     FileExistsRule(),
     DuplicateFilenameRule(),
@@ -187,4 +259,8 @@ DEFAULT_QA_RULES: tuple[QARule, ...] = (
     ResolutionRule(),
     ImageDimensionsRule(),
     TransparentBackgroundRule(),
+    StyleMatchRule(),
+    PaletteMatchRule(),
+    CompositionMatchRule(),
+    RenderingConsistencyRule(),
 )

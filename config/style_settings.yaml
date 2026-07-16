@@ -1,0 +1,6 @@
+minimum_style_confidence: 70
+maximum_style_reuse: 2
+preferred_style_diversity: high
+style_rotation_weight: 18
+season_weight: 10
+trend_weight: 12

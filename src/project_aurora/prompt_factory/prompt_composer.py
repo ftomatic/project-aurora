@@ -58,6 +58,49 @@ class PromptComposer:
             self._memory.save_prompt_recipe(recipe, recipe_id=recipe_id)
         return recipe
 
+    def compose_art_directed(
+        self,
+        product: str,
+        style: str,
+        palette: str,
+        rendering_method: str,
+        composition: str,
+        mood: str,
+        recipe_id: str = "latest",
+    ) -> PromptRecipe:
+        """Compose a prompt from Muse art-direction fields."""
+        final_prompt = (
+            f"Product: {product},\n"
+            f"Style: {style},\n"
+            f"Palette: {palette},\n"
+            f"Rendering: {rendering_method},\n"
+            f"Composition: {composition},\n"
+            f"Mood: {mood},\n"
+            "commercial digital printable artwork, cohesive product collection, "
+            "high detail, clean production-ready assets."
+        )
+        recipe = PromptRecipe(
+            subject=product,
+            character=f"{product} cohesive product assets",
+            style=style,
+            color_palette=palette,
+            lighting="style-appropriate professional lighting",
+            composition=composition,
+            background="transparent or clean printable background as appropriate",
+            rendering=rendering_method,
+            commercial_requirements="commercial use digital download ready",
+            consistency_rules="consistent palette, rendering method, composition, and mood",
+            negative_prompt=(
+                "No text, No watermark, No logo, No cropped objects, "
+                "No inconsistent style, No mismatched palette"
+            ),
+            provider_formatting="single image prompt, comma-separated descriptive phrases",
+            final_prompt=final_prompt,
+        )
+        if self._memory is not None:
+            self._memory.save_prompt_recipe(recipe, recipe_id=recipe_id)
+        return recipe
+
     @staticmethod
     def _build_components(
         subject: str,
