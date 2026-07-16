@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import shutil
 import sys
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -264,6 +265,7 @@ class ProductFactoryResumeService:
             client=self._client,
             existing_draft_id=listing_id,
             image_config=ImageProviderConfig.from_file(OPENAI_CONFIG_PATH),
+            failed_stage=failed_stage,
         )
         report = ProductFactory(
             queue_manager=self._queue_manager,
@@ -326,6 +328,7 @@ class StageAwareResumeRunner(DefaultProductFactoryStageRunner):
         client: EtsyClient,
         existing_draft_id: str | None,
         image_config: ImageProviderConfig,
+        failed_stage: str = "",
     ) -> None:
         super().__init__(
             memory=memory,
@@ -334,6 +337,40 @@ class StageAwareResumeRunner(DefaultProductFactoryStageRunner):
         )
         self._resume_client = client
         self._existing_draft_id = existing_draft_id
+        self._failed_stage = failed_stage
+
+    def compose_prompts(self, job: ProductionJob) -> Any:
+        result = super().compose_prompts(job)
+        if self._failed_stage == "image_qa":
+            try:
+                prompt_package = self._memory.load_prompt_package(job.id)
+            except FileNotFoundError:
+                prompt_package = {}
+            print("PROMPT CORRECTION")
+            print("")
+            print("Product")
+            print(job.product_name)
+            print("")
+            print("Corrected Category")
+            print(job.category)
+            print("")
+            print("Corrected Style")
+            print(prompt_package.get("style", ""))
+            print("")
+            print("Corrected Composition")
+            print(prompt_package.get("composition", ""))
+            print("")
+            print("Negative Constraints")
+            for constraint in prompt_package.get("negative_prompt", "").split(","):
+                cleaned = constraint.strip()
+                if cleaned:
+                    print(cleaned)
+        return result
+
+    def generate_images(self, job: ProductionJob) -> Any:
+        if self._failed_stage == "image_qa":
+            _archive_rejected_generated_images(self.job_paths(job).generated_images_dir)
+        return super().generate_images(job)
 
     def create_etsy_draft(self, job: ProductionJob, seo_package: Any) -> Any:
         if self._existing_draft_id:
@@ -504,6 +541,26 @@ def _valid_final_image_files(final_images_dir: Path) -> tuple[Path, ...]:
     if errors:
         raise RuntimeError("Invalid final image files: " + "; ".join(errors))
     return files
+
+
+def _archive_rejected_generated_images(generated_images_dir: Path) -> None:
+    """Move image-QA rejected source PNGs out of the active generation folder."""
+    if not generated_images_dir.exists():
+        return
+    pngs = tuple(sorted(generated_images_dir.glob("*.png"), key=lambda path: path.name))
+    if not pngs:
+        return
+    rejected_root = generated_images_dir / "rejected"
+    rejected_root.mkdir(parents=True, exist_ok=True)
+    attempt_index = 1
+    while (rejected_root / f"attempt_{attempt_index}").exists():
+        attempt_index += 1
+    if attempt_index > 2:
+        raise RuntimeError("Maximum image QA regeneration attempts reached for this job.")
+    attempt_dir = rejected_root / f"attempt_{attempt_index}"
+    attempt_dir.mkdir(parents=True, exist_ok=False)
+    for path in pngs:
+        shutil.move(str(path), str(attempt_dir / path.name))
 
 
 def _existing_listing_images_by_rank(

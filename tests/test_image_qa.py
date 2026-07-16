@@ -141,6 +141,54 @@ class ImageQATest(unittest.TestCase):
         self.assertEqual(results[0].status, FAIL)
         self.assertIn("File Exists", results[0].checks_failed)
 
+    def test_structured_qa_findings_include_style_rule_reasons(self) -> None:
+        image_result = {
+            "generated_files": [str(self.image_path)],
+            "metadata": {
+                **self.metadata,
+                "expected_style": "Flat Vector",
+                "style": "Watercolor Landscape",
+                "expected_rendering": "flat vector",
+                "rendering": "soft watercolor",
+                "expected_palette": "bright primary",
+                "palette": "muted earth tones",
+                "expected_composition": "finished readable alphabet poster wall-art composition",
+                "composition": "sticker sheet cluster",
+                "expected_background_treatment": "clean light poster background",
+                "background_treatment": "misty landscape background",
+                "expected_product_type": "teacher wall art",
+            },
+        }
+
+        findings = ImageQAEngine(memory=self.memory).evaluate_image_findings(image_result)
+
+        self.assertEqual(len(findings), 1)
+        finding = findings[0]
+        self.assertEqual(finding["selected_style"], "Flat Vector")
+        self.assertEqual(finding["rendering_family_result"]["status"], "FAIL")
+        self.assertEqual(finding["palette_result"]["status"], "FAIL")
+        self.assertEqual(finding["composition_result"]["status"], "FAIL")
+        self.assertEqual(finding["background_result"]["status"], "FAIL")
+        self.assertIn("Composition Match", finding["failed_rules"])
+        self.assertEqual(finding["rule_confidence"]["Composition Match"], 0)
+
+    def test_technical_pass_but_style_fail_is_explained(self) -> None:
+        image_result = {
+            "generated_files": [str(self.image_path)],
+            "metadata": {
+                **self.metadata,
+                "expected_style": "Flat Vector",
+                "style": "Oil Painting",
+            },
+        }
+
+        results = ImageQAEngine(memory=self.memory).evaluate_image_result(image_result)
+        findings = ImageQAEngine(memory=self.memory).evaluate_image_findings(image_result)
+
+        self.assertEqual(results[0].status, FAIL)
+        self.assertNotIn("File Exists", findings[0]["technical_failed_rules"])
+        self.assertIn("Style Match", findings[0]["style_failed_rules"])
+
     def test_memory_saving(self) -> None:
         image_result = ImageResult(
             status="SUCCESS",

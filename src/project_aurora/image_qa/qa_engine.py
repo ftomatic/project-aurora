@@ -40,6 +40,9 @@ class ImageQAEngine:
         image_result = self._memory.load_image_result(image_result_id)
         results = self.evaluate_image_result(image_result)
         self._memory.save_image_qa_results(results)
+        findings = self.evaluate_image_findings(image_result)
+        self._memory.save_record("image_qa_findings", image_result_id, {"findings": findings})
+        self._memory.save_record("image_qa_findings", "latest", {"findings": findings})
         return results
 
     def evaluate_image_result(
@@ -79,6 +82,31 @@ class ImageQAEngine:
         )
         rule_results = tuple(rule.evaluate(context) for rule in self._rules)
         return self._build_result(asset_path, rule_results)
+
+    def evaluate_image_findings(
+        self,
+        image_result: dict[str, Any],
+    ) -> tuple[dict[str, Any], ...]:
+        """Return structured QA findings for every generated asset."""
+        generated_files = image_result.get("generated_files")
+        if not isinstance(generated_files, list):
+            raise ValueError("Image result does not include generated files.")
+
+        metadata = image_result.get("metadata")
+        if not isinstance(metadata, dict):
+            metadata = {}
+
+        asset_paths = tuple(Path(str(path)) for path in generated_files)
+        findings: list[dict[str, Any]] = []
+        for asset_path in asset_paths:
+            context = AssetContext(
+                asset_path=asset_path,
+                all_asset_paths=asset_paths,
+                metadata=metadata,
+            )
+            rule_results = tuple(rule.evaluate(context) for rule in self._rules)
+            findings.append(_structured_finding(asset_path, metadata, rule_results))
+        return tuple(findings)
 
     @staticmethod
     def _build_result(
@@ -131,3 +159,61 @@ class ImageQAEngine:
             review_required=review_required,
             created_at=datetime.now(),
         )
+
+
+STYLE_RULE_FIELDS = {
+    "Rendering Consistency": "rendering_family_result",
+    "Palette Match": "palette_result",
+    "Composition Match": "composition_result",
+    "Background Treatment": "background_result",
+    "Product Type Suitability": "product_type_suitability",
+}
+
+
+def _structured_finding(
+    asset_path: Path,
+    metadata: dict[str, Any],
+    rule_results: tuple[RuleResult, ...],
+) -> dict[str, Any]:
+    by_name = {result.rule_name: result for result in rule_results}
+    failed_rules = tuple(
+        result.rule_name
+        for result in rule_results
+        if not result.passed and not result.warning
+    )
+    technical_failed = tuple(
+        result.rule_name
+        for result in rule_results
+        if result.rule_family == "technical" and not result.passed and not result.warning
+    )
+    style_failed = tuple(
+        result.rule_name
+        for result in rule_results
+        if result.rule_family == "style" and not result.passed and not result.warning
+    )
+    finding: dict[str, Any] = {
+        "file": str(asset_path),
+        "selected_style": metadata.get("expected_style") or metadata.get("style") or "",
+        "failed_rules": failed_rules,
+        "technical_failed_rules": technical_failed,
+        "style_failed_rules": style_failed,
+        "rule_confidence": {
+            result.rule_name: int(result.confidence)
+            for result in rule_results
+        },
+    }
+    for rule_name, field_name in STYLE_RULE_FIELDS.items():
+        result = by_name.get(rule_name)
+        if result is None:
+            finding[field_name] = {
+                "status": "NOT_EVALUATED",
+                "message": "",
+                "confidence": 0,
+            }
+        else:
+            finding[field_name] = {
+                "status": "PASS" if result.passed else "FAIL",
+                "message": result.message,
+                "confidence": int(result.confidence),
+            }
+    return finding

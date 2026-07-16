@@ -148,7 +148,50 @@ class MuseTest(unittest.TestCase):
         self.assertIn("isolated", clipart.composition)
         self.assertIn("seamless pattern", paper.composition)
         self.assertIn("invitation", invitation.composition)
-        self.assertIn("grid", sticker.composition)
+        self.assertIn("cuttable", sticker.composition)
+
+    def test_teacher_wall_art_does_not_receive_sticker_sheet_composition(self) -> None:
+        direction = self.engine.select_style(
+            product="Classroom Alphabet Wall Art",
+            audience="teachers",
+            season="Back to School",
+            product_type="teacher wall art",
+        )
+
+        self.assertEqual(direction.category, "teacher wall art")
+        self.assertEqual(direction.recommended_style, "Flat Vector")
+        self.assertIn("alphabet poster", direction.composition)
+        self.assertIn("wall-art", direction.composition)
+        self.assertNotIn("sticker", direction.composition.casefold())
+
+    def test_bridal_shower_games_do_not_receive_landscape_style(self) -> None:
+        direction = self.engine.select_style(
+            product="Boho Bridal Shower Games",
+            audience="brides",
+            season="Wedding Season",
+            product_type="bridal shower printable",
+        )
+
+        self.assertEqual(direction.category, "bridal shower printable")
+        self.assertIn(
+            direction.recommended_style,
+            {"Editorial Minimal", "Fine Line Floral", "Pressed Flowers", "Luxury Wedding"},
+        )
+        self.assertIn("stationery", direction.composition)
+        self.assertNotIn("landscape", direction.composition.casefold())
+
+    def test_sticker_sheet_mapping_is_cuttable_with_outlines(self) -> None:
+        direction = self.engine.select_style(
+            product="Spring Garden Sticker Sheet",
+            audience="crafters",
+            season="Spring",
+            product_type="sticker sheet",
+        )
+
+        self.assertEqual(direction.category, "sticker sheets")
+        self.assertIn(direction.recommended_style, {"Flat Vector", "Kawaii"})
+        self.assertIn("cuttable", direction.composition)
+        self.assertIn("white outlines", direction.composition)
 
     def test_prompt_contains_muse_style_information(self) -> None:
         direction = self.engine.select_style(

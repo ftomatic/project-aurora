@@ -330,14 +330,20 @@ def _category_for(product: str, product_type: str) -> str:
     haystack = f"{product} {product_type}".casefold()
     if "coastal" in haystack and ("wall art" in haystack or "print" in haystack):
         return "coastal wall art"
+    if ("teacher" in haystack or "classroom" in haystack) and (
+        "wall art" in haystack or "alphabet" in haystack or "poster" in haystack
+    ):
+        return "teacher wall art"
+    if "bridal shower" in haystack or "shower games" in haystack:
+        return "bridal shower printable"
+    if "sticker" in haystack:
+        return "sticker sheets"
     if "teacher" in haystack or "classroom" in haystack:
         return "teacher printables"
     if "wedding" in haystack:
         return "wedding"
     if "invitation" in haystack:
         return "invitations"
-    if "sticker" in haystack:
-        return "sticker sheets"
     if "digital paper" in haystack or "paper" in haystack:
         return "digital paper"
     if "kitchen" in haystack:
@@ -392,12 +398,18 @@ def _composition_template_for_category(category: str, fallback: str) -> str:
     lowered = category.casefold()
     if "clipart" in lowered:
         return "isolated elements on transparent or clean white background"
+    if "teacher wall art" in lowered:
+        return "finished readable alphabet poster wall-art composition"
+    if "bridal shower printable" in lowered:
+        return "neutral boho stationery game layout with refined typography hierarchy"
     if "wall art" in lowered:
         return "finished artwork with listing mockup-ready composition"
     if "invitation" in lowered or "wedding" in lowered:
         return "complete invitation layout with typography hierarchy"
-    if "sticker" in lowered or "teacher" in lowered:
-        return "grid or clustered sticker layout with clear cuttable shapes"
+    if "sticker" in lowered:
+        return "individual cuttable sticker elements with white outlines on a clean light background"
+    if "teacher" in lowered:
+        return "bright readable classroom printable layout"
     if "digital paper" in lowered:
         return "seamless pattern presentation with tiled preview"
     return fallback

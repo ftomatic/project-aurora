@@ -250,7 +250,13 @@ class DefaultProductFactoryStageRunner:
         """Run deterministic image QA."""
         from project_aurora.image_qa.qa_engine import ImageQAEngine
 
-        return ImageQAEngine(memory=self._memory).run()
+        results = ImageQAEngine(memory=self._memory).run()
+        try:
+            findings = self._memory.load_record("image_qa_findings", "latest").get("findings", ())
+        except FileNotFoundError:
+            findings = ()
+        _print_qa_findings(findings)
+        return results
 
     def export_commercial_images(self, job: ProductionJob) -> Any:
         """Export final commercial PNGs."""
@@ -710,7 +716,8 @@ def _raise_if_failed(stage_name: str, result: Any) -> None:
             raise ProductFactoryStageError(
                 stage_name,
                 tuple(
-                    f"{getattr(item, 'asset_name', 'asset')} failed QA"
+                    f"{getattr(item, 'asset_name', 'asset')} failed QA: "
+                    f"{', '.join(getattr(item, 'checks_failed', ()) or ('unknown rule',))}"
                     for item in bad
                 ),
             )
@@ -890,7 +897,17 @@ def _validate_job_seo_package(
     if len(title) > 140:
         raise RuntimeError("SEO package title exceeds Etsy title length.")
     if not _title_is_relevant_to_job(title, job):
-        raise RuntimeError("SEO package title is not relevant to the current product.")
+        report = _title_relevance_report(title, job)
+        _print_title_relevance_report(report)
+        raise RuntimeError(
+            "SEO package title is not relevant to the current product. "
+            f"Generated title: {report['generated_title']}. "
+            f"Required product concepts: {', '.join(report['required_product_concepts'])}. "
+            f"Missing concepts: {', '.join(report['missing_concepts']) or 'none'}. "
+            "Unrelated concepts detected: "
+            f"{', '.join(report['unrelated_concepts_detected']) or 'none'}. "
+            f"Relevance score: {report['relevance_score']}."
+        )
     if previous_title and title.casefold() == previous_title.casefold():
         raise RuntimeError("SEO package title is identical to the immediately previous product.")
     if not _description_is_relevant_to_job(description, job):
@@ -978,15 +995,53 @@ def _previous_product_title(memory: MemoryManager, current_job_id: str) -> str:
 
 
 def _print_seo_diagnostics(job: ProductionJob, package: Any) -> None:
+    report = _title_relevance_report(str(getattr(package, "title", "")), job)
     print("SEO JOB")
     print(job.product_name)
     print("")
     print("SEO TITLE")
     print(getattr(package, "title", ""))
     print("")
+    print("REQUIRED PRODUCT CONCEPTS")
+    for concept in report["required_product_concepts"]:
+        print(concept)
+    print("")
+    print("MISSING CONCEPTS")
+    for concept in report["missing_concepts"]:
+        print(concept)
+    print("")
+    print("UNRELATED CONCEPTS DETECTED")
+    for concept in report["unrelated_concepts_detected"]:
+        print(concept)
+    print("")
+    print("RELEVANCE SCORE")
+    print(report["relevance_score"])
+    print("")
     print("SEO TAGS")
     for tag in getattr(package, "tags", ()):
         print(tag)
+
+
+def _print_title_relevance_report(report: dict[str, Any]) -> None:
+    print("SEO RELEVANCE DIAGNOSTICS")
+    print("")
+    print("Generated Title")
+    print(report["generated_title"])
+    print("")
+    print("Required Product Concepts")
+    for concept in report["required_product_concepts"]:
+        print(concept)
+    print("")
+    print("Missing Concepts")
+    for concept in report["missing_concepts"]:
+        print(concept)
+    print("")
+    print("Unrelated Concepts Detected")
+    for concept in report["unrelated_concepts_detected"]:
+        print(concept)
+    print("")
+    print("Exact Relevance Score")
+    print(report["relevance_score"])
 
 
 def _print_art_direction_diagnostics(prompt_package: dict[str, Any], job: ProductionJob) -> None:
@@ -1023,9 +1078,60 @@ def _print_art_direction_diagnostics(prompt_package: dict[str, Any], job: Produc
     print(art_direction.get("proven_winner_evidence_used", "none"))
 
 
+def _print_qa_findings(findings: Any) -> None:
+    if not isinstance(findings, (list, tuple)):
+        return
+    failed = [
+        finding
+        for finding in findings
+        if isinstance(finding, dict) and finding.get("failed_rules")
+    ]
+    if not failed:
+        return
+    print("IMAGE QA FINDINGS")
+    for finding in failed:
+        print("")
+        print("File")
+        print(finding.get("file", ""))
+        print("Selected Style")
+        print(finding.get("selected_style", ""))
+        for label, key in (
+            ("Rendering Family", "rendering_family_result"),
+            ("Palette", "palette_result"),
+            ("Composition", "composition_result"),
+            ("Background", "background_result"),
+            ("Product Type Suitability", "product_type_suitability"),
+        ):
+            value = finding.get(key)
+            if not isinstance(value, dict):
+                continue
+            print(label)
+            print(
+                f"{value.get('status', '')} "
+                f"({value.get('confidence', 0)}%) - {value.get('message', '')}"
+            )
+        print("Exact Failed Rules")
+        for rule in finding.get("failed_rules", ()):
+            print(rule)
+
+
 def _title_is_relevant_to_job(title: str, job: ProductionJob) -> bool:
+    report = _title_relevance_report(title, job)
+    return (
+        report["relevance_score"] >= 70
+        and not report["missing_concepts"]
+        and not report["unrelated_concepts_detected"]
+    )
+
+
+def _title_relevance_report(title: str, job: ProductionJob) -> dict[str, Any]:
     lowered = title.casefold()
     product_lower = job.product_name.casefold()
+    title_tokens = {
+        token
+        for token in re.split(r"[^a-z0-9]+", lowered)
+        if len(token) > 2
+    }
     unrelated = (
         "summer berry",
         "cupcake toppers",
@@ -1033,38 +1139,61 @@ def _title_is_relevant_to_job(title: str, job: ProductionJob) -> bool:
         "girls party decor",
         "birthday invitation",
     )
-    if any(term in lowered for term in unrelated):
-        return False
+    unrelated_detected = tuple(term for term in unrelated if term in lowered)
+    required = _required_title_concepts(job)
+    missing: list[str] = []
+    for concept in required:
+        options = tuple(option.strip() for option in concept.split("|"))
+        if not any(option.casefold() in title_tokens or option.casefold() in lowered for option in options):
+            missing.append(concept)
     product_tokens = {
         token
         for token in re.split(r"[^a-z0-9]+", job.product_name.casefold())
         if len(token) > 2
     }
-    title_tokens = {
-        token
-        for token in re.split(r"[^a-z0-9]+", lowered)
-        if len(token) > 2
-    }
-    if not (product_tokens & title_tokens):
-        return False
+    overlap_score = 20 if product_tokens & title_tokens else 0
+    concept_score = int(80 * ((len(required) - len(missing)) / max(1, len(required))))
+    penalty = 25 * len(unrelated_detected)
+    score = max(0, min(100, overlap_score + concept_score - penalty))
     if "wildflower wedding invitation" in product_lower:
         if not {"wildflower", "wedding", "invitation"} <= title_tokens:
-            return False
+            score = 0
         if not ({"floral"} & title_tokens):
-            return False
+            score = 0
         if not ({"printable", "digital"} & title_tokens):
-            return False
+            score = 0
     if "clipart" in product_lower and not ({"clipart", "graphics"} & title_tokens):
-        return False
+        score = 0
     if "sticker" in product_lower and "sticker" not in title_tokens and "stickers" not in title_tokens:
-        return False
+        score = 0
     if "paper" in product_lower and "paper" not in title_tokens:
-        return False
+        score = 0
     if "birthday" in product_lower and ({"wall", "art"} <= title_tokens):
-        return False
+        score = 0
     if "clipart" in product_lower and ({"wall", "art"} <= title_tokens):
-        return False
-    return True
+        score = 0
+    return {
+        "generated_title": title,
+        "required_product_concepts": tuple(required),
+        "missing_concepts": tuple(missing),
+        "unrelated_concepts_detected": unrelated_detected,
+        "relevance_score": score,
+    }
+
+
+def _required_title_concepts(job: ProductionJob) -> tuple[str, ...]:
+    lowered = f"{job.product_name} {job.category}".casefold()
+    concepts: list[str] = []
+    for token in re.split(r"[^a-z0-9]+", job.product_name.casefold()):
+        if len(token) > 2 and token not in {"and", "the", "for", "with"}:
+            concepts.append(token)
+    if "strawberry" in lowered:
+        concepts.append("berry|summer")
+    if "printable" in lowered or "party" in lowered:
+        concepts.append("printable")
+    if "birthday" in lowered:
+        concepts.append("birthday")
+    return tuple(dict.fromkeys(concepts))
 
 
 def _description_is_relevant_to_job(description: str, job: ProductionJob) -> bool:

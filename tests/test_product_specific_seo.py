@@ -31,6 +31,7 @@ from project_aurora.planning.production_queue_manager import ProductionJob  # no
 from project_aurora.production.product_factory import (  # noqa: E402
     DefaultProductFactoryStageRunner,
     ProductFactoryPaths,
+    _title_relevance_report,
 )
 from project_aurora.production.production_report import ProductionReport  # noqa: E402
 from project_aurora.seo.seo_audit import audit_listing_seo  # noqa: E402
@@ -114,6 +115,23 @@ class ProductSpecificSEOTest(unittest.TestCase):
             )
             paths.append(str(path))
         return tuple(paths)
+
+    def test_strawberry_seo_title_repair_includes_required_concepts(self) -> None:
+        job = self.job(
+            "job-strawberry",
+            "Summer Strawberry Birthday Printable",
+            "party printable",
+        )
+
+        package = self.runner.generate_seo(job)
+        report = _title_relevance_report(package.title, job)
+
+        self.assertIn("Strawberry", package.title)
+        self.assertIn("Birthday", package.title)
+        self.assertIn("Printable", package.title)
+        self.assertFalse(report["missing_concepts"])
+        self.assertFalse(report["unrelated_concepts_detected"])
+        self.assertGreaterEqual(report["relevance_score"], 70)
 
     def save_verified_report(
         self,

@@ -48,6 +48,26 @@ def failed_job(index: int) -> ProductionJob:
     )
 
 
+def completed_job(index: int) -> ProductionJob:
+    """Create a completed production job."""
+    job = failed_job(index)
+    return ProductionJob(
+        id=job.id,
+        priority=job.priority,
+        product_name="Autumn Mushroom Clipart",
+        category=job.category,
+        style=job.style,
+        seasonal_theme=job.seasonal_theme,
+        keywords=job.keywords,
+        confidence_score=job.confidence_score,
+        estimated_competition=job.estimated_competition,
+        estimated_demand=job.estimated_demand,
+        estimated_revenue=job.estimated_revenue,
+        created_at=job.created_at,
+        status=COMPLETED,
+    )
+
+
 class FailedBatchRecoveryTest(unittest.TestCase):
     def setUp(self) -> None:
         self.temp_dir = tempfile.TemporaryDirectory()
@@ -190,6 +210,48 @@ class FailedBatchRecoveryTest(unittest.TestCase):
         self.assertEqual(report.completed, 1)
         self.assertEqual(report.still_failed, 1)
         self.assertEqual(report.status, "PARTIAL_FAILURE")
+
+    def test_completed_autumn_job_is_skipped(self) -> None:
+        self.queue.add_existing_job(completed_job(1))
+        self.queue.add_existing_job(failed_job(2))
+        resumed: list[str] = []
+
+        class FakeResumeService:
+            def __init__(self, memory: MemoryManager, queue_manager: ProductionQueueManager, **kwargs: object) -> None:
+                self._memory = memory
+                self._queue_manager = queue_manager
+
+            def resume(self, job_id: str) -> object:
+                resumed.append(job_id)
+                report = ProductionReport(
+                    job_id=job_id,
+                    product="Product 2",
+                    style="Storybook Watercolor",
+                    draft_id="draft-2",
+                    images=4,
+                    downloads=4,
+                    time=1,
+                    success=True,
+                    metadata={"image_generation": {"status": "SUCCESS", "warnings": []}},
+                )
+                self._queue_manager.mark_completed(job_id)
+                self._memory.save_record("production_reports", job_id, report.to_dict())
+                return object()
+
+        with patch("scripts.resume_failed_batch.ProductFactoryResumeService", FakeResumeService), patch(
+            "scripts.resume_failed_batch.EtsyConfig.from_environment",
+            return_value=type("Config", (), {"is_mock_mode": True})(),
+        ), patch("scripts.resume_failed_batch.print_etsy_config_diagnostics"):
+            report = run_failed_batch_recovery(
+                limit=5,
+                queue_path=self.queue_path,
+                memory=self.memory,
+                runtime_config=BatchRuntimeConfig(openai_image_delay_seconds=0),
+            )
+
+        self.assertEqual(resumed, ["job-2"])
+        self.assertEqual(report.jobs_found, 1)
+        self.assertEqual(report.completed, 1)
 
 
 if __name__ == "__main__":

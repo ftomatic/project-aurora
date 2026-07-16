@@ -25,6 +25,8 @@ class RuleResult:
     passed: bool
     warning: bool = False
     message: str = ""
+    confidence: int = 100
+    rule_family: str = "technical"
 
 
 class QARule(Protocol):
@@ -47,6 +49,7 @@ class FileExistsRule:
             rule_name=self.name,
             passed=exists,
             message="File is present." if exists else "File is missing.",
+            confidence=100 if exists else 0,
         )
 
 
@@ -62,6 +65,7 @@ class DuplicateFilenameRule:
             rule_name=self.name,
             passed=not duplicate,
             warning=duplicate,
+            confidence=70 if duplicate else 100,
             message=(
                 "Filename is unique."
                 if not duplicate
@@ -82,6 +86,7 @@ class NamingConventionRule:
             rule_name=self.name,
             passed=valid,
             warning=not valid,
+            confidence=70 if not valid else 100,
             message=(
                 "Filename follows Aurora convention."
                 if valid
@@ -102,6 +107,7 @@ class ResolutionRule:
             rule_name=self.name,
             passed=passed,
             warning=not passed,
+            confidence=70 if not passed else 100,
             message=(
                 "DPI metadata is production-ready."
                 if passed
@@ -128,6 +134,7 @@ class ImageDimensionsRule:
             rule_name=self.name,
             passed=passed,
             warning=not passed,
+            confidence=70 if not passed else 100,
             message=(
                 "Image dimensions are production-ready."
                 if passed
@@ -148,6 +155,7 @@ class TransparentBackgroundRule:
             rule_name=self.name,
             passed=passed,
             warning=not passed,
+            confidence=70 if not passed else 100,
             message=(
                 "Transparent background metadata is present."
                 if passed
@@ -171,6 +179,7 @@ class MetadataPresentRule:
             rule_name=self.name,
             passed=passed,
             warning=not passed,
+            confidence=70 if not passed else 100,
             message=(
                 "Required metadata is present."
                 if passed
@@ -188,12 +197,19 @@ class StyleMatchRule:
         expected = context.metadata.get("expected_style")
         actual = context.metadata.get("style")
         if expected is None:
-            return RuleResult(self.name, True, message="No style expectation provided.")
+            return RuleResult(
+                self.name,
+                True,
+                message="No style expectation provided.",
+                rule_family="style",
+            )
         passed = str(actual).casefold() == str(expected).casefold()
         return RuleResult(
             rule_name=self.name,
             passed=passed,
             message="Image metadata matches chosen style." if passed else "Image metadata does not match chosen style.",
+            confidence=100 if passed else 0,
+            rule_family="style",
         )
 
 
@@ -206,12 +222,19 @@ class PaletteMatchRule:
         expected = context.metadata.get("expected_palette")
         actual = context.metadata.get("palette")
         if expected is None:
-            return RuleResult(self.name, True, message="No palette expectation provided.")
+            return RuleResult(
+                self.name,
+                True,
+                message="No palette expectation provided.",
+                rule_family="style",
+            )
         passed = str(expected).casefold() in str(actual).casefold()
         return RuleResult(
             rule_name=self.name,
             passed=passed,
             message="Image metadata matches chosen palette." if passed else "Image metadata does not match chosen palette.",
+            confidence=100 if passed else 0,
+            rule_family="style",
         )
 
 
@@ -224,12 +247,19 @@ class CompositionMatchRule:
         expected = context.metadata.get("expected_composition")
         actual = context.metadata.get("composition")
         if expected is None:
-            return RuleResult(self.name, True, message="No composition expectation provided.")
+            return RuleResult(
+                self.name,
+                True,
+                message="No composition expectation provided.",
+                rule_family="style",
+            )
         passed = str(expected).casefold() in str(actual).casefold()
         return RuleResult(
             rule_name=self.name,
             passed=passed,
             message="Image metadata matches chosen composition." if passed else "Image metadata does not match chosen composition.",
+            confidence=100 if passed else 0,
+            rule_family="style",
         )
 
 
@@ -242,12 +272,19 @@ class RenderingConsistencyRule:
         expected = context.metadata.get("expected_rendering")
         actual = context.metadata.get("rendering")
         if expected is None:
-            return RuleResult(self.name, True, message="No rendering expectation provided.")
+            return RuleResult(
+                self.name,
+                True,
+                message="No rendering expectation provided.",
+                rule_family="style",
+            )
         passed = str(expected).casefold() in str(actual).casefold()
         return RuleResult(
             rule_name=self.name,
             passed=passed,
             message="Image metadata matches chosen rendering." if passed else "Image metadata does not match chosen rendering.",
+            confidence=100 if passed else 0,
+            rule_family="style",
         )
 
 
@@ -260,12 +297,19 @@ class BackgroundTreatmentRule:
         expected = context.metadata.get("expected_background_treatment")
         actual = context.metadata.get("background_treatment")
         if expected is None or expected == "":
-            return RuleResult(self.name, True, message="No background expectation provided.")
+            return RuleResult(
+                self.name,
+                True,
+                message="No background expectation provided.",
+                rule_family="style",
+            )
         passed = str(expected).casefold() in str(actual).casefold()
         return RuleResult(
             rule_name=self.name,
             passed=passed,
             message="Image metadata matches chosen background." if passed else "Image metadata does not match chosen background.",
+            confidence=100 if passed else 0,
+            rule_family="style",
         )
 
 
@@ -279,7 +323,12 @@ class ProductTypeSuitabilityRule:
         composition = str(context.metadata.get("composition", "")).casefold()
         background = str(context.metadata.get("background_treatment", "")).casefold()
         if not product_type:
-            return RuleResult(self.name, True, message="No product type expectation provided.")
+            return RuleResult(
+                self.name,
+                True,
+                message="No product type expectation provided.",
+                rule_family="style",
+            )
         if "digital paper" in product_type:
             passed = "pattern" in composition or "tile" in composition or "seamless" in composition
             message = "Digital paper is pattern-like." if passed else "Digital paper is not tileable/pattern-like."
@@ -298,7 +347,13 @@ class ProductTypeSuitabilityRule:
         else:
             passed = True
             message = "Product type has no specific suitability rule."
-        return RuleResult(rule_name=self.name, passed=passed, message=message)
+        return RuleResult(
+            rule_name=self.name,
+            passed=passed,
+            message=message,
+            confidence=100 if passed else 0,
+            rule_family="style",
+        )
 
 
 DEFAULT_QA_RULES: tuple[QARule, ...] = (

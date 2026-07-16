@@ -29,6 +29,7 @@ from project_aurora.storage.csv_storage import CSVStorage  # noqa: E402
 from project_aurora.storage.memory_manager import MemoryManager  # noqa: E402
 from scripts.resume_product_factory_job import (  # noqa: E402
     ProductFactoryResumeService,
+    _archive_rejected_generated_images,
     main,
 )
 
@@ -360,6 +361,21 @@ class ResumeProductFactoryJobTest(unittest.TestCase):
                 self.assertEqual(result.resumed_from_stage, stage)
                 self.assertEqual(result.final_status, "COMPLETED")
                 self.assertEqual(result.etsy_listing_id, LISTING_ID)
+
+    def test_image_qa_retry_archives_rejected_generated_images(self) -> None:
+        generated_dir = self.final_dir.parent / "generated_images"
+        generated_dir.mkdir(parents=True, exist_ok=True)
+        for index in range(1, 5):
+            Image.new("RGBA", (1024, 1024), (index, 0, 0, 255)).save(
+                generated_dir / f"failed_source_{index:02d}.png",
+                format="PNG",
+            )
+
+        _archive_rejected_generated_images(generated_dir)
+
+        self.assertFalse(tuple(generated_dir.glob("*.png")))
+        archived = tuple(sorted((generated_dir / "rejected" / "attempt_1").glob("*.png")))
+        self.assertEqual(len(archived), 4)
 
     def test_resume_customer_download_upload_syncs_only_missing_files(self) -> None:
         self.save_failed_report_for_stage("customer_download_upload", draft_id=LISTING_ID)

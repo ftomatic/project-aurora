@@ -2,7 +2,9 @@
   "playbooks": {
     "coastal wall art": ["coastal_watercolor", "airy_watercolor_landscape", "oil_painting", "fine_line_floral"],
     "nursery": ["storybook_watercolor", "hand_painted_gouache", "kawaii", "scandinavian_minimal"],
+    "teacher wall art": ["flat_vector", "scandinavian_minimal", "kawaii", "retro_70s"],
     "teacher printables": ["flat_vector", "kawaii", "retro_70s", "storybook_watercolor"],
+    "bridal shower printable": ["editorial_minimal", "fine_line_floral", "pressed_flower", "vintage_botanical"],
     "wedding": ["pressed_flower", "editorial_minimal", "fine_line_floral", "vintage_botanical"],
     "clipart": ["hand_painted_gouache", "storybook_watercolor", "vintage_botanical", "flat_vector"],
     "digital paper": ["coastal_watercolor", "vintage_botanical", "retro_70s", "scandinavian_minimal"],
