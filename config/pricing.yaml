@@ -1,5 +1,7 @@
 minimum_margin: 1.00
 commercial_license_premium: 0.50
+live_market_cache_ttl_hours: 24
+minimum_live_comparables: 3
 ranges:
   clipart bundle:
     low: 3.99

@@ -7,6 +7,11 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from project_aurora.merchandising.market_pricing import (
+    LIVE_ETSY_MARKET,
+    MarketPricingProvider,
+)
+
 
 CONFIGURED_FALLBACK = "CONFIGURED_FALLBACK"
 
@@ -26,6 +31,10 @@ class PricingResult:
     evidence: tuple[str, ...]
     confidence: int
     source: str = CONFIGURED_FALLBACK
+    listings_compared: int = 0
+    top_seller_median: float = 0.0
+    premium_seller_median: float = 0.0
+    competition_level: str = ""
     generated_at: datetime = field(default_factory=datetime.now)
 
     def to_dict(self) -> dict[str, Any]:
@@ -41,6 +50,10 @@ class PricingResult:
             "evidence": list(self.evidence),
             "confidence": self.confidence,
             "source": self.source,
+            "listings_compared": self.listings_compared,
+            "top_seller_median": self.top_seller_median,
+            "premium_seller_median": self.premium_seller_median,
+            "competition_level": self.competition_level,
             "generated_at": self.generated_at.isoformat(),
         }
 
@@ -61,9 +74,13 @@ class PricingEngine:
         self,
         config_path: Path | None = None,
         ranges: dict[str, PricingRange] | None = None,
+        market_provider: MarketPricingProvider | None = None,
         minimum_margin: float = 1.0,
         commercial_license_premium: float = 0.5,
+        minimum_live_comparables: int = 3,
     ) -> None:
+        self._market_provider = market_provider
+        self._minimum_live_comparables = minimum_live_comparables
         if ranges is not None:
             self._ranges = ranges
             self._minimum_margin = minimum_margin
@@ -76,6 +93,7 @@ class PricingEngine:
         self._ranges = config["ranges"]
         self._minimum_margin = float(config["minimum_margin"])
         self._premium = float(config["commercial_license_premium"])
+        self._minimum_live_comparables = int(config.get("minimum_live_comparables", minimum_live_comparables))
 
     def resolve_price(
         self,
@@ -90,8 +108,22 @@ class PricingEngine:
         demand_score: float,
         confidence_score: float,
         production_cost: float = 0.0,
+        target_buyer: str = "",
+        artistic_category: str = "",
+        keywords: tuple[str, ...] = (),
     ) -> PricingResult:
         """Return the launch price for a production job."""
+        live_result = self._resolve_live_market_price(
+            product_name=product_name,
+            product_type=product_type,
+            category=category,
+            bundle_size=bundle_size,
+            target_buyer=target_buyer,
+            artistic_category=artistic_category,
+            keywords=keywords,
+        )
+        if live_result is not None:
+            return live_result
         key = _pricing_key(product_name, product_type, category)
         if key not in self._ranges:
             raise RuntimeError(f"No configured pricing range for product type: {product_type or category}.")
@@ -128,6 +160,59 @@ class PricingEngine:
             evidence=(f"pricing_range:{key}", "source:configured_fallback"),
             confidence=86,
             source=CONFIGURED_FALLBACK,
+            listings_compared=0,
+            top_seller_median=0.0,
+            premium_seller_median=0.0,
+            competition_level=competition_level,
+        )
+
+    def _resolve_live_market_price(
+        self,
+        *,
+        product_name: str,
+        product_type: str,
+        category: str,
+        bundle_size: int,
+        target_buyer: str,
+        artistic_category: str,
+        keywords: tuple[str, ...],
+    ) -> PricingResult | None:
+        if self._market_provider is None:
+            return None
+        try:
+            research = self._market_provider.research_pricing(
+                product_name=product_name,
+                product_type=product_type,
+                category=category,
+                keywords=keywords,
+                bundle_size=bundle_size,
+                target_buyer=target_buyer,
+                artistic_category=artistic_category,
+            )
+        except Exception:
+            return None
+        if research is None or research.listings_compared < self._minimum_live_comparables:
+            return None
+        return PricingResult(
+            market_low=research.market_low,
+            market_median=research.market_median,
+            market_high=research.market_high,
+            recommended_price=research.market_median,
+            launch_price=research.suggested_launch_price,
+            mature_price=research.suggested_mature_price,
+            pricing_strategy=research.pricing_strategy,
+            reason=research.reason,
+            evidence=(
+                f"source:{LIVE_ETSY_MARKET}",
+                f"listings_compared:{research.listings_compared}",
+                f"cache_key:{research.cache_key}",
+            ),
+            confidence=research.pricing_confidence,
+            source=LIVE_ETSY_MARKET,
+            listings_compared=research.listings_compared,
+            top_seller_median=research.top_seller_median,
+            premium_seller_median=research.premium_seller_median,
+            competition_level=research.competition_level,
         )
 
 
@@ -160,6 +245,7 @@ def _load_pricing_config(path: Path) -> dict[str, Any]:
     values: dict[str, Any] = {
         "minimum_margin": 1.0,
         "commercial_license_premium": 0.5,
+        "minimum_live_comparables": 3,
         "ranges": {},
     }
     current_key = ""
@@ -170,6 +256,8 @@ def _load_pricing_config(path: Path) -> dict[str, Any]:
             values["minimum_margin"] = float(line.split(":", 1)[1].strip())
         elif line.startswith("commercial_license_premium:"):
             values["commercial_license_premium"] = float(line.split(":", 1)[1].strip())
+        elif line.startswith("minimum_live_comparables:"):
+            values["minimum_live_comparables"] = int(line.split(":", 1)[1].strip())
         elif line.startswith("  ") and not line.startswith("    ") and line.strip().endswith(":"):
             current_key = line.strip().removesuffix(":")
             values["ranges"][current_key] = {}

@@ -354,6 +354,7 @@ class DefaultProductFactoryStageRunner:
             seo_package=seo_package,
             memory=self._memory,
             job_paths=job_paths,
+            etsy_config=self._etsy_config,
         )
         preflight = _run_merchant_preflight(
             job=job,
@@ -1192,9 +1193,14 @@ def _build_and_save_merchant_package(
     seo_package: Any,
     memory: MemoryManager,
     job_paths: ProductFactoryJobPaths,
+    etsy_config: Any,
 ) -> Any:
+    from project_aurora.integrations.etsy.etsy_client import EtsyClient
     from project_aurora.integrations.etsy.etsy_taxonomy_resolver import (
         EtsyTaxonomyResolver,
+    )
+    from project_aurora.merchandising.market_pricing import (
+        EtsyMarketPricingProvider,
     )
     from project_aurora.merchandising.pricing_engine import PricingEngine
     from project_aurora.production.merchant_package import MerchantPackage
@@ -1215,7 +1221,13 @@ def _build_and_save_merchant_package(
             "taxonomy_resolution",
             (taxonomy.resolution_reason,),
         )
-    pricing = PricingEngine().resolve_price(
+    market_provider = None
+    if not getattr(etsy_config, "is_mock_mode", True):
+        market_provider = EtsyMarketPricingProvider(
+            client=EtsyClient(etsy_config),
+            memory=memory,
+        )
+    pricing = PricingEngine(market_provider=market_provider).resolve_price(
         product_name=job.product_name,
         product_type=job.category,
         category=job.category,
@@ -1225,6 +1237,9 @@ def _build_and_save_merchant_package(
         competition_level=job.estimated_competition,
         demand_score=job.demand_score or job.confidence_score,
         confidence_score=job.confidence_score,
+        target_buyer=job.target_customer,
+        artistic_category=job.style,
+        keywords=job.keywords,
     )
     _print_pricing_diagnostics(job, pricing)
     prompt = _load_optional_prompt(memory, job.id)
@@ -1331,6 +1346,18 @@ def _print_pricing_diagnostics(job: ProductionJob, pricing: Any) -> None:
     print("")
     print("Market Range")
     print(f"{pricing.market_low:.2f} - {pricing.market_high:.2f}")
+    print("")
+    print("Listings Compared")
+    print(getattr(pricing, "listings_compared", 0))
+    print("")
+    print("Median")
+    print(f"{pricing.market_median:.2f}")
+    print("")
+    print("Top Seller Median")
+    print(f"{getattr(pricing, 'top_seller_median', 0.0):.2f}")
+    print("")
+    print("Competition")
+    print(getattr(pricing, "competition_level", ""))
     print("")
     print("Recommended Price")
     print(f"{pricing.recommended_price:.2f}")
