@@ -97,6 +97,19 @@ class FailedBatchRecoveryTest(unittest.TestCase):
 
     def test_recovery_batch_summary(self) -> None:
         self.add_failed_jobs(5)
+        for index in range(1, 6):
+            original = ProductionReport(
+                job_id=f"job-{index}",
+                product=f"Product {index}",
+                style="Storybook Watercolor",
+                draft_id=f"draft-{index}",
+                images=1,
+                downloads=0,
+                time=1,
+                success=False,
+                failed_stage="listing_image_upload",
+            )
+            self.memory.save_record("production_reports", f"job-{index}", original.to_dict())
         returned = [
             ProductionReport(
                 job_id=f"job-{index}",
@@ -115,7 +128,17 @@ class FailedBatchRecoveryTest(unittest.TestCase):
                             if index <= 2
                             else []
                         ),
-                    }
+                    },
+                    "listing_image_upload": {
+                        "status": "SUCCESS",
+                        "images_already_present": 1,
+                        "images_uploaded_now": 3,
+                        "images_present_after": 4,
+                    },
+                    "customer_download_upload": {
+                        "files_uploaded": 4,
+                        "metadata": {"total_present": 4},
+                    },
                 },
             )
             for index in range(1, 6)
@@ -144,12 +167,16 @@ class FailedBatchRecoveryTest(unittest.TestCase):
             )
 
         self.assertEqual(report.jobs_found, 5)
-        self.assertEqual(report.completed, 5)
-        self.assertEqual(report.still_failed, 0)
-        self.assertEqual(report.drafts_created, 5)
-        self.assertEqual(report.images_reused, 8)
-        self.assertEqual(report.images_generated_now, 12)
-        self.assertEqual(report.downloads_uploaded, 20)
+        self.assertEqual(report.jobs_verified_complete, 5)
+        self.assertEqual(report.jobs_still_incomplete, 0)
+        self.assertEqual(report.drafts_repaired, 5)
+        self.assertEqual(report.existing_drafts_reused, 5)
+        self.assertEqual(report.new_drafts_created, 0)
+        self.assertEqual(report.missing_images_detected, 15)
+        self.assertEqual(report.images_uploaded_during_repair, 15)
+        self.assertEqual(report.images_present_after, 20)
+        self.assertEqual(report.digital_files_present_after, 20)
+        self.assertEqual(report.missing_digital_files_uploaded, 20)
         self.assertEqual(report.status, "SUCCESS")
         reloaded_queue = ProductionQueueManager(queue_path=self.queue_path)
         self.assertTrue(all(job.status == COMPLETED for job in reloaded_queue.list_jobs()))
@@ -178,7 +205,18 @@ class FailedBatchRecoveryTest(unittest.TestCase):
                 downloads=4,
                 time=1,
                 success=True,
-                metadata={"image_generation": {"status": "SUCCESS", "warnings": []}},
+                metadata={
+                    "image_generation": {"status": "SUCCESS", "warnings": []},
+                    "listing_image_upload": {
+                        "images_already_present": 4,
+                        "images_uploaded_now": 0,
+                        "images_present_after": 4,
+                    },
+                    "customer_download_upload": {
+                        "files_uploaded": 4,
+                        "metadata": {"total_present": 4},
+                    },
+                },
             ),
         ]
 
@@ -207,8 +245,8 @@ class FailedBatchRecoveryTest(unittest.TestCase):
                 runtime_config=BatchRuntimeConfig(openai_image_delay_seconds=0),
             )
 
-        self.assertEqual(report.completed, 1)
-        self.assertEqual(report.still_failed, 1)
+        self.assertEqual(report.jobs_verified_complete, 1)
+        self.assertEqual(report.jobs_still_incomplete, 1)
         self.assertEqual(report.status, "PARTIAL_FAILURE")
 
     def test_completed_autumn_job_is_skipped(self) -> None:
@@ -232,7 +270,18 @@ class FailedBatchRecoveryTest(unittest.TestCase):
                     downloads=4,
                     time=1,
                     success=True,
-                    metadata={"image_generation": {"status": "SUCCESS", "warnings": []}},
+                    metadata={
+                        "image_generation": {"status": "SUCCESS", "warnings": []},
+                        "listing_image_upload": {
+                            "images_already_present": 4,
+                            "images_uploaded_now": 0,
+                            "images_present_after": 4,
+                        },
+                        "customer_download_upload": {
+                            "files_uploaded": 4,
+                            "metadata": {"total_present": 4},
+                        },
+                    },
                 )
                 self._queue_manager.mark_completed(job_id)
                 self._memory.save_record("production_reports", job_id, report.to_dict())
@@ -251,7 +300,54 @@ class FailedBatchRecoveryTest(unittest.TestCase):
 
         self.assertEqual(resumed, ["job-2"])
         self.assertEqual(report.jobs_found, 1)
-        self.assertEqual(report.completed, 1)
+        self.assertEqual(report.jobs_verified_complete, 1)
+
+    def test_recovery_success_requires_final_etsy_verification(self) -> None:
+        self.add_failed_jobs(1)
+        bad_report = ProductionReport(
+            job_id="job-1",
+            product="Product 1",
+            style="Storybook Watercolor",
+            draft_id="draft-1",
+            images=3,
+            downloads=4,
+            time=1,
+            success=True,
+            metadata={
+                "listing_image_upload": {
+                    "images_already_present": 1,
+                    "images_uploaded_now": 2,
+                    "images_present_after": 3,
+                },
+                "customer_download_upload": {
+                    "files_uploaded": 0,
+                    "metadata": {"total_present": 4},
+                },
+            },
+        )
+
+        class FakeResumeService:
+            def __init__(self, memory: MemoryManager, queue_manager: ProductionQueueManager, **kwargs: object) -> None:
+                self._memory = memory
+
+            def resume(self, job_id: str) -> object:
+                self._memory.save_record("production_reports", job_id, bad_report.to_dict())
+                return object()
+
+        with patch("scripts.resume_failed_batch.ProductFactoryResumeService", FakeResumeService), patch(
+            "scripts.resume_failed_batch.EtsyConfig.from_environment",
+            return_value=type("Config", (), {"is_mock_mode": True})(),
+        ), patch("scripts.resume_failed_batch.print_etsy_config_diagnostics"):
+            report = run_failed_batch_recovery(
+                limit=1,
+                queue_path=self.queue_path,
+                memory=self.memory,
+                runtime_config=BatchRuntimeConfig(openai_image_delay_seconds=0),
+            )
+
+        self.assertEqual(report.jobs_verified_complete, 0)
+        self.assertEqual(report.jobs_still_incomplete, 1)
+        self.assertEqual(report.status, "PARTIAL_FAILURE")
 
 
 if __name__ == "__main__":

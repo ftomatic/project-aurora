@@ -47,12 +47,19 @@ class FailedBatchRecoveryReport:
     """Summary of one failed-batch recovery run."""
 
     jobs_found: int
-    completed: int
-    still_failed: int
-    drafts_created: int
-    images_reused: int
-    images_generated_now: int
-    downloads_uploaded: int
+    jobs_verified_complete: int
+    jobs_still_incomplete: int
+    drafts_repaired: int
+    existing_drafts_reused: int
+    new_drafts_created: int
+    images_present_before: int
+    missing_images_detected: int
+    images_uploaded_during_repair: int
+    images_present_after: int
+    digital_files_present_after: int
+    missing_digital_files_uploaded: int
+    verified_complete: int
+    still_incomplete: int
     status: str
     reports: tuple[ProductionReport, ...] = field(default_factory=tuple)
     created_at: datetime = field(default_factory=datetime.now)
@@ -61,12 +68,19 @@ class FailedBatchRecoveryReport:
         """Return JSON-safe recovery report data."""
         return {
             "jobs_found": self.jobs_found,
-            "completed": self.completed,
-            "still_failed": self.still_failed,
-            "drafts_created": self.drafts_created,
-            "images_reused": self.images_reused,
-            "images_generated_now": self.images_generated_now,
-            "downloads_uploaded": self.downloads_uploaded,
+            "jobs_verified_complete": self.jobs_verified_complete,
+            "jobs_still_incomplete": self.jobs_still_incomplete,
+            "drafts_repaired": self.drafts_repaired,
+            "existing_drafts_reused": self.existing_drafts_reused,
+            "new_drafts_created": self.new_drafts_created,
+            "images_present_before": self.images_present_before,
+            "missing_images_detected": self.missing_images_detected,
+            "images_uploaded_during_repair": self.images_uploaded_during_repair,
+            "images_present_after": self.images_present_after,
+            "digital_files_present_after": self.digital_files_present_after,
+            "missing_digital_files_uploaded": self.missing_digital_files_uploaded,
+            "verified_complete": self.verified_complete,
+            "still_incomplete": self.still_incomplete,
             "status": self.status,
             "reports": [report.to_dict() for report in self.reports],
             "created_at": self.created_at.isoformat(),
@@ -130,10 +144,12 @@ def run_failed_batch_recovery(
     print_etsy_config_diagnostics(etsy_config)
 
     reports: list[ProductionReport] = []
+    before_reports: dict[str, dict[str, object]] = {}
     previous_generated_images = False
     for job in failed_jobs:
         if previous_generated_images and config.openai_image_delay_seconds > 0:
             sleeper(config.openai_image_delay_seconds)
+        before_reports[job.id] = _load_job_report(resolved_memory, job.id)
         service = ProductFactoryResumeService(
             memory=resolved_memory,
             queue_manager=queue_manager,
@@ -144,15 +160,28 @@ def run_failed_batch_recovery(
         reports.append(report)
         previous_generated_images = _generated_images_now(report)
 
+    verified = tuple(report for report in reports if _report_verified_complete(report))
+    incomplete = tuple(report for report in reports if not _report_verified_complete(report))
     recovery = FailedBatchRecoveryReport(
         jobs_found=len(failed_jobs),
-        completed=sum(1 for report in reports if report.success),
-        still_failed=sum(1 for report in reports if not report.success),
-        drafts_created=sum(1 for report in reports if report.draft_id),
-        images_reused=sum(_image_count(report, reused=True) for report in reports),
-        images_generated_now=sum(_image_count(report, reused=False) for report in reports),
-        downloads_uploaded=sum(report.downloads for report in reports),
-        status="SUCCESS" if reports and all(report.success for report in reports) else "PARTIAL_FAILURE",
+        jobs_verified_complete=len(verified),
+        jobs_still_incomplete=len(incomplete),
+        drafts_repaired=sum(1 for report in reports if _draft_id_from_saved_report(before_reports.get(report.job_id, {}))),
+        existing_drafts_reused=sum(1 for report in reports if _draft_id_from_saved_report(before_reports.get(report.job_id, {}))),
+        new_drafts_created=sum(
+            1
+            for report in reports
+            if report.draft_id and not _draft_id_from_saved_report(before_reports.get(report.job_id, {}))
+        ),
+        images_present_before=sum(_listing_images_before(report) for report in reports),
+        missing_images_detected=sum(max(0, 4 - _listing_images_before(report)) for report in reports),
+        images_uploaded_during_repair=sum(_listing_images_uploaded_now(report) for report in reports),
+        images_present_after=sum(_listing_images_after(report) for report in reports),
+        digital_files_present_after=sum(_digital_files_after(report) for report in reports),
+        missing_digital_files_uploaded=sum(_digital_files_uploaded_now(report) for report in reports),
+        verified_complete=len(verified),
+        still_incomplete=len(incomplete),
+        status="SUCCESS" if reports and not incomplete else "PARTIAL_FAILURE",
         reports=tuple(reports),
     )
     key = f"failed_batch_recovery_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
@@ -238,6 +267,58 @@ def _image_count(report: ProductionReport, reused: bool) -> int:
     return 4
 
 
+def _report_verified_complete(report: ProductionReport) -> bool:
+    return (
+        report.success
+        and _listing_images_after(report) == 4
+        and _digital_files_after(report) == 4
+    )
+
+
+def _listing_upload_metadata(report: ProductionReport) -> dict[str, object]:
+    value = report.metadata.get("listing_image_upload")
+    return value if isinstance(value, dict) else {}
+
+
+def _digital_upload_metadata(report: ProductionReport) -> dict[str, object]:
+    value = report.metadata.get("customer_download_upload")
+    return value if isinstance(value, dict) else {}
+
+
+def _listing_images_before(report: ProductionReport) -> int:
+    value = _listing_upload_metadata(report).get("images_already_present")
+    return int(value) if isinstance(value, int) else 0
+
+
+def _listing_images_uploaded_now(report: ProductionReport) -> int:
+    value = _listing_upload_metadata(report).get("images_uploaded_now")
+    if isinstance(value, int):
+        return value
+    fallback = _listing_upload_metadata(report).get("images_uploaded")
+    return int(fallback) if isinstance(fallback, int) else 0
+
+
+def _listing_images_after(report: ProductionReport) -> int:
+    value = _listing_upload_metadata(report).get("images_present_after")
+    if isinstance(value, int):
+        return value
+    return int(report.images)
+
+
+def _digital_files_after(report: ProductionReport) -> int:
+    value = _digital_upload_metadata(report).get("metadata")
+    if isinstance(value, dict) and isinstance(value.get("total_present"), int):
+        return int(value["total_present"])
+    return int(report.downloads)
+
+
+def _digital_files_uploaded_now(report: ProductionReport) -> int:
+    value = _digital_upload_metadata(report).get("files_uploaded")
+    if isinstance(value, int):
+        return value
+    return int(report.downloads)
+
+
 def print_recovery_report(report: FailedBatchRecoveryReport) -> None:
     """Print failed batch recovery summary."""
     print("FAILED BATCH RECOVERY")
@@ -245,25 +326,64 @@ def print_recovery_report(report: FailedBatchRecoveryReport) -> None:
     print("Jobs Found")
     print(report.jobs_found)
     print("")
-    print("Completed")
-    print(report.completed)
+    print("Jobs Verified Complete")
+    print(report.jobs_verified_complete)
     print("")
-    print("Still Failed")
-    print(report.still_failed)
+    print("Jobs Still Incomplete")
+    print(report.jobs_still_incomplete)
     print("")
-    print("Drafts Created")
-    print(report.drafts_created)
+    print("Drafts Repaired")
+    print(report.drafts_repaired)
     print("")
-    print("Images Reused")
-    print(report.images_reused)
+    print("Existing Drafts Reused")
+    print(report.existing_drafts_reused)
     print("")
-    print("Images Generated Now")
-    print(report.images_generated_now)
+    print("New Drafts Created")
+    print(report.new_drafts_created)
     print("")
-    print("Downloads Uploaded")
-    print(report.downloads_uploaded)
+    print("Images Present Before")
+    print(report.images_present_before)
     print("")
-    print("Status")
+    print("Missing Images Detected")
+    print(report.missing_images_detected)
+    print("")
+    print("Images Uploaded During Repair")
+    print(report.images_uploaded_during_repair)
+    print("")
+    print("Images Present After")
+    print(report.images_present_after)
+    print("")
+    print("Digital Files Present After")
+    print(report.digital_files_present_after)
+    print("")
+    print("Missing Digital Files Uploaded")
+    print(report.missing_digital_files_uploaded)
+    print("")
+    print("Verified Complete")
+    print(report.verified_complete)
+    print("")
+    print("Still Incomplete")
+    print(report.still_incomplete)
+    for item in report.reports:
+        print("")
+        print(f"Draft ID: {item.draft_id or ''}")
+        print(f"Product: {item.product}")
+        print("Existing Draft Reused: yes" if item.draft_id else "Existing Draft Reused: no")
+        print("Expected Images: 4")
+        print(f"Images Before: {_listing_images_before(item)}")
+        print(f"Missing Images Detected: {max(0, 4 - _listing_images_before(item))}")
+        print(f"Images Uploaded: {_listing_images_uploaded_now(item)}")
+        print(f"Images After: {_listing_images_after(item)}")
+        print("Expected Digital Files: 4")
+        print(f"Digital Files After: {_digital_files_after(item)}")
+        passed = _report_verified_complete(item)
+        print(f"Verification: {'PASS' if passed else 'FAIL'}")
+        print(f"Status: {'COMPLETE' if passed else 'NEEDS_REPAIR'}")
+        if not passed:
+            reason = item.errors[0] if item.errors else "final Etsy verification did not pass"
+            print(f"Reason: {reason}")
+    print("")
+    print("Overall Status")
     print(report.status)
 
 

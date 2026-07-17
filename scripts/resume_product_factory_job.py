@@ -8,6 +8,7 @@ import sys
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -54,9 +55,12 @@ class ResumeResult:
     etsy_listing_id: str
     resumed_from_stage: str
     images_already_present: int
+    images_present_after: int
+    digital_files_present_after: int
     images_uploaded_now: int
     downloads_uploaded: int
     final_status: str
+    verification: str
     image_attempts: tuple[EtsyImageUploadAttempt, ...] = field(default_factory=tuple)
     errors: tuple[str, ...] = field(default_factory=tuple)
 
@@ -122,13 +126,18 @@ class ProductFactoryResumeService:
         failed_attempts = tuple(
             attempt for attempt in attempts if attempt.status != "SUCCESS"
         )
-        total_images_present = len(existing_by_rank) + uploaded_now
-        if failed_attempts or total_images_present != COMMERCIAL_IMAGE_COUNT:
+        verified_images = self._verified_listing_images(listing_id)
+        images_after = len(verified_images)
+        if failed_attempts or images_after != COMMERCIAL_IMAGE_COUNT:
+            reason = (
+                f"expected {COMMERCIAL_IMAGE_COUNT} Etsy images, found "
+                f"{images_after} after recovery"
+            )
             updated = _updated_report(
                 report_data=report_data,
                 success=False,
                 failed_stage="listing_image_upload",
-                images=min(total_images_present, COMMERCIAL_IMAGE_COUNT),
+                images=min(images_after, COMMERCIAL_IMAGE_COUNT),
                 downloads=int(report_data.get("downloads") or 0),
                 metadata_update={
                     "listing_image_upload": {
@@ -136,6 +145,9 @@ class ProductFactoryResumeService:
                         "etsy_listing_id": listing_id,
                         "images_already_present": len(existing_by_rank),
                         "images_uploaded_now": uploaded_now,
+                        "images_present_after": images_after,
+                        "expected_images": COMMERCIAL_IMAGE_COUNT,
+                        "verification": "FAIL",
                         "failed": len(failed_attempts),
                         "attempts": [_attempt_to_dict(attempt) for attempt in attempts],
                     }
@@ -145,17 +157,21 @@ class ProductFactoryResumeService:
                     for attempt in failed_attempts
                     for error in attempt.errors
                 )
-                or ("Listing image sync did not reach 4 images.",),
+                or (reason,),
             )
             self._save_report(updated)
+            self._queue_manager.mark_failed(job_id)
             return ResumeResult(
                 job_id=job_id,
                 etsy_listing_id=listing_id,
                 resumed_from_stage=failed_stage,
                 images_already_present=len(existing_by_rank),
+                images_present_after=images_after,
+                digital_files_present_after=int(report_data.get("downloads") or 0),
                 images_uploaded_now=uploaded_now,
                 downloads_uploaded=0,
-                final_status="FAILED",
+                final_status="NEEDS_REPAIR",
+                verification="FAIL",
                 image_attempts=tuple(attempts),
                 errors=updated.errors,
             )
@@ -168,9 +184,10 @@ class ProductFactoryResumeService:
             listing_id=listing_id,
             final_images_dir=final_images_dir,
         )
-        digital_total = _digital_total_present(digital_result)
+        digital_total = self._verified_digital_file_count(listing_id)
         success = digital_result.status == "SUCCESS" and digital_total == 4
-        final_status = "COMPLETED" if success else "FAILED"
+        final_status = "COMPLETED" if success else "NEEDS_REPAIR"
+        verification = "PASS" if success else "FAIL"
         updated_report = _updated_report(
             report_data=report_data,
             success=success,
@@ -180,12 +197,15 @@ class ProductFactoryResumeService:
             metadata_update={
                 "listing_image_upload": {
                     "status": "SUCCESS",
-                    "etsy_listing_id": listing_id,
-                    "images_already_present": len(existing_by_rank),
-                    "images_uploaded_now": uploaded_now,
-                    "total_present": COMMERCIAL_IMAGE_COUNT,
-                    "attempts": [_attempt_to_dict(attempt) for attempt in attempts],
-                },
+                        "etsy_listing_id": listing_id,
+                        "images_already_present": len(existing_by_rank),
+                        "images_uploaded_now": uploaded_now,
+                        "images_present_after": images_after,
+                        "expected_images": COMMERCIAL_IMAGE_COUNT,
+                        "verification": "PASS",
+                        "total_present": COMMERCIAL_IMAGE_COUNT,
+                        "attempts": [_attempt_to_dict(attempt) for attempt in attempts],
+                    },
                 "customer_download_upload": digital_result,
             },
             errors=tuple(digital_result.errors) if not success else (),
@@ -201,9 +221,12 @@ class ProductFactoryResumeService:
             etsy_listing_id=listing_id,
             resumed_from_stage=failed_stage,
             images_already_present=len(existing_by_rank),
+            images_present_after=images_after,
+            digital_files_present_after=digital_total,
             images_uploaded_now=uploaded_now,
             downloads_uploaded=int(digital_result.files_uploaded),
             final_status=final_status,
+            verification=verification,
             image_attempts=tuple(attempts),
             errors=updated_report.errors,
         )
@@ -224,7 +247,7 @@ class ProductFactoryResumeService:
             listing_id=listing_id,
             final_images_dir=final_images_dir,
         )
-        digital_total = _digital_total_present(digital_result)
+        digital_total = self._verified_digital_file_count(listing_id)
         success = digital_result.status == "SUCCESS" and digital_total == 4
         updated_report = _updated_report(
             report_data=report_data,
@@ -245,9 +268,12 @@ class ProductFactoryResumeService:
             etsy_listing_id=listing_id,
             resumed_from_stage="customer_download_upload",
             images_already_present=int(report_data.get("images") or 0),
+            images_present_after=int(report_data.get("images") or 0),
+            digital_files_present_after=digital_total,
             images_uploaded_now=0,
             downloads_uploaded=int(digital_result.files_uploaded),
-            final_status="COMPLETED" if success else "FAILED",
+            final_status="COMPLETED" if success else "NEEDS_REPAIR",
+            verification="PASS" if success else "FAIL",
             errors=updated_report.errors,
         )
 
@@ -279,9 +305,12 @@ class ProductFactoryResumeService:
             etsy_listing_id=report.draft_id or listing_id or "",
             resumed_from_stage=failed_stage,
             images_already_present=4 if _image_reused(report) else 0,
+            images_present_after=report.images,
+            digital_files_present_after=report.downloads,
             images_uploaded_now=_images_uploaded_now(report),
             downloads_uploaded=report.downloads,
             final_status="COMPLETED" if report.success else "FAILED",
+            verification="PASS" if report.success else "FAIL",
             errors=report.errors,
         )
 
@@ -316,6 +345,12 @@ class ProductFactoryResumeService:
     def _save_report(self, report: ProductionReport) -> None:
         self._memory.save_record(REPORT_COLLECTION, "latest", report.to_dict())
         self._memory.save_record(REPORT_COLLECTION, report.job_id, report.to_dict())
+
+    def _verified_listing_images(self, listing_id: str) -> dict[int, dict[str, Any]]:
+        return _existing_listing_images_by_rank(self._client.list_listing_images(listing_id))
+
+    def _verified_digital_file_count(self, listing_id: str) -> int:
+        return len(self._client.list_listing_digital_files(listing_id))
 
 
 class StageAwareResumeRunner(DefaultProductFactoryStageRunner):
@@ -408,18 +443,29 @@ class StageAwareResumeRunner(DefaultProductFactoryStageRunner):
                     metadata={"response": response},
                 )
             )
-        return type(
-            "ImageSync",
-            (),
-            {
-                "status": "SUCCESS",
-                "etsy_listing_id": listing_id,
-                "images_uploaded": len(attempts),
-                "failed": 0,
-                "warnings": (),
-                "errors": (),
-            },
-        )()
+        verified = _existing_listing_images_by_rank(self._resume_client.list_listing_images(listing_id))
+        images_after = len(verified)
+        errors = ()
+        status = "SUCCESS"
+        failed = 0
+        if images_after != COMMERCIAL_IMAGE_COUNT:
+            status = "PARTIAL_FAILURE"
+            failed = 1
+            errors = (
+                f"expected {COMMERCIAL_IMAGE_COUNT} Etsy images, found "
+                f"{images_after} after recovery",
+            )
+        return SimpleNamespace(
+            status=status,
+            etsy_listing_id=listing_id,
+            images_uploaded=len(attempts),
+            images_already_present=len(existing_by_rank),
+            images_present_after=images_after,
+            expected_images=COMMERCIAL_IMAGE_COUNT,
+            failed=failed,
+            warnings=(),
+            errors=errors,
+        )
 
     def upload_customer_downloads(self, job: ProductionJob, listing_id: str | None) -> Any:
         resolved_listing_id = listing_id or self._existing_draft_id or _latest_draft_id(self._memory)
@@ -473,11 +519,20 @@ def print_resume_result(result: ResumeResult) -> None:
     print("Images Already Present")
     print(result.images_already_present)
     print("")
+    print("Images Present After")
+    print(result.images_present_after)
+    print("")
     print("Images Uploaded Now")
     print(result.images_uploaded_now)
     print("")
     print("Downloads Uploaded")
     print(result.downloads_uploaded)
+    print("")
+    print("Digital Files Present After")
+    print(result.digital_files_present_after)
+    print("")
+    print("Verification")
+    print(result.verification)
     print("")
     print("Final Status")
     print(result.final_status)

@@ -46,16 +46,21 @@ class FakeResumeEtsyClient:
         existing_images: tuple[dict[str, object], ...],
         existing_files: tuple[dict[str, object], ...] = (),
         fail_image_rank: int | None = None,
+        mutate_upload_state: bool = True,
     ) -> None:
-        self.existing_images = existing_images
-        self.existing_files = existing_files
+        self.existing_images = list(existing_images)
+        self.existing_files = list(existing_files)
         self.fail_image_rank = fail_image_rank
+        self.mutate_upload_state = mutate_upload_state
         self.created_drafts = 0
         self.uploaded_images: list[tuple[str, str, int]] = []
         self.uploaded_files: list[tuple[str, str, int | None]] = []
+        self.list_image_calls = 0
+        self.list_file_calls = 0
 
     def list_listing_images(self, listing_id: str) -> tuple[dict[str, object], ...]:
-        return self.existing_images
+        self.list_image_calls += 1
+        return tuple(self.existing_images)
 
     def upload_listing_image(
         self,
@@ -66,13 +71,22 @@ class FakeResumeEtsyClient:
         if rank == self.fail_image_rank:
             raise RuntimeError("image upload failed")
         self.uploaded_images.append((listing_id, image_path.name, rank))
+        if self.mutate_upload_state:
+            self.existing_images.append(
+                {
+                    "rank": rank,
+                    "filename": image_path.name,
+                    "listing_image_id": f"image-{rank}",
+                }
+            )
         return {"listing_image_id": f"image-{rank}"}
 
     def list_listing_digital_files(
         self,
         listing_id: str,
     ) -> tuple[dict[str, object], ...]:
-        return self.existing_files
+        self.list_file_calls += 1
+        return tuple(self.existing_files)
 
     def upload_listing_digital_file(
         self,
@@ -81,6 +95,14 @@ class FakeResumeEtsyClient:
         rank: int | None = None,
     ) -> dict[str, object]:
         self.uploaded_files.append((listing_id, file_path.name, rank))
+        if self.mutate_upload_state:
+            self.existing_files.append(
+                {
+                    "rank": rank,
+                    "filename": file_path.name,
+                    "listing_file_id": f"file-{rank}",
+                }
+            )
         return {"listing_file_id": f"file-{rank}"}
 
     def create_draft_listing(self, payload: object) -> object:
@@ -225,9 +247,14 @@ class ResumeProductFactoryJobTest(unittest.TestCase):
         self.assertEqual(result.etsy_listing_id, LISTING_ID)
         self.assertEqual(result.resumed_from_stage, "listing_image_upload")
         self.assertEqual(result.images_already_present, 3)
+        self.assertEqual(result.images_present_after, 4)
         self.assertEqual(result.images_uploaded_now, 1)
         self.assertEqual(result.downloads_uploaded, 4)
+        self.assertEqual(result.digital_files_present_after, 4)
+        self.assertEqual(result.verification, "PASS")
         self.assertEqual(result.final_status, "COMPLETED")
+        self.assertGreaterEqual(client.list_image_calls, 2)
+        self.assertGreaterEqual(client.list_file_calls, 2)
         self.assertEqual(
             client.uploaded_images,
             [
@@ -260,6 +287,7 @@ class ResumeProductFactoryJobTest(unittest.TestCase):
         result = self.service(client).resume(JOB_ID)
 
         self.assertEqual(result.images_already_present, 4)
+        self.assertEqual(result.images_present_after, 4)
         self.assertEqual(result.images_uploaded_now, 0)
         self.assertEqual(client.uploaded_images, [])
         self.assertEqual(result.final_status, "COMPLETED")
@@ -276,12 +304,34 @@ class ResumeProductFactoryJobTest(unittest.TestCase):
 
         result = self.service(client).resume(JOB_ID)
 
-        self.assertEqual(result.final_status, "FAILED")
+        self.assertEqual(result.final_status, "NEEDS_REPAIR")
         self.assertEqual(client.uploaded_files, [])
         self.assertEqual(self.queue.list_jobs()[0].status, FAILED)
         saved = self.memory.load_record(REPORT_COLLECTION, JOB_ID)
         self.assertFalse(saved["success"])
         self.assertEqual(saved["failed_stage"], "listing_image_upload")
+
+    def test_three_of_four_images_after_recovery_remains_needs_repair(self) -> None:
+        client = FakeResumeEtsyClient(
+            existing_images=(
+                {"rank": 1, "filename": "strawberry_birthday_party_printable_01.png"},
+            ),
+            mutate_upload_state=False,
+        )
+
+        result = self.service(client).resume(JOB_ID)
+
+        self.assertEqual(len(client.uploaded_images), 3)
+        self.assertEqual(result.images_already_present, 1)
+        self.assertEqual(result.images_uploaded_now, 3)
+        self.assertEqual(result.images_present_after, 1)
+        self.assertEqual(result.verification, "FAIL")
+        self.assertEqual(result.final_status, "NEEDS_REPAIR")
+        self.assertEqual(client.uploaded_files, [])
+        saved = self.memory.load_record(REPORT_COLLECTION, JOB_ID)
+        self.assertFalse(saved["success"])
+        self.assertEqual(saved["failed_stage"], "listing_image_upload")
+        self.assertIn("expected 4 Etsy images", saved["errors"][0])
 
     def test_cli_prints_concise_error_without_traceback(self) -> None:
         class FailingResumeService:
@@ -391,6 +441,7 @@ class ResumeProductFactoryJobTest(unittest.TestCase):
 
         self.assertEqual(result.resumed_from_stage, "customer_download_upload")
         self.assertEqual(result.final_status, "COMPLETED")
+        self.assertEqual(result.digital_files_present_after, 4)
         self.assertEqual(len(client.uploaded_files), 2)
         self.assertEqual([item[2] for item in client.uploaded_files], [3, 4])
 
