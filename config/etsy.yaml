@@ -14,7 +14,9 @@ client_id:
 shared_secret:
 access_token:
 api_base_url: https://openapi.etsy.com/v3/application
-default_price: 1.99
+# ProductFactory supplies job-specific merchant pricing.
+# Keep this unset/zero so live drafts cannot silently fall back to one global price.
+default_price: 0.0
 default_quantity: 999
 taxonomy_id: 1250
 processing_profile_id:

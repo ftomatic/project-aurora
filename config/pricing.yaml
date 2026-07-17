@@ -1,0 +1,35 @@
+minimum_margin: 1.00
+commercial_license_premium: 0.50
+ranges:
+  clipart bundle:
+    low: 3.99
+    median: 5.99
+    high: 8.99
+  digital paper:
+    low: 2.99
+    median: 4.49
+    high: 6.99
+  printable wall art:
+    low: 4.99
+    median: 7.99
+    high: 12.99
+  nursery art set:
+    low: 5.99
+    median: 9.99
+    high: 14.99
+  sticker sheet:
+    low: 2.99
+    median: 4.49
+    high: 6.99
+  gift tags:
+    low: 3.49
+    median: 4.99
+    high: 7.99
+  scrapbook kit:
+    low: 4.99
+    median: 7.49
+    high: 11.99
+  stationery:
+    low: 3.49
+    median: 5.49
+    high: 8.99

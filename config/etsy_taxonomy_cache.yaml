@@ -1,0 +1,55 @@
+# Central Aurora taxonomy cache. Replace IDs with shop-verified Etsy seller taxonomy IDs when needed.
+# The resolver fails rather than guessing when a product cannot be mapped confidently.
+taxonomies:
+  clipart:
+    taxonomy_id: 6844
+    taxonomy_name: Clip Art & Image Files
+    full_taxonomy_path: Craft Supplies & Tools > Digital > Clip Art & Image Files
+  digital paper:
+    taxonomy_id: 6845
+    taxonomy_name: Digital Paper
+    full_taxonomy_path: Craft Supplies & Tools > Digital > Digital Paper
+  seamless pattern:
+    taxonomy_id: 6845
+    taxonomy_name: Digital Paper
+    full_taxonomy_path: Craft Supplies & Tools > Digital > Digital Paper
+  printable wall art:
+    taxonomy_id: 119
+    taxonomy_name: Digital Prints
+    full_taxonomy_path: Art & Collectibles > Prints > Digital Prints
+  nursery wall art:
+    taxonomy_id: 119
+    taxonomy_name: Digital Prints
+    full_taxonomy_path: Art & Collectibles > Prints > Digital Prints
+  botanical print:
+    taxonomy_id: 119
+    taxonomy_name: Digital Prints
+    full_taxonomy_path: Art & Collectibles > Prints > Digital Prints
+  sticker sheet:
+    taxonomy_id: 6520
+    taxonomy_name: Stickers
+    full_taxonomy_path: Paper & Party Supplies > Stickers
+  gift tags:
+    taxonomy_id: 6478
+    taxonomy_name: Gift Tags
+    full_taxonomy_path: Paper & Party Supplies > Gift Wrapping > Gift Tags
+  scrapbook kit:
+    taxonomy_id: 6845
+    taxonomy_name: Digital Paper
+    full_taxonomy_path: Craft Supplies & Tools > Digital > Digital Paper
+  journaling paper:
+    taxonomy_id: 6845
+    taxonomy_name: Digital Paper
+    full_taxonomy_path: Craft Supplies & Tools > Digital > Digital Paper
+  stationery:
+    taxonomy_id: 1264
+    taxonomy_name: Stationery
+    full_taxonomy_path: Paper & Party Supplies > Paper > Stationery
+  decorative recipe cards:
+    taxonomy_id: 1264
+    taxonomy_name: Stationery
+    full_taxonomy_path: Paper & Party Supplies > Paper > Stationery
+  party printable:
+    taxonomy_id: 6470
+    taxonomy_name: Party Decor
+    full_taxonomy_path: Paper & Party Supplies > Party Supplies > Party Decor

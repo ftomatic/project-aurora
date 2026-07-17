@@ -13,6 +13,7 @@ from project_aurora.integrations.etsy.etsy_result import (
     EtsyDigitalFileUploadAttempt,
     EtsyDigitalFileUploadResult,
 )
+from project_aurora.integrations.etsy.etsy_upload_manager import EtsyUploadManager
 from project_aurora.storage.memory_manager import MemoryManager
 
 
@@ -60,8 +61,10 @@ class EtsyDigitalFileService:
             return result
 
         attempts: list[EtsyDigitalFileUploadAttempt] = []
+        manager = EtsyUploadManager(memory=self._memory)
         for rank, file_path in enumerate(files, start=1):
-            attempts.append(self._upload_one(str(listing_id), file_path, rank))
+            attempts.append(self._upload_one(str(listing_id), file_path, rank, manager))
+            manager.delay_between_files()
 
         uploaded = sum(1 for attempt in attempts if attempt.status == "SUCCESS")
         failed = len(attempts) - uploaded
@@ -136,6 +139,7 @@ class EtsyDigitalFileService:
         )
 
         attempts: list[EtsyDigitalFileUploadAttempt] = []
+        manager = EtsyUploadManager(memory=self._memory)
         for filename in retry_names:
             file_path = file_by_name[filename]
             attempts.append(
@@ -143,8 +147,10 @@ class EtsyDigitalFileService:
                     listing_id=str(listing_id),
                     file_path=file_path,
                     rank=self._rank_for_filename(filename, files),
+                    manager=manager,
                 )
             )
+            manager.delay_between_files()
 
         newly_uploaded = {
             attempt.filename: attempt.etsy_file_id
@@ -261,6 +267,7 @@ class EtsyDigitalFileService:
             return result
 
         attempts: list[EtsyDigitalFileUploadAttempt] = []
+        manager = EtsyUploadManager(memory=self._memory)
         for filename in missing_names:
             file_path = file_by_name[filename]
             attempts.append(
@@ -268,8 +275,10 @@ class EtsyDigitalFileService:
                     listing_id=str(listing_id),
                     file_path=file_path,
                     rank=self._rank_for_filename(filename, files),
+                    manager=manager,
                 )
             )
+            manager.delay_between_files()
 
         uploaded_now = {
             attempt.filename: attempt.etsy_file_id
@@ -315,32 +324,34 @@ class EtsyDigitalFileService:
         listing_id: str,
         file_path: Path,
         rank: int,
+        manager: EtsyUploadManager | None = None,
     ) -> EtsyDigitalFileUploadAttempt:
-        try:
-            response = self._client.upload_listing_digital_file(
+        resolved_manager = manager or EtsyUploadManager(memory=self._memory)
+        checkpoint = resolved_manager.upload_one(
+            listing_id=listing_id,
+            job_id=file_path.parent.parent.name,
+            upload_type="digital_file",
+            file_path=file_path,
+            rank=rank,
+            uploader=lambda: self._client.upload_listing_digital_file(
                 listing_id=listing_id,
                 file_path=file_path,
                 rank=rank,
-            )
-        except RuntimeError as error:
+            ),
+        )
+        if checkpoint.status != "SUCCESS":
             return EtsyDigitalFileUploadAttempt(
                 filename=file_path.name,
                 rank=rank,
                 status="FAILED",
-                errors=(str(error),),
+                errors=(checkpoint.error,),
             )
-
-        file_id = (
-            response.get("listing_file_id")
-            or response.get("file_id")
-            or response.get("digital_file_id")
-        )
         return EtsyDigitalFileUploadAttempt(
             filename=file_path.name,
             rank=rank,
             status="SUCCESS",
-            etsy_file_id=str(file_id) if file_id is not None else None,
-            metadata={"response": response},
+            etsy_file_id=checkpoint.etsy_resource_id,
+            metadata={"checkpoint": checkpoint.to_dict()},
         )
 
     def _preflight_errors(

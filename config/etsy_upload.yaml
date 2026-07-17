@@ -1,0 +1,4 @@
+etsy_upload_max_attempts: 4
+etsy_upload_backoff_seconds: [5, 15, 30]
+etsy_upload_delay_between_files_seconds: 2
+etsy_upload_timeout_seconds: 60

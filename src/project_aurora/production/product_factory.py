@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from dataclasses import fields, is_dataclass
+from dataclasses import replace
 from datetime import datetime
 import json
 from pathlib import Path
@@ -214,6 +215,9 @@ class DefaultProductFactoryStageRunner:
 
     def generate_images(self, job: ProductionJob) -> Any:
         """Generate four OpenAI images through the image engine."""
+        capability = _resolve_product_capability(job)
+        if not capability.supported:
+            raise ProductFactoryStageError("product_capability", (capability.reason,))
         job_paths = self.job_paths(job)
         reused = self._reuse_completed_generated_images(job, job_paths)
         if reused is not None:
@@ -345,6 +349,22 @@ class DefaultProductFactoryStageRunner:
                 key=lambda item: item.name,
             )
         )
+        merchant_package = _build_and_save_merchant_package(
+            job=job,
+            seo_package=seo_package,
+            memory=self._memory,
+            job_paths=job_paths,
+        )
+        preflight = _run_merchant_preflight(
+            job=job,
+            merchant_package=merchant_package,
+            seo_package=seo_package,
+            memory=self._memory,
+            job_paths=job_paths,
+        )
+        print(preflight.render())
+        if preflight.status != "READY_FOR_ETSY_DRAFT":
+            raise ProductFactoryStageError("merchant_preflight", tuple(preflight.errors))
         listing_package = ListingPackage(
             product_name=job.product_name,
             collection_name=job.product_name,
@@ -354,10 +374,15 @@ class DefaultProductFactoryStageRunner:
             approved_mockup_files=final_files,
             approved_generated_image_files=final_files,
             is_digital_download=True,
-            price=1.99,
+            price=merchant_package.launch_price,
+        )
+        etsy_config = replace(
+            self._etsy_config,
+            taxonomy_id=merchant_package.etsy_taxonomy_id,
+            default_price=merchant_package.launch_price,
         )
         return EtsyDraftService(
-            config=self._etsy_config,
+            config=etsy_config,
             memory=self._memory,
         ).create_draft(
             listing_package=listing_package,
@@ -616,6 +641,8 @@ class ProductFactory:
             for stage_name, stage in stages:
                 try:
                     result = stage()
+                except ProductFactoryStageError:
+                    raise
                 except Exception as error:
                     raise ProductFactoryStageError(
                         stage_name,
@@ -1145,6 +1172,177 @@ def _validate_product_type_expectation(
             "Unsupported product-type expectation before image generation: "
             f"{product_type}."
         )
+
+
+def _resolve_product_capability(job: ProductionJob) -> Any:
+    from project_aurora.production.product_capability_resolver import (
+        ProductCapabilityResolver,
+    )
+
+    return ProductCapabilityResolver().resolve(
+        product_name=job.product_name,
+        product_type=job.category,
+        category=job.category,
+    )
+
+
+def _build_and_save_merchant_package(
+    *,
+    job: ProductionJob,
+    seo_package: Any,
+    memory: MemoryManager,
+    job_paths: ProductFactoryJobPaths,
+) -> Any:
+    from project_aurora.integrations.etsy.etsy_taxonomy_resolver import (
+        EtsyTaxonomyResolver,
+    )
+    from project_aurora.merchandising.pricing_engine import PricingEngine
+    from project_aurora.production.merchant_package import MerchantPackage
+
+    capability = _resolve_product_capability(job)
+    if not capability.supported:
+        raise ProductFactoryStageError("product_capability", (capability.reason,))
+    taxonomy = EtsyTaxonomyResolver().resolve(
+        product_name=job.product_name,
+        product_type=job.category,
+        category=job.category,
+        audience=job.target_customer,
+        holiday=job.seasonal_theme,
+    )
+    _print_taxonomy_diagnostics(job, taxonomy)
+    if not taxonomy.resolved:
+        raise ProductFactoryStageError(
+            "taxonomy_resolution",
+            (taxonomy.resolution_reason,),
+        )
+    pricing = PricingEngine().resolve_price(
+        product_name=job.product_name,
+        product_type=job.category,
+        category=job.category,
+        bundle_size=max(4, len(job.keywords)),
+        image_count=4,
+        commercial_license=True,
+        competition_level=job.estimated_competition,
+        demand_score=job.demand_score or job.confidence_score,
+        confidence_score=job.confidence_score,
+    )
+    _print_pricing_diagnostics(job, pricing)
+    prompt = _load_optional_prompt(memory, job.id)
+    merchant = MerchantPackage(
+        job_id=job.id,
+        product_name=job.product_name,
+        product_type=job.category,
+        capability_mode=capability.mode,
+        etsy_taxonomy_id=int(taxonomy.taxonomy_id or 0),
+        etsy_taxonomy_path=taxonomy.full_taxonomy_path,
+        taxonomy_confidence=taxonomy.confidence,
+        price_range=(pricing.market_low, pricing.market_median, pricing.market_high),
+        recommended_price=pricing.recommended_price,
+        launch_price=pricing.launch_price,
+        pricing_reason=pricing.reason,
+        pricing_source=pricing.source,
+        selected_style=str(prompt.get("style") or job.style),
+        style_confidence=int(prompt.get("art_direction", {}).get("confidence", 90))
+        if isinstance(prompt.get("art_direction"), dict)
+        else 90,
+        composition=str(prompt.get("composition", "")),
+        background=str(prompt.get("background_treatment", "")),
+        product_capability_result=capability.to_dict(),
+    )
+    merchant_dir = job_paths.job_root / "merchant"
+    merchant_dir.mkdir(parents=True, exist_ok=True)
+    (merchant_dir / "merchant_package.json").write_text(
+        json.dumps(merchant.to_dict(), indent=2, sort_keys=True),
+        encoding="utf-8",
+    )
+    memory.save_record("merchant_packages", job.id, merchant.to_dict())
+    return merchant
+
+
+def _run_merchant_preflight(
+    *,
+    job: ProductionJob,
+    merchant_package: Any,
+    seo_package: Any,
+    memory: MemoryManager,
+    job_paths: ProductFactoryJobPaths,
+) -> Any:
+    from project_aurora.production.merchant_preflight import MerchantPreflight
+
+    result = MerchantPreflight().run(
+        job=job,
+        merchant_package=merchant_package,
+        seo_package=seo_package,
+        final_images_dir=job_paths.final_images_dir,
+        image_qa_approved=_image_qa_ready(memory),
+    )
+    memory.save_record("merchant_preflight", job.id, result.to_dict())
+    return result
+
+
+def _image_qa_ready(memory: MemoryManager) -> bool:
+    try:
+        record = memory.load_image_qa_results()
+    except FileNotFoundError:
+        return True
+    results = record.get("results", ())
+    if not isinstance(results, list):
+        return False
+    return all(str(result.get("status", "")).upper() in {"PASS", "WARNING"} for result in results if isinstance(result, dict))
+
+
+def _load_optional_prompt(memory: MemoryManager, job_id: str) -> dict[str, Any]:
+    try:
+        return memory.load_prompt_package(job_id)
+    except FileNotFoundError:
+        return {}
+
+
+def _print_taxonomy_diagnostics(job: ProductionJob, taxonomy: Any) -> None:
+    print("ETSY TAXONOMY")
+    print("")
+    print("Product")
+    print(job.product_name)
+    print("")
+    print("Product Type")
+    print(job.category)
+    print("")
+    print("Taxonomy")
+    print(taxonomy.full_taxonomy_path)
+    print("")
+    print("Taxonomy ID")
+    print(taxonomy.taxonomy_id or "")
+    print("")
+    print("Confidence")
+    print(taxonomy.confidence)
+    print("")
+    print("Reason")
+    print(taxonomy.resolution_reason)
+
+
+def _print_pricing_diagnostics(job: ProductionJob, pricing: Any) -> None:
+    print("PRICING")
+    print("")
+    print("Product")
+    print(job.product_name)
+    print("")
+    print("Product Type")
+    print(job.category)
+    print("")
+    print("Market Range")
+    print(f"{pricing.market_low:.2f} - {pricing.market_high:.2f}")
+    print("")
+    print("Recommended Price")
+    print(f"{pricing.recommended_price:.2f}")
+    print("")
+    print("Launch Price")
+    print(f"{pricing.launch_price:.2f}")
+    print("")
+    print("Reason")
+    print(pricing.reason)
+    print("")
+    print("Source")
+    print(pricing.source)
 
 
 def _title_is_relevant_to_job(title: str, job: ProductionJob) -> bool:

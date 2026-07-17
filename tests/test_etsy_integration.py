@@ -90,6 +90,7 @@ def make_listing_package(
         prompt_package_id="latest",
         approved_mockup_files=image_files,
         approved_generated_image_files=("asset_01.png",),
+        price=5.99,
     )
 
 
@@ -105,6 +106,7 @@ def make_physical_listing_package(
         approved_mockup_files=image_files,
         approved_generated_image_files=("asset_01.png",),
         is_digital_download=False,
+        price=5.99,
     )
 
 
@@ -152,7 +154,7 @@ class EtsyIntegrationTest(unittest.TestCase):
         self.assertEqual(len(payload.tags), 13)
         self.assertTrue(payload.is_digital)
         self.assertEqual(payload.listing_type, "download")
-        self.assertEqual(payload.price, 1.99)
+        self.assertEqual(payload.price, 5.99)
         self.assertEqual(payload.quantity, 999)
         self.assertNotEqual(payload.description, RAINBOW_MILK_STUDIO_DESCRIPTION)
         self.assertIn(PURCHASE_SECTION, payload.description)
@@ -174,7 +176,7 @@ class EtsyIntegrationTest(unittest.TestCase):
 
         self.assertEqual(payload_data["type"], "download")
         self.assertEqual(payload_data["quantity"], 999)
-        self.assertEqual(payload_data["price"], 1.99)
+        self.assertEqual(payload_data["price"], 5.99)
         self.assertEqual(payload_data["who_made"], "i_did")
         self.assertEqual(payload_data["when_made"], "made_to_order")
         self.assertEqual(payload_data[RENEWAL_API_FIELD], True)

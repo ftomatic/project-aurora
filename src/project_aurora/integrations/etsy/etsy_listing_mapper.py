@@ -33,7 +33,7 @@ class EtsyListingDefaults:
     when_made: str = "made_to_order"
     digital_listing_type: str = "download"
     quantity: int = 999
-    price: float = 1.99
+    price: float | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -106,7 +106,7 @@ class EtsyListingMapper:
             title=seo_package.title,
             description=seo_package.description,
             tags=seo_package.tags,
-            price=defaults.price if is_digital else listing_package.price,
+            price=listing_package.price if listing_package.price > 0 else (defaults.price or config.default_price),
             quantity=defaults.quantity if is_digital else config.default_quantity,
             taxonomy_id=config.taxonomy_id,
             listing_type=listing_type,
@@ -147,8 +147,6 @@ class EtsyListingMapper:
                 errors.append(f"Tag exceeds 20 characters: {tag}.")
         if payload.price <= 0:
             errors.append("Price must be greater than zero.")
-        if payload.price != 1.99:
-            errors.append("RainbowMilkStudio listing price must be 1.99.")
         if payload.quantity <= 0:
             errors.append("Quantity must be greater than zero.")
         if PURCHASE_SECTION not in payload.description:

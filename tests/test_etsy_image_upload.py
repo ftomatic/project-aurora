@@ -181,8 +181,10 @@ class EtsyImageUploadTest(unittest.TestCase):
         self.assertEqual(result.images_uploaded, 4)
         self.assertEqual(result.failed, 0)
         self.assertEqual([attempt.rank for attempt in result.attempts], [1, 2, 3, 4])
-        self.assertIn(b'filename="a.png"', calls[0].data)
-        self.assertIn(b'filename="b.png"', calls[1].data)
+        upload_calls = [call for call in calls if call.data is not None]
+        self.assertEqual(len(upload_calls), 4)
+        self.assertIn(b'filename="a.png"', upload_calls[0].data)
+        self.assertIn(b'filename="b.png"', upload_calls[1].data)
         saved = self.memory.load_etsy_image_upload_result()
         self.assertEqual(saved["status"], "SUCCESS")
         self.assertEqual(saved["images_uploaded"], 4)

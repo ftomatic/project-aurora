@@ -11,6 +11,7 @@ from project_aurora.integrations.etsy.etsy_result import (
     EtsyImageUploadAttempt,
     EtsyImageUploadResult,
 )
+from project_aurora.integrations.etsy.etsy_upload_manager import EtsyUploadManager
 from project_aurora.image_generation.image_inspector import inspect_png
 from project_aurora.storage.memory_manager import MemoryManager
 
@@ -74,9 +75,23 @@ class EtsyImageUploadService:
             self._save_result(result)
             return result
 
+        existing = self._existing_images(str(listing_id))
         attempts: list[EtsyImageUploadAttempt] = []
+        manager = EtsyUploadManager(memory=self._memory)
         for rank, image_path in enumerate(image_files[: self._max_images], start=1):
-            attempts.append(self._upload_one(str(listing_id), image_path, rank))
+            if _already_present(existing, image_path, rank):
+                attempts.append(
+                    EtsyImageUploadAttempt(
+                        image_path=str(image_path),
+                        rank=rank,
+                        status="SUCCESS",
+                        etsy_image_id=_existing_id(existing.get(rank)),
+                        metadata={"skipped": True, "reason": "already_present"},
+                    )
+                )
+                continue
+            attempts.append(self._upload_one(str(listing_id), image_path, rank, manager))
+            manager.delay_between_files()
 
         uploaded = sum(1 for attempt in attempts if attempt.status == "SUCCESS")
         failed = sum(1 for attempt in attempts if attempt.status != "SUCCESS")
@@ -97,29 +112,48 @@ class EtsyImageUploadService:
         listing_id: str,
         image_path: Path,
         rank: int,
+        manager: EtsyUploadManager,
     ) -> EtsyImageUploadAttempt:
-        try:
-            response = self._client.upload_listing_image(
+        checkpoint = manager.upload_one(
+            listing_id=listing_id,
+            job_id=self._images_dir.parent.name,
+            upload_type="listing_image",
+            file_path=image_path,
+            rank=rank,
+            uploader=lambda: self._client.upload_listing_image(
                 listing_id=listing_id,
                 image_path=image_path,
                 rank=rank,
-            )
-        except RuntimeError as error:
+            ),
+        )
+        if checkpoint.status != "SUCCESS":
             return EtsyImageUploadAttempt(
                 image_path=str(image_path),
                 rank=rank,
                 status="FAILED",
-                errors=(str(error),),
+                errors=(checkpoint.error,),
             )
-
-        image_id = response.get("listing_image_id") or response.get("image_id")
         return EtsyImageUploadAttempt(
             image_path=str(image_path),
             rank=rank,
             status="SUCCESS",
-            etsy_image_id=str(image_id) if image_id is not None else None,
-            metadata={"response": response},
+            etsy_image_id=checkpoint.etsy_resource_id,
+            metadata={"checkpoint": checkpoint.to_dict()},
         )
+
+    def _existing_images(self, listing_id: str) -> dict[int, dict[str, Any]]:
+        try:
+            records = self._client.list_listing_images(listing_id)
+        except Exception:
+            return {}
+        by_rank: dict[int, dict[str, Any]] = {}
+        for record in records:
+            rank = record.get("rank") or record.get("image_rank") or record.get("listing_image_rank")
+            try:
+                by_rank[int(rank)] = record
+            except (TypeError, ValueError):
+                continue
+        return by_rank
 
     def _load_latest_draft(self) -> dict[str, Any]:
         try:
@@ -176,3 +210,18 @@ class EtsyImageUploadService:
 
     def _save_result(self, result: EtsyImageUploadResult) -> None:
         self._memory.save_etsy_image_upload_result(result)
+
+
+def _already_present(existing: dict[int, dict[str, Any]], image_path: Path, rank: int) -> bool:
+    record = existing.get(rank)
+    if record is None:
+        return False
+    filename = record.get("filename") or record.get("file_name") or record.get("name")
+    return not filename or Path(str(filename)).name == image_path.name
+
+
+def _existing_id(record: dict[str, Any] | None) -> str | None:
+    if record is None:
+        return None
+    value = record.get("listing_image_id") or record.get("image_id")
+    return str(value) if value is not None else None
