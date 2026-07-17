@@ -65,13 +65,14 @@ Perfect for:
         product_positioning: str,
         tags: tuple[str, ...],
     ) -> str:
-        primary_keywords = ", ".join(tags[:3])
+        search_phrase = _search_phrase(product_name, product_type)
+        style_phrase = _style_phrase(product_name, product_type)
         return (
             f"{product_name} is a digital {product_type.lower()} designed for "
-            f"{target_buyer}. This SEO-ready printable download works beautifully "
-            f"for shoppers searching Etsy for {primary_keywords}.\n\n"
-            f"The collection has a {product_positioning.lower()} Handmade-style PNG "
-            "art makes it easy to create coordinated products, gifts, and craft projects."
+            f"{target_buyer}. It is created for shoppers looking for {search_phrase} "
+            f"with a {style_phrase} feel.\n\n"
+            f"The collection has a {product_positioning.lower()} These handmade-style "
+            "PNG files make it easy to create coordinated products, gifts, and craft projects."
         )
 
     @staticmethod
@@ -141,3 +142,45 @@ Perfect for:
                 "small business product designs",
             )
         return "\n".join(f"- {use}" for use in uses)
+
+
+def _search_phrase(product_name: str, product_type: str) -> str:
+    lowered = f"{product_name} {product_type}".casefold()
+    if "alphabet" in lowered or "classroom" in lowered:
+        return "classroom alphabet wall art and teacher printable decor"
+    if "bridal shower" in lowered or "wedding" in lowered or "invitation" in lowered:
+        return "floral bridal shower printables and wedding stationery downloads"
+    if "sticker" in lowered or "planner" in lowered:
+        return "printable sticker sheets and planner sticker downloads"
+    if "nursery" in lowered or "baby" in lowered:
+        return "nursery wall art, baby room decor, and printable kids room art"
+    if "dark academia" in lowered:
+        return "dark academia printable art and moody vintage wall decor"
+    if "mushroom" in lowered or "clipart" in lowered:
+        return "commercial PNG clipart and craft graphics"
+    if "digital paper" in lowered or "paper" in lowered:
+        return "digital paper packs and printable scrapbook backgrounds"
+    if "birthday" in lowered or "party" in lowered:
+        return "birthday party printables and digital party decor"
+    if "wall art" in lowered or "print" in lowered:
+        return "printable wall art and digital art downloads"
+    return f"{product_name.lower()} digital downloads"
+
+
+def _style_phrase(product_name: str, product_type: str) -> str:
+    lowered = f"{product_name} {product_type}".casefold()
+    if "boho" in lowered:
+        return "neutral boho"
+    if "dark academia" in lowered:
+        return "moody vintage academic"
+    if "strawberry" in lowered:
+        return "cute summer berry"
+    if "wildflower" in lowered or "wedding" in lowered:
+        return "soft floral"
+    if "classroom" in lowered or "alphabet" in lowered:
+        return "bright classroom"
+    if "spring" in lowered:
+        return "fresh spring garden"
+    if "autumn" in lowered or "mushroom" in lowered:
+        return "cozy woodland"
+    return "polished commercial"

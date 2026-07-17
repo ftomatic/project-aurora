@@ -217,6 +217,9 @@ class ProductSpecificSEOTest(unittest.TestCase):
             self.assertIn(PURCHASE_SECTION, package.description)
             self.assertIn(DOWNLOAD_DISCLAIMER_SECTION, package.description)
             self.assertIn(package.product_name.casefold().split()[0], lowered)
+            self.assertNotIn("this seo-ready printable download works beautifully", lowered)
+            if "classroom alphabet" not in package.product_name.casefold():
+                self.assertNotIn("classroom, alphabet, wall", lowered)
             if "strawberry" not in package.product_name.casefold():
                 self.assertNotIn("summer berry", lowered)
                 self.assertNotIn("girls party decor", lowered)

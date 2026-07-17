@@ -1252,8 +1252,13 @@ def _description_is_relevant_to_job(description: str, job: ProductionJob) -> boo
     }
     if not (product_tokens & set(re.split(r"[^a-z0-9]+", lowered))):
         return False
-    legacy_terms = ("summer berry", "girls party decor")
-    if any(term in lowered for term in legacy_terms):
+    if "girls party decor" in lowered:
+        return False
+    if "summer berry" in lowered and "strawberry" not in product_lower:
+        return False
+    if "this seo-ready printable download works beautifully" in lowered:
+        return False
+    if "classroom, alphabet, wall" in lowered and "classroom" not in product_lower:
         return False
     strawberry_terms = ("strawberry", "berry")
     party_terms = ("cupcake", "favor tag")

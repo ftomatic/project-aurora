@@ -79,6 +79,8 @@ class SEOEngineTest(unittest.TestCase):
         self.assertIn(DOWNLOAD_DISCLAIMER_SECTION, description)
         self.assertIn("4 high-quality 300 DPI PNG files", description)
         self.assertIn("3600 × 3600 pixels", description)
+        self.assertNotIn("This SEO-ready printable download works beautifully", description)
+        self.assertNotIn("classroom, alphabet, wall", description.casefold())
 
     def test_seo_engine_builds_package(self) -> None:
         package = SEOEngine().build_package(SAMPLE_PRODUCT_DATA)
