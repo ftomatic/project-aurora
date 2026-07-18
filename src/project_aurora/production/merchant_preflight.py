@@ -7,12 +7,9 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from project_aurora.image_generation.commercial_image_exporter import (
-    COMMERCIAL_IMAGE_COUNT,
-    validate_commercial_png,
-)
 from project_aurora.planning.production_queue_manager import ProductionJob
 from project_aurora.production.merchant_package import MerchantPackage
+from project_aurora.production.merchant_specification import MerchantSpecificationQA
 
 
 READY_FOR_ETSY_DRAFT = "READY_FOR_ETSY_DRAFT"
@@ -36,6 +33,9 @@ class MerchantPreflightResult:
     listing_images_ready: int
     customer_files_ready: int
     seo_status: str
+    specification_version: str = ""
+    merchant_qa_status: str = ""
+    manifest: dict[str, Any] = field(default_factory=dict)
     errors: tuple[str, ...] = field(default_factory=tuple)
     warnings: tuple[str, ...] = field(default_factory=tuple)
     created_at: datetime = field(default_factory=datetime.now)
@@ -55,6 +55,9 @@ class MerchantPreflightResult:
             "listing_images_ready": self.listing_images_ready,
             "customer_files_ready": self.customer_files_ready,
             "seo_status": self.seo_status,
+            "specification_version": self.specification_version,
+            "merchant_qa_status": self.merchant_qa_status,
+            "manifest": self.manifest,
             "errors": list(self.errors),
             "warnings": list(self.warnings),
             "created_at": self.created_at.isoformat(),
@@ -76,6 +79,8 @@ class MerchantPreflightResult:
                 f"Listing Images\n{self.listing_images_ready} ready",
                 f"Customer Files\n{self.customer_files_ready} ready",
                 f"SEO\n{self.seo_status}",
+                f"Merchant QA\n{self.merchant_qa_status}",
+                f"Specification Version\n{self.specification_version}",
                 f"Status\n{self.status}",
             )
         )
@@ -114,16 +119,14 @@ class MerchantPreflight:
             errors.append("SEO package product name does not match current job.")
         if not image_qa_approved:
             errors.append("Image QA has not passed or been manually approved.")
-        files = tuple(sorted(final_images_dir.glob("*.png"), key=lambda item: item.name))
-        file_errors = [
-            f"{path.name}: {error}"
-            for path in files
-            for error in validate_commercial_png(path)
-        ]
-        if len(files) != COMMERCIAL_IMAGE_COUNT:
-            errors.append(f"Exactly 4 final listing images are required, found {len(files)}.")
-        errors.extend(file_errors)
+        merchant_qa = MerchantSpecificationQA().validate(
+            category=job.category,
+            product_dir=final_images_dir,
+            product_name=job.product_name,
+        )
+        errors.extend(merchant_qa.errors)
         status = READY_FOR_ETSY_DRAFT if not errors else PREFLIGHT_FAILED
+        ready_count = len(merchant_qa.manifest.files) if merchant_qa.status == "PASS" else 0
         return MerchantPreflightResult(
             status=status,
             product_name=job.product_name,
@@ -135,8 +138,11 @@ class MerchantPreflight:
             pricing_source=merchant_package.pricing_source,
             style=merchant_package.selected_style,
             rendering_family=str(getattr(seo_package, "style", "") or merchant_package.selected_style),
-            listing_images_ready=len(files) if not file_errors else 0,
-            customer_files_ready=len(files) if not file_errors else 0,
+            listing_images_ready=ready_count,
+            customer_files_ready=ready_count,
             seo_status="PASS" if not any("SEO package" in error for error in errors) else "FAIL",
+            specification_version=merchant_qa.manifest.specification_version,
+            merchant_qa_status=merchant_qa.status,
+            manifest=merchant_qa.manifest.to_dict(),
             errors=tuple(errors),
         )

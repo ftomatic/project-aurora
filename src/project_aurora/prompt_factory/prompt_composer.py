@@ -10,6 +10,9 @@ from project_aurora.prompt_factory.prompt_components import (
 )
 from project_aurora.prompt_factory.prompt_recipe import PromptRecipe
 from project_aurora.prompt_factory.style_library import get_style
+from project_aurora.production.merchant_specification import (
+    merchant_prompt_requirements,
+)
 from project_aurora.storage.memory_manager import MemoryManager
 
 
@@ -71,11 +74,14 @@ class PromptComposer:
         texture: str = "",
         typography_direction: str = "",
         negative_style_constraints: tuple[str, ...] = (),
+        category: str = "",
         recipe_id: str = "latest",
     ) -> PromptRecipe:
         """Compose a prompt from Muse art-direction fields."""
+        merchant_requirements = _safe_merchant_requirements(category or product, product)
         final_prompt = (
             f"Product: {product},\n"
+            f"{merchant_requirements}\n"
             f"Style: {style},\n"
             f"Rendering Family: {rendering_method},\n"
             f"Palette: {palette},\n"
@@ -98,7 +104,7 @@ class PromptComposer:
             composition=composition,
             background=background_treatment or "transparent or clean printable background as appropriate",
             rendering=rendering_method,
-            commercial_requirements="commercial use digital download ready",
+            commercial_requirements=merchant_requirements,
             consistency_rules="consistent palette, rendering method, composition, and mood",
             negative_prompt=(
                 "No text, No watermark, No logo, No cropped objects, "
@@ -209,3 +215,10 @@ class PromptComposer:
             components.provider_formatting.render(),
         )
         return ",\n".join(parts) + "."
+
+
+def _safe_merchant_requirements(category: str, product: str) -> str:
+    try:
+        return merchant_prompt_requirements(category, product)
+    except RuntimeError:
+        return "Commercial use digital download ready, Etsy-ready product specifications."

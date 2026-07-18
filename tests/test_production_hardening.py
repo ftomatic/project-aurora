@@ -5,6 +5,7 @@ from __future__ import annotations
 import sys
 import tempfile
 import unittest
+import zipfile
 from http.client import RemoteDisconnected
 from pathlib import Path
 from types import SimpleNamespace
@@ -60,6 +61,24 @@ def write_commercial_png(path: Path) -> None:
         format="PNG",
         dpi=(300, 300),
     )
+
+
+def write_digital_paper_package(directory: Path) -> None:
+    directory.mkdir(parents=True, exist_ok=True)
+    files: list[Path] = []
+    for index in range(1, 13):
+        path = directory / f"woodland_digital_paper_{index:02d}.jpg"
+        Image.new("RGB", (3600, 3600), (index, 120, 80)).save(
+            path,
+            format="JPEG",
+            dpi=(300, 300),
+        )
+        files.append(path)
+    preview = directory / "collage_preview.jpg"
+    Image.new("RGB", (1800, 1200), (200, 200, 180)).save(preview, format="JPEG", dpi=(300, 300))
+    with zipfile.ZipFile(directory / "woodland_digital_paper.zip", "w") as archive:
+        for path in files:
+            archive.write(path, arcname=path.name)
 
 
 class ProductionHardeningTest(unittest.TestCase):
@@ -192,7 +211,7 @@ class ProductionHardeningTest(unittest.TestCase):
         self.assertEqual(checkpoint.attempts, 2)
 
     def test_merchant_preflight_blocks_missing_taxonomy_and_passes_valid_package(self) -> None:
-        current_job = job("Autumn Mushroom Clipart", "clipart")
+        current_job = job("Winter Woodland Digital Paper", "digital paper")
         seo = SEOEngine().build_package(
             {
                 "job_id": current_job.id,
@@ -202,15 +221,14 @@ class ProductionHardeningTest(unittest.TestCase):
             }
         )
         final_dir = self.base_path / "final_product_images"
-        for index in range(1, 5):
-            write_commercial_png(final_dir / f"autumn_mushroom_{index:02d}.png")
+        write_digital_paper_package(final_dir)
         merchant = MerchantPackage(
             job_id=current_job.id,
             product_name=current_job.product_name,
             product_type=current_job.category,
             capability_mode=IMAGE_ONLY,
-            etsy_taxonomy_id=6844,
-            etsy_taxonomy_path="Craft Supplies & Tools > Digital > Clip Art & Image Files",
+            etsy_taxonomy_id=5678,
+            etsy_taxonomy_path="Craft Supplies & Tools > Paper > Digital Paper",
             taxonomy_confidence=92,
             price_range=(3.99, 5.99, 8.99),
             recommended_price=8.49,

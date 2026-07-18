@@ -172,6 +172,7 @@ class DefaultProductFactoryStageRunner:
             texture=art_direction.texture,
             typography_direction=art_direction.typography_direction,
             negative_style_constraints=art_direction.negative_style_constraints,
+            category=job.category,
             recipe_id=job.id,
         )
         self._memory.save_prompt_package(
