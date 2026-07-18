@@ -7,6 +7,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Protocol
 
+from project_aurora.opportunity_intelligence import OpportunityIntelligenceEngine
 from project_aurora.planning.production_queue_manager import ProductionQueueManager
 from project_aurora.research.market_opportunity import MarketOpportunity
 from project_aurora.storage.memory_manager import MemoryManager
@@ -52,10 +53,15 @@ class AthenaResearchReport:
 
     def to_dict(self) -> dict[str, object]:
         """Return JSON-safe research report data."""
+        scoring_engine = OpportunityIntelligenceEngine()
+        opportunity_scores = [
+            scoring_engine.score(item).to_dict() for item in self.opportunities
+        ]
         return {
             "created_at": self.created_at.isoformat(),
             "opportunity_count": len(self.opportunities),
             "opportunities": [item.to_dict() for item in self.opportunities],
+            "opportunity_scores": opportunity_scores,
             "provider_statuses": [
                 {
                     "provider": item.provider,
@@ -199,6 +205,13 @@ class AthenaMarketIntelligence:
             provider_statuses=tuple(statuses),
         )
         self._memory.save_record(OPPORTUNITY_COLLECTION, "latest", report.to_dict())
+        for opportunity in report.opportunities:
+            score = OpportunityIntelligenceEngine().score(opportunity)
+            self._memory.save_record(
+                "opportunity_scores",
+                opportunity.id,
+                score.to_dict(),
+            )
         return report
 
 

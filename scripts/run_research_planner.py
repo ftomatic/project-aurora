@@ -238,16 +238,60 @@ def print_research_planner_output(
     print(len(research.opportunities))
     print("")
     print("Top Opportunities")
-    for opportunity in research.opportunities[:5]:
-        print(opportunity.keyword.title())
+    score_by_id = {
+        str(score["opportunity_id"]): float(score["opportunity_score"])
+        for score in plan.opportunity_scores
+        if isinstance(score, dict)
+    }
+    ranked_opportunities = sorted(
+        research.opportunities,
+        key=lambda opportunity: (
+            -score_by_id.get(opportunity.id, 0),
+            opportunity.competition_score,
+            opportunity.keyword.casefold(),
+        ),
+    )
+    print("Rank   Product                          Opportunity Score")
+    for index, opportunity in enumerate(ranked_opportunities[:5], start=1):
+        print(f"{index:<6} {opportunity.keyword.title():<32} {score_by_id.get(opportunity.id, 0):.0f}")
     print("")
     print("Selected Portfolio")
     for opportunity in plan.selected:
         print(opportunity.keyword.title())
     print("")
+    print("Merchant Selection")
+    for index, decision in enumerate(
+        sorted(plan.decisions, key=lambda item: -item.opportunity_score),
+        start=1,
+    ):
+        print(f"{index}. {decision.product} - Opportunity Score {decision.opportunity_score:.0f}")
+    print("")
     print("Business Decision Report")
     for decision in plan.decisions:
         print(f"- {decision.product}: {decision.reason_selected}")
+        print("  Factor Contributions:")
+        for factor, contribution in decision.opportunity_contributions.items():
+            print(f"  - {factor.replace('_', ' ').title()}: {contribution:.2f}")
+        print(f"  Expected Revenue: ${decision.expected_business_value.get('expected_revenue', 0):.2f}")
+        print(f"  Expected Margin: ${decision.expected_business_value.get('expected_margin', 0):.2f}")
+    if plan.rejected:
+        print("")
+        print("Why Not Selected")
+        score_details = {
+            str(score["opportunity_id"]): score
+            for score in plan.opportunity_scores
+            if isinstance(score, dict) and "opportunity_id" in score
+        }
+        for opportunity, reason in plan.rejected[:10]:
+            detail = score_details.get(opportunity.id, {})
+            score = float(detail.get("opportunity_score", score_by_id.get(opportunity.id, 0)))
+            weakest = str(detail.get("weakest_factor", ""))
+            improvement = str(detail.get("suggested_improvement", ""))
+            print(f"- {opportunity.keyword.title()}: Opportunity Score {score:.0f}. {reason}")
+            if weakest:
+                print(f"  Weakest Factor: {weakest}")
+            if improvement:
+                print(f"  Suggested Improvement: {improvement}")
     print("")
     print("Average Confidence")
     print(f"{plan.average_confidence:.0f}%")

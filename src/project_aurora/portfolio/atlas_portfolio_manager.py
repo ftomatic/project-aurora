@@ -8,6 +8,10 @@ from datetime import datetime
 from difflib import SequenceMatcher
 from typing import Any, Iterable
 
+from project_aurora.opportunity_intelligence import (
+    OpportunityIntelligenceEngine,
+    OpportunityScore,
+)
 from project_aurora.planning.production_queue_manager import ProductionQueueManager
 from project_aurora.portfolio.merchant_memory import (
     MerchantMemoryRecord,
@@ -49,6 +53,9 @@ class BusinessDecision:
     confidence_score: float
     research_sources: tuple[str, ...]
     reason_selected: str
+    opportunity_score: float = 0.0
+    opportunity_contributions: dict[str, float] = field(default_factory=dict)
+    expected_business_value: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         """Return JSON-safe decision data."""
@@ -70,6 +77,9 @@ class BusinessDecision:
             "confidence_score": self.confidence_score,
             "research_sources": list(self.research_sources),
             "reason_selected": self.reason_selected,
+            "opportunity_score": self.opportunity_score,
+            "opportunity_contributions": dict(self.opportunity_contributions),
+            "expected_business_value": dict(self.expected_business_value),
         }
 
 
@@ -87,6 +97,7 @@ class AtlasPortfolioPlan:
     selection_failure_reasons: tuple[str, ...]
     provider_status: tuple[dict[str, Any], ...]
     merchant_rejections: tuple[dict[str, Any], ...] = field(default_factory=tuple)
+    opportunity_scores: tuple[dict[str, Any], ...] = field(default_factory=tuple)
     created_at: datetime = field(default_factory=datetime.now)
 
     def diversity(self) -> dict[str, dict[str, int]]:
@@ -103,6 +114,11 @@ class AtlasPortfolioPlan:
 
     def to_report(self) -> dict[str, Any]:
         """Return JSON-safe daily research report."""
+        scores_by_product = {
+            str(score.get("product", "")).casefold(): score
+            for score in self.opportunity_scores
+            if isinstance(score, dict)
+        }
         return {
             "todays_research": {
                 "candidates": len(self.selected) + len(self.rejected),
@@ -119,7 +135,22 @@ class AtlasPortfolioPlan:
             ),
             "products_selected": [item.keyword for item in self.selected],
             "products_rejected": [
-                {"product": opportunity.keyword, "reason": reason}
+                {
+                    "product": opportunity.keyword,
+                    "reason": reason,
+                    "opportunity_score": scores_by_product.get(
+                        opportunity.keyword.title().casefold(),
+                        {},
+                    ).get("opportunity_score", 0),
+                    "weakest_factor": scores_by_product.get(
+                        opportunity.keyword.title().casefold(),
+                        {},
+                    ).get("weakest_factor", ""),
+                    "suggested_improvement": scores_by_product.get(
+                        opportunity.keyword.title().casefold(),
+                        {},
+                    ).get("suggested_improvement", ""),
+                }
                 for opportunity, reason in self.rejected
             ],
             "provider_status": list(self.provider_status),
@@ -130,6 +161,7 @@ class AtlasPortfolioPlan:
             "constraint_relaxations": list(self.constraint_relaxations),
             "selection_failure_reasons": list(self.selection_failure_reasons),
             "merchant_rejections": list(self.merchant_rejections),
+            "opportunity_scores": list(self.opportunity_scores),
             "business_decision_report": [
                 decision.to_dict() for decision in self.decisions
             ],
@@ -148,6 +180,7 @@ class AtlasPortfolioManager:
         self._config = config or ResearchPlannerConfig()
         self._queue_manager = queue_manager or ProductionQueueManager()
         self._memory = memory or MemoryManager()
+        self._opportunity_engine = OpportunityIntelligenceEngine()
 
     def build_portfolio(
         self,
@@ -157,7 +190,9 @@ class AtlasPortfolioManager:
         """Select today's five-product research-backed portfolio."""
         merchant_memory = self._merchant_memory_records()
         expanded = _expand_with_merchant_alternatives(opportunities, merchant_memory)
-        ranked = tuple(sorted(_dedupe_opportunities(expanded), key=_score_key))
+        ranked_pairs = self._opportunity_engine.rank(_dedupe_opportunities(expanded))
+        ranked = tuple(item for item, _score in ranked_pairs)
+        base_scores = {item.id: score for item, score in ranked_pairs}
         selected: list[MarketOpportunity] = []
         rejected: list[tuple[MarketOpportunity, str]] = []
         counts: dict[str, Counter[str]] = {
@@ -215,7 +250,13 @@ class AtlasPortfolioManager:
                     relaxed_rules=stage.relaxed_rules,
                 )
                 if limit_reason:
-                    rejected_by_id[opportunity.id] = (opportunity, limit_reason)
+                    rejected_by_id[opportunity.id] = (
+                        opportunity,
+                        _rejection_reason_with_score(
+                            limit_reason,
+                            base_scores[opportunity.id],
+                        ),
+                    )
                     continue
                 selected.append(opportunity)
                 selected_ids.add(opportunity.id)
@@ -233,7 +274,28 @@ class AtlasPortfolioManager:
             duplicate_failures=(),
         )
         quality_gate_passed = bool(quality_gate["status"] == "READY_FOR_APPROVAL")
-        decisions = tuple(_decision(item) for item in selected)
+        selected_scores = tuple(
+            self._opportunity_engine.score(
+                item,
+                selected_today=tuple(previous for previous in selected if previous.id != item.id),
+                selection_outcome="SELECTED",
+            )
+            for item in selected
+        )
+        score_by_id = {score.opportunity_id: score for score in (*base_scores.values(), *selected_scores)}
+        decisions = tuple(_decision(item, score_by_id[item.id]) for item in selected)
+        opportunity_score_records = tuple(
+            score_by_id[item.id].to_dict()
+            | {
+                "selection_outcome": "SELECTED"
+                if item.id in selected_ids
+                else "REJECTED"
+                if item.id in rejected_by_id
+                else "CANDIDATE"
+            }
+            for item in ranked
+            if item.id in score_by_id
+        )
         rejected = tuple(rejected_by_id.values())
         failure_reasons = _selection_failure_reasons(
             selected_count=len(selected),
@@ -253,6 +315,7 @@ class AtlasPortfolioManager:
             selection_failure_reasons=failure_reasons,
             provider_status=provider_status,
             merchant_rejections=tuple(merchant_rejections),
+            opportunity_scores=opportunity_score_records,
         )
 
     def save_report(self, plan: AtlasPortfolioPlan) -> str:
@@ -352,7 +415,7 @@ class AtlasPortfolioManager:
         return tuple(records)
 
 
-def _decision(opportunity: MarketOpportunity) -> BusinessDecision:
+def _decision(opportunity: MarketOpportunity, score: OpportunityScore) -> BusinessDecision:
     demand = _demand_label(opportunity.trend_score)
     competition = _competition_label(opportunity.competition_score)
     return BusinessDecision(
@@ -388,10 +451,21 @@ def _decision(opportunity: MarketOpportunity) -> BusinessDecision:
         confidence_score=opportunity.confidence,
         research_sources=opportunity.research_sources,
         reason_selected=(
+            f"Opportunity Score {score.opportunity_score:.0f}/100. "
             f"{demand} demand. {competition} competition. "
             "Complements existing shop. Different audience or niche than "
             "today's other products. Strong seasonal timing."
         ),
+        opportunity_score=score.opportunity_score,
+        opportunity_contributions=score.contributions,
+        expected_business_value={
+            "expected_revenue": score.expected_revenue,
+            "expected_conversion": score.expected_conversion,
+            "expected_margin": score.expected_margin,
+            "expected_risk": score.expected_risk,
+            "expected_time_to_first_sale": score.expected_time_to_first_sale,
+            "overall_business_score": score.overall_business_score,
+        },
     )
 
 
@@ -608,6 +682,14 @@ def _dedupe_opportunities(
     return tuple(best.values())
 
 
+def _rejection_reason_with_score(reason: str, score: OpportunityScore) -> str:
+    return (
+        f"{reason}. Opportunity Score {score.opportunity_score:.0f}. "
+        f"Weakest factor: {score.weakest_factor}. "
+        f"Suggested improvement: {score.suggested_improvement}"
+    )
+
+
 def _merchant_rejection_report(
     opportunity: MarketOpportunity,
     assessment: SimilarityAssessment,
@@ -691,12 +773,7 @@ def _bundle_size_from_job(product_name: str, category: str) -> int:
 
 
 def _score_key(item: MarketOpportunity) -> tuple[float, float, float, str]:
-    score = (
-        item.trend_score * 0.28
-        + (100 - item.competition_score) * 0.18
-        + item.commercial_potential * 0.26
-        + item.confidence * 0.28
-    )
+    score = OpportunityIntelligenceEngine().score(item).opportunity_score
     return (-score, item.competition_score, item.keyword.casefold())
 
 
