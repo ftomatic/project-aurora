@@ -8,6 +8,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from PIL import Image
 
@@ -133,9 +134,10 @@ class OpenAIProviderTest(unittest.TestCase):
         self.assertIsInstance(registry.select("openai"), OpenAIImageProvider)
 
     def test_openai_provider_requires_api_key_or_client(self) -> None:
-        provider = OpenAIImageProvider(output_dir=self.output_dir, api_key=None)
+        with patch.dict("os.environ", {"OPENAI_API_KEY": ""}):
+            provider = OpenAIImageProvider(output_dir=self.output_dir, api_key=None)
 
-        self.assertFalse(provider.health_check())
+            self.assertFalse(provider.health_check())
 
     def test_openai_provider_uses_mocked_client(self) -> None:
         fake_client = FakeOpenAIClient()

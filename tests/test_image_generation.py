@@ -7,6 +7,7 @@ import tempfile
 import unittest
 from datetime import datetime
 from pathlib import Path
+from unittest.mock import patch
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 SRC_PATH = PROJECT_ROOT / "src"
@@ -120,20 +121,21 @@ class ImageGenerationTest(unittest.TestCase):
             engine.select_provider("missing")
 
     def test_openai_provider_requires_configuration(self) -> None:
-        provider = OpenAIImageProvider()
-        request = ImageGenerationEngine.create_request(
-            prompt_package=make_prompt_package(),
-            provider_name=provider.provider_name(),
-            image_type="product_asset",
-            width=3000,
-            height=3000,
-            dpi=300,
-            transparent_background=True,
-        )
+        with patch.dict("os.environ", {"OPENAI_API_KEY": ""}):
+            provider = OpenAIImageProvider()
+            request = ImageGenerationEngine.create_request(
+                prompt_package=make_prompt_package(),
+                provider_name=provider.provider_name(),
+                image_type="product_asset",
+                width=3000,
+                height=3000,
+                dpi=300,
+                transparent_background=True,
+            )
 
-        self.assertFalse(provider.health_check())
-        with self.assertRaises(RuntimeError):
-            provider.generate_image(request)
+            self.assertFalse(provider.health_check())
+            with self.assertRaises(RuntimeError):
+                provider.generate_image(request)
 
     def test_image_generation_engine_saves_result_to_memory(self) -> None:
         self.memory.save_prompt_package(make_prompt_package())
