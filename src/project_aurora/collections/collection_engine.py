@@ -7,11 +7,14 @@ from pathlib import Path
 from project_aurora.collections.collection_memory import CollectionMemory
 from project_aurora.collections.collection_models import (
     CollectionArtDirection,
+    CollectionBlueprint,
     CollectionOpportunity,
     CollectionPlan,
     CollectionProduct,
+    CollectionRoadmap,
     CollectionScore,
     CrossSellPlan,
+    ShopHealth,
 )
 from project_aurora.collections.collection_settings import CollectionSettings
 from project_aurora.muse.muse_engine import MuseEngine
@@ -44,6 +47,60 @@ class CollectionDiscovery:
                 ("Soft Pastel Nursery", "Storybook Watercolor"),
                 "Parents want gentle nursery art and matching baby animal clipart.",
                 ("Bunny", "Fox", "Deer", "Bear", "Hedgehog"),
+            ),
+            _opportunity(
+                "Boho Teacher",
+                "warm classroom decor and teacher printables",
+                "teachers",
+                "Back To School",
+                ("Flat Vector", "Boho", "Editorial Minimal"),
+                "Teachers want coordinated classroom visuals that feel warm and modern.",
+                ("Rainbow", "Alphabet", "Welcome Sign", "Name Tags", "Schedule Cards"),
+            ),
+            _opportunity(
+                "Strawberry Birthday",
+                "summer berry party printables",
+                "parents",
+                "Summer",
+                ("Storybook Watercolor", "Soft Cottagecore"),
+                "Parents want matching birthday invitations, decor, and thank-you pieces.",
+                ("Invitation", "Cupcake Toppers", "Favor Tags", "Thank You Cards", "Party Banner"),
+            ),
+            _opportunity(
+                "Cottagecore Mushrooms",
+                "woodland mushroom commercial graphics",
+                "crafters",
+                "Autumn",
+                ("Cottagecore Watercolor", "Vintage Botanical"),
+                "Crafters want coordinated mushroom clipart, papers, and stickers.",
+                ("Clipart", "Digital Paper", "Sticker Sheet", "Wall Art", "Gift Tags"),
+            ),
+            _opportunity(
+                "Neutral Baby",
+                "soft neutral nursery and baby shower set",
+                "parents",
+                "Evergreen",
+                ("Soft Pastel Nursery", "Scandinavian Minimal"),
+                "Parents buy gender-neutral nursery decor and matching baby shower pieces.",
+                ("Wall Art", "Milestone Cards", "Baby Shower Invitation", "Thank You Cards", "Digital Paper"),
+            ),
+            _opportunity(
+                "Celestial Nursery",
+                "moon and star nursery collection",
+                "parents",
+                "Evergreen",
+                ("Soft Pastel Nursery", "Minimal Line Art"),
+                "Parents search for cohesive moon, star, and nursery room decor.",
+                ("Wall Art", "Digital Paper", "Alphabet Posters", "Milestone Cards", "Clipart"),
+            ),
+            _opportunity(
+                "Wildflower Wedding",
+                "romantic floral wedding stationery",
+                "brides",
+                "Wedding Season",
+                ("Pressed Flowers", "Luxury Wedding", "Fine Line Floral"),
+                "Brides want matching invitations, menus, signage, and thank-you cards.",
+                ("Invitation", "Details Card", "Menu", "Welcome Sign", "Thank You Cards"),
             ),
             _opportunity(
                 "Vintage Christmas",
@@ -110,6 +167,9 @@ class CollectionScorer:
         portfolio_fit = max(0, 92 - duplicate)
         cross_sell = min(100, 70 + len(opportunity.complementary_products) * self._cross_sell_weight // 5)
         evergreen = 90 if opportunity.season == "Evergreen" else 72
+        expansion = _expansion_score(opportunity)
+        brand = _brand_consistency_score(opportunity)
+        revenue = _revenue_score(opportunity)
         confidence = round((trend + commercial + seasonality + portfolio_fit + cross_sell) / 5)
         return CollectionScore(
             trend_score=trend,
@@ -120,6 +180,9 @@ class CollectionScorer:
             cross_sell_potential=cross_sell,
             evergreen_score=evergreen,
             average_confidence=confidence,
+            expansion_potential=expansion,
+            brand_consistency=brand,
+            revenue_potential=revenue,
         )
 
 
@@ -183,6 +246,26 @@ class CollectionDesigner:
             ),
         )
 
+    def blueprint(self, opportunity: CollectionOpportunity, art_direction: CollectionArtDirection) -> CollectionBlueprint:
+        """Return the merchant-facing collection blueprint."""
+        primary = art_direction.palette[:3] or ("Cream", "Sage", "Blush")
+        secondary = art_direction.palette[3:6] or tuple(_secondary_colors_for_collection(opportunity))
+        return CollectionBlueprint(
+            theme_name=opportunity.name,
+            target_audience=opportunity.audience,
+            visual_identity=f"{opportunity.name} coordinated {art_direction.master_style} collection",
+            primary_colors=primary,
+            secondary_colors=secondary,
+            typography_style=_typography_for_collection(opportunity),
+            illustration_style=art_direction.master_style,
+            mood=art_direction.mood,
+            season=opportunity.season,
+            commercial_positioning=(
+                f"Cohesive Etsy collection for {opportunity.audience}: "
+                f"{opportunity.customer_intent}"
+            ),
+        )
+
 
 class CollectionProductPlanner:
     """Atlas-style product planner inside one collection."""
@@ -192,9 +275,12 @@ class CollectionProductPlanner:
 
     def plan(self, opportunity: CollectionOpportunity) -> tuple[CollectionProduct, ...]:
         """Create coordinated products inside the collection."""
-        subjects = opportunity.complementary_products[: self._collection_size]
-        product_type = _product_type_for_collection(opportunity)
-        return tuple(
+        return self.plan_all(opportunity)[: self._collection_size]
+
+    def plan_all(self, opportunity: CollectionOpportunity) -> tuple[CollectionProduct, ...]:
+        """Create the full collection roadmap expansion."""
+        product_specs = _product_expansion_for_collection(opportunity)
+        products = tuple(
             CollectionProduct(
                 product_name=f"{opportunity.name} {subject}",
                 subject=subject,
@@ -206,8 +292,9 @@ class CollectionProductPlanner:
                     opportunity.theme.casefold(),
                 ),
             )
-            for subject in subjects
+            for subject, product_type in product_specs
         )
+        return tuple(dict.fromkeys(products))
 
 
 class MerchantBrain:
@@ -229,6 +316,8 @@ class MerchantBrain:
                 f"{opportunity.name} Wall Art",
                 f"{opportunity.name} Sticker Sheet",
             ),
+            matching_products=tuple(f"Matching {product.subject}" for product in products),
+            matching_collections=_matching_collections(opportunity),
         )
 
 
@@ -261,8 +350,12 @@ class CollectionIntelligenceEngine:
             eligible = scored
         opportunity, score = max(eligible, key=lambda item: (item[1].total, item[1].cross_sell_potential, item[0].name))
         art_direction = self._designer.design(opportunity)
+        blueprint = self._designer.blueprint(opportunity, art_direction)
+        roadmap_products = self._planner.plan_all(opportunity)
         products = self._planner.plan(opportunity)
         cross_sell = self._merchant.generate(opportunity, products)
+        roadmap = _roadmap(opportunity, roadmap_products, completed=products)
+        shop_health = _shop_health(self._collection_memory.records, opportunity, roadmap_products)
         plan = CollectionPlan(
             collection=opportunity,
             score=score,
@@ -273,6 +366,9 @@ class CollectionIntelligenceEngine:
                 f"{opportunity.name} collection scored {score.total} with strong "
                 f"cross-sell potential and {opportunity.customer_intent}"
             ),
+            blueprint=blueprint,
+            roadmap=roadmap,
+            shop_health=shop_health,
         )
         self._collection_memory.remember(opportunity.name, tuple(product.product_name for product in products))
         if self._memory is not None:
@@ -312,6 +408,23 @@ def _commercial_score(opportunity: CollectionOpportunity) -> int:
     return 90 if len(opportunity.complementary_products) >= 5 else 76
 
 
+def _expansion_score(opportunity: CollectionOpportunity) -> int:
+    return min(100, 62 + len(_product_expansion_for_collection(opportunity)) * 4)
+
+
+def _brand_consistency_score(opportunity: CollectionOpportunity) -> int:
+    return 94 if opportunity.aesthetics else 82
+
+
+def _revenue_score(opportunity: CollectionOpportunity) -> int:
+    high_value_types = {
+        product_type
+        for _subject, product_type in _product_expansion_for_collection(opportunity)
+        if product_type in {"clipart", "digital paper", "wall art", "party printable"}
+    }
+    return min(100, 70 + len(high_value_types) * 6 + len(opportunity.complementary_products))
+
+
 def _seasonality_score(opportunity: CollectionOpportunity) -> int:
     return 86 if opportunity.season != "Evergreen" else 78
 
@@ -331,6 +444,105 @@ def _product_type_for_collection(opportunity: CollectionOpportunity) -> str:
     return "clipart"
 
 
+def _product_expansion_for_collection(opportunity: CollectionOpportunity) -> tuple[tuple[str, str], ...]:
+    lowered = opportunity.name.casefold()
+    if "woodland nursery" in lowered:
+        return (
+            ("Clipart Bundle", "clipart"),
+            ("Digital Paper Pack", "digital paper"),
+            ("Nursery Wall Art", "wall art"),
+            ("Milestone Cards", "party printable"),
+            ("Growth Chart", "wall art"),
+            ("Alphabet Posters", "wall art"),
+            ("Baby Shower Invitation", "party printable"),
+            ("Thank You Cards", "party printable"),
+            ("Gift Tags", "party printable"),
+            ("Stickers", "sticker sheet"),
+        )
+    if "teacher" in lowered:
+        return (
+            ("Classroom Decor", "wall art"),
+            ("Alphabet Posters", "wall art"),
+            ("Name Tags", "party printable"),
+            ("Schedule Cards", "party printable"),
+            ("Reward Stickers", "sticker sheet"),
+            ("Bulletin Board Borders", "digital paper"),
+            ("Welcome Sign", "wall art"),
+            ("Teacher Planner Stickers", "sticker sheet"),
+        )
+    if "birthday" in lowered:
+        return (
+            ("Invitation", "party printable"),
+            ("Cupcake Toppers", "party printable"),
+            ("Favor Tags", "party printable"),
+            ("Thank You Cards", "party printable"),
+            ("Party Banner", "party printable"),
+            ("Digital Paper Pack", "digital paper"),
+            ("Clipart Bundle", "clipart"),
+            ("Stickers", "sticker sheet"),
+        )
+    if "wedding" in lowered:
+        return (
+            ("Invitation", "party printable"),
+            ("Details Card", "party printable"),
+            ("Menu", "party printable"),
+            ("Welcome Sign", "wall art"),
+            ("Thank You Cards", "party printable"),
+            ("Table Numbers", "party printable"),
+            ("Clipart Bundle", "clipart"),
+            ("Digital Paper Pack", "digital paper"),
+        )
+    if "mushroom" in lowered:
+        return (
+            ("Clipart Bundle", "clipart"),
+            ("Digital Paper Pack", "digital paper"),
+            ("Sticker Sheet", "sticker sheet"),
+            ("Wall Art", "wall art"),
+            ("Gift Tags", "party printable"),
+            ("Junk Journal Pages", "digital paper"),
+            ("Commercial Graphics Pack", "clipart"),
+        )
+    if "christmas" in lowered:
+        return (
+            ("Clipart Bundle", "clipart"),
+            ("Digital Paper Pack", "digital paper"),
+            ("Gift Tags", "party printable"),
+            ("Wall Art", "wall art"),
+            ("Stickers", "sticker sheet"),
+            ("Greeting Cards", "party printable"),
+            ("Commercial Graphics Pack", "clipart"),
+        )
+    if "kitchen" in lowered or "botanical" in lowered:
+        return (
+            ("Wall Art Set", "wall art"),
+            ("Herb Clipart Bundle", "clipart"),
+            ("Digital Paper Pack", "digital paper"),
+            ("Recipe Cards", "party printable"),
+            ("Kitchen Labels", "sticker sheet"),
+            ("Gallery Wall Trio", "wall art"),
+            ("Commercial Graphics Pack", "clipart"),
+        )
+    if "coastal" in lowered:
+        return (
+            ("Digital Paper Pack", "digital paper"),
+            ("Clipart Bundle", "clipart"),
+            ("Wall Art Set", "wall art"),
+            ("Sticker Sheet", "sticker sheet"),
+            ("Scrapbook Cards", "party printable"),
+            ("Commercial Graphics Pack", "clipart"),
+        )
+    if "dark academia" in lowered:
+        return (
+            ("Wall Art Set", "wall art"),
+            ("Clipart Bundle", "clipart"),
+            ("Digital Paper Pack", "digital paper"),
+            ("Bookmarks", "party printable"),
+            ("Sticker Sheet", "sticker sheet"),
+            ("Library Quote Prints", "wall art"),
+        )
+    return tuple((subject, _product_type_for_collection(opportunity)) for subject in opportunity.complementary_products)
+
+
 def _mood_for_collection(opportunity: CollectionOpportunity) -> tuple[str, ...]:
     lowered = opportunity.name.casefold()
     if "french" in lowered:
@@ -344,23 +556,169 @@ def _mood_for_collection(opportunity: CollectionOpportunity) -> tuple[str, ...]:
     return ("Cohesive", "Commercial", "Seasonal")
 
 
+def _secondary_colors_for_collection(opportunity: CollectionOpportunity) -> tuple[str, ...]:
+    lowered = opportunity.name.casefold()
+    if "woodland" in lowered:
+        return ("Moss", "Taupe", "Soft Brown")
+    if "strawberry" in lowered:
+        return ("Berry Red", "Blush Pink", "Warm Yellow")
+    if "wedding" in lowered:
+        return ("Ivory", "Champagne", "Soft Green")
+    if "teacher" in lowered:
+        return ("Terracotta", "Mustard", "Cream")
+    return ("Cream", "Sage", "Warm Gray")
+
+
+def _typography_for_collection(opportunity: CollectionOpportunity) -> str:
+    lowered = opportunity.name.casefold()
+    if "wedding" in lowered:
+        return "Elegant serif with light script accents"
+    if "teacher" in lowered:
+        return "Readable friendly classroom sans serif"
+    if "birthday" in lowered:
+        return "Playful rounded party lettering"
+    if "dark academia" in lowered:
+        return "Classic literary serif"
+    return "Clean Etsy preview typography"
+
+
+def _matching_collections(opportunity: CollectionOpportunity) -> tuple[str, ...]:
+    lowered = opportunity.name.casefold()
+    if "woodland" in lowered:
+        return ("Neutral Baby", "Cottagecore Mushrooms", "Celestial Nursery")
+    if "teacher" in lowered:
+        return ("Pastel Halloween", "Valentine Classroom", "Back To School")
+    if "wedding" in lowered:
+        return ("Pressed Flower Wedding", "Neutral Boho Bridal", "Fine Line Floral")
+    if "birthday" in lowered:
+        return ("Summer Strawberry", "Cottagecore Party", "Berry Baby Shower")
+    return ("Matching Digital Paper", "Matching Clipart", "Matching Wall Art")
+
+
+def _roadmap(
+    opportunity: CollectionOpportunity,
+    planned: tuple[CollectionProduct, ...],
+    completed: tuple[CollectionProduct, ...],
+) -> CollectionRoadmap:
+    planned_names = tuple(product.product_name for product in planned)
+    completed_names = tuple(product.product_name for product in completed)
+    remaining = tuple(name for name in planned_names if name not in set(completed_names))
+    estimated_revenue = round(len(planned_names) * 18.0 + len(remaining) * 7.5, 2)
+    return CollectionRoadmap(
+        collection_name=opportunity.name,
+        products_planned=planned_names,
+        products_completed=completed_names,
+        products_remaining=remaining,
+        estimated_collection_revenue=estimated_revenue,
+    )
+
+
+def _shop_health(
+    records: tuple[object, ...],
+    current: CollectionOpportunity,
+    planned: tuple[CollectionProduct, ...],
+) -> ShopHealth:
+    active = len(records) + 1
+    largest_name = current.name
+    largest_count = len(planned)
+    for record in records:
+        products = getattr(record, "products_inside", ())
+        if len(products) > largest_count:
+            largest_count = len(products)
+            largest_name = str(getattr(record, "collection_name", largest_name))
+    return ShopHealth(
+        collections_active=active,
+        collections_growing=sum(1 for record in records if len(getattr(record, "products_inside", ())) < 10) + 1,
+        collections_completed=sum(1 for record in records if len(getattr(record, "products_inside", ())) >= 10),
+        largest_collection=largest_name,
+        revenue_concentration="Balanced" if active >= 3 else "Early collection buildout",
+        collection_diversity="Healthy" if active >= 3 else "Growing",
+    )
+
+
 def _plan_to_record(plan: CollectionPlan) -> dict[str, object]:
     return {
         "collection": plan.collection.name,
         "why_chosen": plan.why_chosen,
         "products": [product.product_name for product in plan.products],
+        "product_types": [product.product_type for product in plan.products],
+        "blueprint": plan.blueprint.to_dict() if plan.blueprint else {},
+        "roadmap": plan.roadmap.to_dict() if plan.roadmap else {},
+        "shop_health": plan.shop_health.to_dict() if plan.shop_health else {},
         "master_style": plan.art_direction.master_style,
         "palette": list(plan.art_direction.palette),
         "commercial_score": plan.score.commercial_score,
+        "collection_score": {
+            "commercial_potential": plan.score.commercial_score,
+            "portfolio_fit": plan.score.portfolio_fit,
+            "expansion_potential": plan.score.expansion_potential,
+            "cross_sell_potential": plan.score.cross_sell_potential,
+            "brand_consistency": plan.score.brand_consistency,
+            "revenue_potential": plan.score.revenue_potential,
+            "total": plan.score.total,
+        },
         "total_score": plan.score.total,
         "cross_sell": {
             "related_products": list(plan.cross_sell.related_products),
             "collection_links": list(plan.cross_sell.collection_links),
             "bundle_suggestions": list(plan.cross_sell.bundle_suggestions),
             "future_collection_ideas": list(plan.cross_sell.future_collection_ideas),
+            "matching_products": list(plan.cross_sell.matching_products),
+            "matching_collections": list(plan.cross_sell.matching_collections),
         },
         "created_at": plan.created_at.isoformat(),
     }
+
+
+def render_collection_merchant_report(plan: CollectionPlan) -> str:
+    """Return the Sprint 35 merchant-facing collection report."""
+    roadmap = plan.roadmap
+    lines = [
+        "COLLECTION INTELLIGENCE",
+        "",
+        "Today's Collection",
+        plan.collection.name,
+        "",
+        "Collection Score",
+        str(plan.score.total),
+        "",
+        "Today's Releases",
+    ]
+    lines.extend(f"[x] {product.subject}" for product in plan.products)
+    lines.extend(["", "Remaining Opportunities"])
+    if roadmap:
+        lines.extend(Path(name).name.replace(f"{plan.collection.name} ", "") for name in roadmap.products_remaining)
+    lines.extend(
+        [
+            "",
+            "Visual Identity",
+            plan.blueprint.visual_identity if plan.blueprint else plan.art_direction.master_style,
+            "",
+            "Commercial Positioning",
+            plan.blueprint.commercial_positioning if plan.blueprint else plan.why_chosen,
+            "",
+            "Estimated Collection Revenue",
+            f"${roadmap.estimated_collection_revenue:.2f}" if roadmap else "",
+            "",
+            "Suggested Related Listings",
+        ]
+    )
+    lines.extend(plan.cross_sell.related_products)
+    lines.extend(["", "Matching Collections"])
+    lines.extend(plan.cross_sell.matching_collections)
+    if plan.shop_health:
+        lines.extend(
+            [
+                "",
+                "Shop Health",
+                f"Collections Active: {plan.shop_health.collections_active}",
+                f"Collections Growing: {plan.shop_health.collections_growing}",
+                f"Collections Completed: {plan.shop_health.collections_completed}",
+                f"Largest Collection: {plan.shop_health.largest_collection}",
+                f"Collection Diversity: {plan.shop_health.collection_diversity}",
+            ]
+        )
+    return "\n".join(lines)
 
 
 def _slug(value: str) -> str:
