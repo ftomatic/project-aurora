@@ -9,6 +9,11 @@ from difflib import SequenceMatcher
 from typing import Any, Iterable
 
 from project_aurora.planning.production_queue_manager import ProductionQueueManager
+from project_aurora.portfolio.merchant_memory import (
+    MerchantMemoryRecord,
+    SimilarityAssessment,
+    analyze_similarity,
+)
 from project_aurora.research.market_opportunity import MarketOpportunity
 from project_aurora.research.research_config import ResearchPlannerConfig
 from project_aurora.storage.memory_manager import MemoryManager
@@ -81,6 +86,7 @@ class AtlasPortfolioPlan:
     constraint_relaxations: tuple[dict[str, str], ...]
     selection_failure_reasons: tuple[str, ...]
     provider_status: tuple[dict[str, Any], ...]
+    merchant_rejections: tuple[dict[str, Any], ...] = field(default_factory=tuple)
     created_at: datetime = field(default_factory=datetime.now)
 
     def diversity(self) -> dict[str, dict[str, int]]:
@@ -123,6 +129,7 @@ class AtlasPortfolioPlan:
             "quality_gate": self.quality_gate,
             "constraint_relaxations": list(self.constraint_relaxations),
             "selection_failure_reasons": list(self.selection_failure_reasons),
+            "merchant_rejections": list(self.merchant_rejections),
             "business_decision_report": [
                 decision.to_dict() for decision in self.decisions
             ],
@@ -148,7 +155,7 @@ class AtlasPortfolioManager:
         provider_status: tuple[dict[str, Any], ...] = (),
     ) -> AtlasPortfolioPlan:
         """Select today's five-product research-backed portfolio."""
-        duplicates = self._duplicate_names()
+        merchant_memory = self._merchant_memory_records()
         ranked = tuple(sorted(opportunities, key=_score_key))
         selected: list[MarketOpportunity] = []
         rejected: list[tuple[MarketOpportunity, str]] = []
@@ -164,13 +171,13 @@ class AtlasPortfolioManager:
         rejected_by_id: dict[str, tuple[MarketOpportunity, str]] = {}
         duplicate_failures: set[str] = set()
         confidence_failures: set[str] = set()
+        merchant_rejections: list[dict[str, Any]] = []
 
         for stage in _relaxation_stages():
             if stage.relaxed_label and _has_remaining_candidates(
                 ranked,
                 selected_ids,
-                duplicates,
-                self._config.duplicate_threshold,
+                merchant_memory,
             ):
                 relaxations.append(
                     {
@@ -183,12 +190,15 @@ class AtlasPortfolioManager:
                     break
                 if opportunity.id in selected_ids:
                     continue
-                duplicate_risk = _max_similarity(opportunity.keyword, duplicates)
-                if duplicate_risk >= self._config.duplicate_threshold:
+                duplicate_assessment = analyze_similarity(opportunity, merchant_memory)
+                if not duplicate_assessment.allowed:
                     duplicate_failures.add(opportunity.keyword)
+                    merchant_rejections.append(
+                        _merchant_rejection_report(opportunity, duplicate_assessment)
+                    )
                     rejected_by_id[opportunity.id] = (
                         opportunity,
-                        "Duplicate historical product",
+                        duplicate_assessment.reason,
                     )
                     continue
                 if opportunity.confidence < _ABSOLUTE_MINIMUM_CONFIDENCE:
@@ -209,6 +219,7 @@ class AtlasPortfolioManager:
                 selected.append(opportunity)
                 selected_ids.add(opportunity.id)
                 _increment_counts(counts, opportunity)
+                merchant_memory = (*merchant_memory, _memory_record_from_opportunity(opportunity))
             if len(selected) >= self._config.daily_products:
                 break
 
@@ -216,6 +227,7 @@ class AtlasPortfolioManager:
         quality_gate = _quality_gate(
             selected=tuple(selected),
             required_products=self._config.daily_products,
+            minimum_products=self._config.minimum_portfolio_size,
             minimum_confidence=self._config.minimum_confidence,
             duplicate_failures=(),
         )
@@ -239,6 +251,7 @@ class AtlasPortfolioManager:
             constraint_relaxations=tuple(relaxations),
             selection_failure_reasons=failure_reasons,
             provider_status=provider_status,
+            merchant_rejections=tuple(merchant_rejections),
         )
 
     def save_report(self, plan: AtlasPortfolioPlan) -> str:
@@ -301,6 +314,41 @@ class AtlasPortfolioManager:
                     continue
                 memory_names.extend(_extract_names(record))
         return tuple(dict.fromkeys((*queue_names, *memory_names)))
+
+    def _merchant_memory_records(self) -> tuple[MerchantMemoryRecord, ...]:
+        records: list[MerchantMemoryRecord] = []
+        for job in self._queue_manager.list_jobs():
+            records.append(
+                MerchantMemoryRecord(
+                    product_concept=job.product_name,
+                    theme=job.category,
+                    style=job.style,
+                    category=job.category,
+                    bundle_size=_bundle_size_from_job(job.product_name, job.category),
+                    target_audience=job.target_customer,
+                    season=job.seasonal_theme,
+                    keywords=job.keywords,
+                    creation_date=job.created_at,
+                )
+            )
+        for collection in (
+            "daily_research_reports",
+            "etsy_drafts",
+            "etsy_complete_drafts",
+            "production_reports",
+            "merchant_memory",
+        ):
+            try:
+                keys = self._memory.list_records(collection)
+            except (FileNotFoundError, ValueError):
+                keys = ()
+            for key in keys:
+                try:
+                    record = self._memory.load_record(collection, key)
+                except (FileNotFoundError, ValueError):
+                    continue
+                records.extend(_extract_memory_records(record))
+        return tuple(records)
 
 
 def _decision(opportunity: MarketOpportunity) -> BusinessDecision:
@@ -395,13 +443,12 @@ def _increment_counts(
 def _has_remaining_candidates(
     ranked: tuple[MarketOpportunity, ...],
     selected_ids: set[str],
-    duplicates: tuple[str, ...],
-    duplicate_threshold: float,
+    memory_records: tuple[MerchantMemoryRecord, ...],
 ) -> bool:
     return any(
         item.id not in selected_ids
         and item.confidence >= _ABSOLUTE_MINIMUM_CONFIDENCE
-        and _max_similarity(item.keyword, duplicates) < duplicate_threshold
+        and analyze_similarity(item, memory_records).allowed
         for item in ranked
     )
 
@@ -410,11 +457,13 @@ def _quality_gate(
     *,
     selected: tuple[MarketOpportunity, ...],
     required_products: int,
+    minimum_products: int,
     minimum_confidence: float,
     duplicate_failures: tuple[str, ...],
 ) -> dict[str, Any]:
     average = round(_average(item.confidence for item in selected), 2)
-    portfolio_size_pass = len(selected) == required_products
+    target_met = len(selected) >= required_products
+    portfolio_size_pass = len(selected) >= minimum_products
     product_confidence_pass = all(
         item.confidence >= _ABSOLUTE_MINIMUM_CONFIDENCE for item in selected
     )
@@ -428,16 +477,26 @@ def _quality_gate(
         and duplicate_check_pass
     ):
         status = "QUALITY_GATE_BLOCKED"
+    reason = "Target portfolio satisfied."
+    if status == "READY_FOR_APPROVAL" and not target_met:
+        reason = "Target not met. Minimum portfolio satisfied. Proceeding with production."
+    elif status == "QUALITY_GATE_BLOCKED" and not portfolio_size_pass:
+        reason = "Selected portfolio is below the minimum required size."
     return {
+        "target_portfolio": required_products,
         "required_products": required_products,
+        "minimum_required": minimum_products,
         "selected_products": len(selected),
+        "selected": len(selected),
         "portfolio_size": "PASS" if portfolio_size_pass else "FAIL",
+        "target_met": "PASS" if target_met else "FAIL",
         "minimum_confidence": minimum_confidence,
         "average_confidence": average,
         "confidence": "PASS" if confidence_pass else "FAIL",
         "product_confidence": "PASS" if product_confidence_pass else "FAIL",
         "duplicate_check": "PASS" if duplicate_check_pass else "FAIL",
         "status": status,
+        "reason": reason,
     }
 
 
@@ -466,6 +525,102 @@ def _selection_failure_reasons(
     for reason in blocked_constraints:
         reasons.append(f"Constraint prevented selection: {reason}.")
     return tuple(reasons)
+
+
+def _memory_record_from_opportunity(opportunity: MarketOpportunity) -> MerchantMemoryRecord:
+    return MerchantMemoryRecord(
+        product_concept=opportunity.keyword,
+        theme=opportunity.primary_niche,
+        style=opportunity.recommended_artistic_style,
+        category=opportunity.product_type,
+        bundle_size=_bundle_size_from_job(opportunity.keyword, opportunity.product_type),
+        target_audience=opportunity.target_audience,
+        season=opportunity.season,
+        keywords=tuple(opportunity.keyword.casefold().split()),
+        creation_date=opportunity.created_at,
+    )
+
+
+def _merchant_rejection_report(
+    opportunity: MarketOpportunity,
+    assessment: SimilarityAssessment,
+) -> dict[str, Any]:
+    return {
+        "rejected": opportunity.keyword,
+        "similarity": f"{assessment.score}%",
+        "duplicate_class": assessment.duplicate_class,
+        "reason": assessment.reason,
+        "nearly_identical_to": assessment.matched_product,
+        "suggested_alternatives": list(assessment.suggested_alternatives),
+        "suggested_style": assessment.suggested_style,
+    }
+
+
+def _extract_memory_records(value: Any) -> list[MerchantMemoryRecord]:
+    records: list[MerchantMemoryRecord] = []
+    if isinstance(value, dict):
+        if "similarity_fingerprint" in value and "product_concept" in value:
+            try:
+                records.append(
+                    MerchantMemoryRecord(
+                        product_concept=str(value.get("product_concept", "")),
+                        theme=str(value.get("theme", "")),
+                        style=str(value.get("style", "")),
+                        category=str(value.get("category", "")),
+                        bundle_size=int(value.get("bundle_size") or 4),
+                        target_audience=str(value.get("target_audience", "")),
+                        season=str(value.get("season", "")),
+                        primary_colors=tuple(str(item) for item in value.get("primary_colors", ())),
+                        keywords=tuple(str(item) for item in value.get("keywords", ())),
+                        creation_date=_date_from_value(value.get("creation_date")),
+                        similarity_fingerprint=str(value.get("similarity_fingerprint", "")),
+                    )
+                )
+            except (TypeError, ValueError):
+                return records
+        elif "product" in value or "product_name" in value:
+            name = str(value.get("product") or value.get("product_name") or "")
+            if name:
+                records.append(
+                    MerchantMemoryRecord(
+                        product_concept=name,
+                        theme=str(value.get("category") or value.get("primary_niche") or ""),
+                        style=str(value.get("style") or value.get("selected_style") or ""),
+                        category=str(value.get("product_type") or value.get("category") or ""),
+                        bundle_size=_bundle_size_from_job(name, str(value.get("product_type") or value.get("category") or "")),
+                        target_audience=str(value.get("target_audience") or value.get("audience") or ""),
+                        season=str(value.get("season") or ""),
+                        keywords=tuple(str(name).casefold().split()),
+                        creation_date=_date_from_value(value.get("created_at") or value.get("created")),
+                    )
+                )
+        for item in value.values():
+            records.extend(_extract_memory_records(item))
+    elif isinstance(value, list):
+        for item in value:
+            records.extend(_extract_memory_records(item))
+    return records
+
+
+def _date_from_value(value: Any) -> datetime:
+    if isinstance(value, str) and value.strip():
+        try:
+            return datetime.fromisoformat(value)
+        except ValueError:
+            return datetime.now()
+    return datetime.now()
+
+
+def _bundle_size_from_job(product_name: str, category: str) -> int:
+    lowered = f"{product_name} {category}".casefold()
+    for token in lowered.split():
+        if token.isdigit():
+            return int(token)
+    if "digital paper" in lowered:
+        return 12
+    if "clipart" in lowered:
+        return 8
+    return 4
 
 
 def _score_key(item: MarketOpportunity) -> tuple[float, float, float, str]:

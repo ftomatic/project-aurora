@@ -13,6 +13,7 @@ class ResearchPlannerConfig:
     minimum_confidence: float = 85
     candidate_count: int = 50
     daily_products: int = 5
+    minimum_portfolio_size: int = 3
     duplicate_threshold: float = 0.80
     max_per_style: int = 1
     max_per_category: int = 1
@@ -36,6 +37,7 @@ class ResearchPlannerConfig:
             minimum_confidence=float(values.get("minimum_confidence", "85")),
             candidate_count=int(values.get("candidate_count", "50")),
             daily_products=int(values.get("daily_products", "5")),
+            minimum_portfolio_size=int(values.get("minimum_portfolio_size", "3")),
             duplicate_threshold=float(values.get("duplicate_threshold", "0.80")),
             max_per_style=int(values.get("max_per_style", "1")),
             max_per_category=int(values.get("max_per_category", "1")),

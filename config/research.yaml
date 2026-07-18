@@ -3,6 +3,7 @@
 minimum_confidence: 85
 candidate_count: 50
 daily_products: 5
+minimum_portfolio_size: 3
 duplicate_threshold: 0.80
 max_per_style: 1
 max_per_category: 1

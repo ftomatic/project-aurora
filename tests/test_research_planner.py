@@ -115,6 +115,7 @@ class ResearchPlannerTest(unittest.TestCase):
             "minimum_confidence": 85,
             "candidate_count": 50,
             "daily_products": 5,
+            "minimum_portfolio_size": 3,
             "duplicate_threshold": 0.80,
             "max_per_style": 1,
             "max_per_category": 1,
@@ -188,7 +189,7 @@ class ResearchPlannerTest(unittest.TestCase):
 
         self.assertNotIn("Nursery Product 0", [item.keyword for item in plan.selected])
         rejected = {item.keyword: reason for item, reason in plan.rejected}
-        self.assertEqual(rejected["Nursery Product 0"], "Duplicate historical product")
+        self.assertIn("Exact duplicate", rejected["Nursery Product 0"])
 
     def test_confidence_threshold_blocks_weak_portfolio(self) -> None:
         opportunities = tuple(opportunity(index, confidence=70) for index in range(8))
@@ -326,7 +327,7 @@ class ResearchPlannerTest(unittest.TestCase):
         )
         self.assertEqual(plan.quality_gate["status"], "READY_FOR_APPROVAL")
 
-    def test_confidence_pass_but_size_failure_is_reported_separately(self) -> None:
+    def test_confidence_pass_and_minimum_size_pass_when_target_not_met(self) -> None:
         opportunities = tuple(opportunity(index, confidence=88) for index in range(4))
 
         plan = AtlasPortfolioManager(
@@ -336,10 +337,13 @@ class ResearchPlannerTest(unittest.TestCase):
         ).build_portfolio(opportunities)
 
         self.assertEqual(plan.quality_gate["required_products"], 5)
+        self.assertEqual(plan.quality_gate["minimum_required"], 3)
         self.assertEqual(plan.quality_gate["selected_products"], 4)
-        self.assertEqual(plan.quality_gate["portfolio_size"], "FAIL")
+        self.assertEqual(plan.quality_gate["portfolio_size"], "PASS")
+        self.assertEqual(plan.quality_gate["target_met"], "FAIL")
         self.assertEqual(plan.quality_gate["confidence"], "PASS")
-        self.assertEqual(plan.quality_gate["status"], "QUALITY_GATE_BLOCKED")
+        self.assertEqual(plan.quality_gate["status"], "READY_FOR_APPROVAL")
+        self.assertIn("Minimum portfolio satisfied", plan.quality_gate["reason"])
 
     def test_size_pass_but_confidence_failure_is_reported_separately(self) -> None:
         opportunities = tuple(opportunity(index, confidence=86) for index in range(5))
@@ -355,7 +359,7 @@ class ResearchPlannerTest(unittest.TestCase):
         self.assertEqual(plan.quality_gate["confidence"], "FAIL")
         self.assertEqual(plan.quality_gate["status"], "QUALITY_GATE_BLOCKED")
 
-    def test_exactly_five_products_required_before_approval(self) -> None:
+    def test_minimum_three_products_required_before_approval(self) -> None:
         opportunities = tuple(opportunity(index, confidence=88) for index in range(4))
         plan = AtlasPortfolioManager(
             config=self.config(minimum_confidence=85),
@@ -371,9 +375,9 @@ class ResearchPlannerTest(unittest.TestCase):
             )
             print_quality_gate(plan)
 
-        self.assertFalse(approved)
-        self.assertIn("Selected Products\n4", output.getvalue())
-        self.assertIn("Portfolio Size\nFAIL", output.getvalue())
+        self.assertTrue(approved)
+        self.assertIn("Selected\n4", output.getvalue())
+        self.assertIn("Portfolio Size\nPASS", output.getvalue())
 
 
 if __name__ == "__main__":
