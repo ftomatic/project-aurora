@@ -239,9 +239,15 @@ class ResearchPlannerTest(unittest.TestCase):
                 estimate=type("Estimate", (), {"render": lambda self: "$0.80"})(),
                 input_fn=lambda prompt: "no",
             )
+            eof_rejected = request_production_approval(
+                plan,
+                estimate=type("Estimate", (), {"render": lambda self: "$0.80"})(),
+                input_fn=lambda prompt: (_ for _ in ()).throw(EOFError()),
+            )
 
         self.assertTrue(approved)
         self.assertFalse(rejected)
+        self.assertFalse(eof_rejected)
 
     def test_handoff_to_forge_uses_approved_plan_without_research_regeneration(self) -> None:
         opportunities = tuple(opportunity(index) for index in range(8))

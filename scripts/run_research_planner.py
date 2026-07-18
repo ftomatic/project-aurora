@@ -124,7 +124,10 @@ def request_production_approval(
     print("Estimated Image Cost")
     print(estimate.render())
     print("")
-    response = input_fn("Type APPROVE to continue\n")
+    try:
+        response = input_fn("Type APPROVE to continue\n")
+    except EOFError:
+        return False
     return response.strip() == "APPROVE"
 
 

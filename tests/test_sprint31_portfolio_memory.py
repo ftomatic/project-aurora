@@ -222,6 +222,27 @@ class Sprint31PortfolioMemoryTest(unittest.TestCase):
         self.assertEqual(created, 3)
         self.assertEqual(len(self.queue.list_jobs()), 3)
 
+    def test_alternative_generator_uses_meaningful_theme_phrase(self) -> None:
+        self.queue.add_job(
+            priority="High",
+            product_name="Back To School Teacher Stickers",
+            category="sticker sheet",
+            style="Kawaii",
+            seasonal_theme="Back To School",
+            keywords=("back", "to", "school", "teacher", "stickers"),
+            confidence_score=0.91,
+            estimated_competition="Low",
+            estimated_demand="High",
+            estimated_revenue=100,
+            target_customer="teachers",
+        )
+
+        plan = self.build((opp("Back To School Teacher Stickers", product_type="sticker sheet", style="Kawaii", niche="Teacher", audience="teachers", season="Back To School"),))
+
+        alternatives = plan.merchant_rejections[0]["suggested_alternatives"]
+        self.assertIn("Teacher Alphabet Posters", alternatives)
+        self.assertNotIn("Back Digital Paper", alternatives)
+
 
 if __name__ == "__main__":
     unittest.main()

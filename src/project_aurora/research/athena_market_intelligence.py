@@ -95,7 +95,7 @@ class UnavailableExternalProvider:
 
 
 class AuroraHistoricalProductionProvider:
-    """Build opportunities from Aurora's local production memory."""
+    """Expose Aurora's local production memory as context, not fresh products."""
 
     provider_name = "Aurora Historical Production Memory"
     priority = 1
@@ -104,25 +104,11 @@ class AuroraHistoricalProductionProvider:
         self._queue_manager = queue_manager or ProductionQueueManager()
 
     def collect(self) -> tuple[MarketOpportunity, ...]:
-        opportunities: list[MarketOpportunity] = []
-        for job in self._queue_manager.list_jobs():
-            opportunities.append(
-                _opportunity(
-                    keyword=job.product_name,
-                    primary_niche=job.category.title(),
-                    subcategory="Historical Product",
-                    target_audience=job.target_customer or "digital printable buyers",
-                    season=job.seasonal_theme,
-                    product_type=job.category,
-                    style=job.style,
-                    trend=job.demand_score * 100 if job.demand_score else 78,
-                    competition=job.competition_score * 100 if job.competition_score else 42,
-                    potential=min(job.confidence_score * 100 + 5, 98),
-                    confidence=min(job.confidence_score * 100, 96),
-                    source=self.provider_name,
-                )
-            )
-        return tuple(opportunities)
+        # Historical products are consumed by Atlas as merchant memory. Re-emitting
+        # them as new opportunities causes exact duplicates to crowd out fresh
+        # calendar-backed ideas.
+        self._queue_manager.list_jobs()
+        return ()
 
 
 class StaticOpportunityProvider:
@@ -189,8 +175,14 @@ class AthenaMarketIntelligence:
                     )
                 )
                 continue
-            status = "AVAILABLE" if collected else "AVAILABLE_NO_DATA"
-            detail = "Collected opportunities." if collected else "No local records available."
+            status = "AVAILABLE" if collected or provider.provider_name == "Aurora Historical Production Memory" else "AVAILABLE_NO_DATA"
+            detail = (
+                "Collected opportunities."
+                if collected
+                else "Available as portfolio memory context."
+                if provider.provider_name == "Aurora Historical Production Memory"
+                else "No local records available."
+            )
             statuses.append(
                 ResearchProviderStatus(
                     provider=provider.provider_name,

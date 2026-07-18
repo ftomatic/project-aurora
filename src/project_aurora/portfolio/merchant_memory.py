@@ -132,7 +132,7 @@ def fingerprint_for_record(record: MerchantMemoryRecord) -> str:
 def alternatives_for(opportunity: MarketOpportunity) -> tuple[str, str, str]:
     """Return three nearby opportunities for a rejected product."""
     tokens = [token.title() for token in _tokens(opportunity.keyword) if token not in _STOPWORDS]
-    theme = tokens[0] if tokens else opportunity.primary_niche
+    theme = " ".join(tokens[:2]) if tokens else opportunity.primary_niche
     return (
         f"{theme} Alphabet Posters",
         f"{opportunity.primary_niche} Clipart",
@@ -316,7 +316,23 @@ def _tokens(value: str) -> tuple[str, ...]:
     return tuple(token for token in re.split(r"[^a-z0-9]+", value.casefold()) if token)
 
 
-_STOPWORDS = {"digital", "printable", "bundle", "set", "png", "art", "paper", "clipart", "wall"}
+_STOPWORDS = {
+    "art",
+    "back",
+    "bundle",
+    "digital",
+    "paper",
+    "printable",
+    "product",
+    "png",
+    "school",
+    "set",
+    "stickers",
+    "sticker",
+    "to",
+    "wall",
+    "clipart",
+}
 
 
 class _FakeOpportunity:

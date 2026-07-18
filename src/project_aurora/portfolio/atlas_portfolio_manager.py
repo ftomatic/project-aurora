@@ -156,7 +156,8 @@ class AtlasPortfolioManager:
     ) -> AtlasPortfolioPlan:
         """Select today's five-product research-backed portfolio."""
         merchant_memory = self._merchant_memory_records()
-        ranked = tuple(sorted(opportunities, key=_score_key))
+        expanded = _expand_with_merchant_alternatives(opportunities, merchant_memory)
+        ranked = tuple(sorted(_dedupe_opportunities(expanded), key=_score_key))
         selected: list[MarketOpportunity] = []
         rejected: list[tuple[MarketOpportunity, str]] = []
         counts: dict[str, Counter[str]] = {
@@ -539,6 +540,72 @@ def _memory_record_from_opportunity(opportunity: MarketOpportunity) -> MerchantM
         keywords=tuple(opportunity.keyword.casefold().split()),
         creation_date=opportunity.created_at,
     )
+
+
+def _expand_with_merchant_alternatives(
+    opportunities: tuple[MarketOpportunity, ...],
+    memory_records: tuple[MerchantMemoryRecord, ...],
+) -> tuple[MarketOpportunity, ...]:
+    expanded: list[MarketOpportunity] = list(opportunities)
+    for opportunity in opportunities:
+        assessment = analyze_similarity(opportunity, memory_records)
+        if assessment.allowed:
+            continue
+        for index, name in enumerate(assessment.suggested_alternatives):
+            expanded.append(_alternative_opportunity(opportunity, name, index))
+    return tuple(expanded)
+
+
+def _alternative_opportunity(
+    source: MarketOpportunity,
+    keyword: str,
+    index: int,
+) -> MarketOpportunity:
+    product_type = _product_type_from_keyword(keyword, source.product_type)
+    style = (
+        "Vintage Botanical"
+        if index == 0
+        else "Flat Vector"
+        if index == 1
+        else "Storybook Watercolor"
+    )
+    return MarketOpportunity(
+        keyword=keyword,
+        primary_niche=source.primary_niche,
+        subcategory="Merchant Alternative",
+        target_audience=source.target_audience,
+        season=source.season,
+        product_type=product_type,
+        recommended_artistic_style=style,
+        trend_score=max(75, source.trend_score - 2 - index),
+        competition_score=source.competition_score,
+        commercial_potential=max(75, source.commercial_potential - 2),
+        confidence=max(_ABSOLUTE_MINIMUM_CONFIDENCE, source.confidence - 1 - index),
+        research_sources=(*source.research_sources, "Merchant Alternative Generator"),
+    )
+
+
+def _product_type_from_keyword(keyword: str, fallback: str) -> str:
+    lowered = keyword.casefold()
+    if "poster" in lowered or "wall art" in lowered:
+        return "wall art"
+    if "clipart" in lowered:
+        return "clipart"
+    if "digital paper" in lowered or "pattern" in lowered:
+        return "digital paper"
+    return fallback
+
+
+def _dedupe_opportunities(
+    opportunities: tuple[MarketOpportunity, ...],
+) -> tuple[MarketOpportunity, ...]:
+    best: dict[tuple[str, str], MarketOpportunity] = {}
+    for opportunity in opportunities:
+        key = (_normalize(opportunity.keyword), _normalize(opportunity.product_type))
+        current = best.get(key)
+        if current is None or _score_key(opportunity) < _score_key(current):
+            best[key] = opportunity
+    return tuple(best.values())
 
 
 def _merchant_rejection_report(
