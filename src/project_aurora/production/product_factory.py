@@ -1150,6 +1150,9 @@ def _print_qa_findings(findings: Any) -> None:
 
 
 SUPPORTED_PRODUCT_TYPE_EXPECTATIONS = {
+    "alphabet poster",
+    "alphabet posters",
+    "bridal shower printable",
     "wall art",
     "invitation",
     "party printable",
@@ -1157,11 +1160,55 @@ SUPPORTED_PRODUCT_TYPE_EXPECTATIONS = {
     "sticker sheets",
     "clipart",
     "digital paper",
+    "digital journal",
+    "journal kit",
+    "junk journal",
+    "planner sticker",
+    "planner stickers",
     "teacher printable",
     "teacher printables",
     "teacher wall art",
-    "bridal shower printable",
+    "wedding planner",
 }
+
+
+def _normalize_product_type_expectation(value: str) -> str:
+    normalized = re.sub(r"[-_]+", " ", value.casefold())
+    normalized = re.sub(r"[^a-z0-9\s]+", " ", normalized)
+    return re.sub(r"\s+", " ", normalized).strip()
+
+
+def _tokens_match_product_type(expected: str, actual: str) -> bool:
+    if expected == actual:
+        return True
+    if actual in {f"{expected}s", f"{expected}es"}:
+        return True
+    if expected.endswith("y") and actual == f"{expected[:-1]}ies":
+        return True
+    if expected.endswith("s") and expected[:-1] == actual:
+        return True
+    return False
+
+
+def _product_type_expectation_matches(expected: str, normalized_product_type: str) -> bool:
+    normalized_expected = _normalize_product_type_expectation(expected)
+    if normalized_expected in normalized_product_type:
+        return True
+
+    expected_tokens = normalized_expected.split()
+    actual_tokens = normalized_product_type.split()
+    token_count = len(expected_tokens)
+    if not expected_tokens or len(actual_tokens) < token_count:
+        return False
+
+    for index in range(0, len(actual_tokens) - token_count + 1):
+        window = actual_tokens[index : index + token_count]
+        if all(
+            _tokens_match_product_type(expected_token, actual_token)
+            for expected_token, actual_token in zip(expected_tokens, window)
+        ):
+            return True
+    return False
 
 
 def _validate_product_type_expectation(
@@ -1169,10 +1216,13 @@ def _validate_product_type_expectation(
     prompt_package: dict[str, Any],
 ) -> None:
     product_type = str(prompt_package.get("product_type") or "").strip()
-    normalized = product_type.casefold()
+    normalized = _normalize_product_type_expectation(product_type)
     if not normalized:
         raise RuntimeError("Missing product-type expectation before image generation.")
-    if not any(expected in normalized for expected in SUPPORTED_PRODUCT_TYPE_EXPECTATIONS):
+    if not any(
+        _product_type_expectation_matches(expected, normalized)
+        for expected in SUPPORTED_PRODUCT_TYPE_EXPECTATIONS
+    ):
         raise RuntimeError(
             "Unsupported product-type expectation before image generation: "
             f"{product_type}."

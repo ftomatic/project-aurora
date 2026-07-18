@@ -34,6 +34,7 @@ from project_aurora.production.product_factory import (  # noqa: E402
     DryRunProductFactoryStageRunner,
     ProductFactoryPaths,
     ProductFactory,
+    _validate_product_type_expectation,
 )
 from project_aurora.production.production_report import (  # noqa: E402
     ProductionReport,
@@ -260,6 +261,33 @@ class ProductFactoryTest(unittest.TestCase):
 
         with self.assertRaisesRegex(RuntimeError, "Missing product-type expectation"):
             runner.generate_images(self.job)
+
+    def test_product_type_expectation_accepts_new_supported_categories(self) -> None:
+        supported_product_types = (
+            "junk journal",
+            "Victorian Botanical Journal Kit",
+            "digital journals",
+            "planner_stickers",
+            "alphabet-posters",
+            "wedding planner",
+        )
+
+        for product_type in supported_product_types:
+            with self.subTest(product_type=product_type):
+                _validate_product_type_expectation(
+                    self.job,
+                    {"product_type": product_type},
+                )
+
+    def test_product_type_expectation_rejects_unsupported_category(self) -> None:
+        with self.assertRaisesRegex(
+            RuntimeError,
+            "Unsupported product-type expectation",
+        ):
+            _validate_product_type_expectation(
+                self.job,
+                {"product_type": "industrial welding template"},
+            )
 
     def test_factory_success_marks_queue_complete_and_saves_report(self) -> None:
         paths = ProductFactoryPaths(jobs_dir=self.base_path / "jobs")
