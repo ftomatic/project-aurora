@@ -348,6 +348,8 @@ def _category_for(product: str, product_type: str) -> str:
         return "digital paper"
     if "kitchen" in haystack:
         return "kitchen wall art"
+    if "boho" in haystack:
+        return "boho wall art"
     if "dark academia" in haystack:
         return "dark academia"
     if "nursery" in haystack or "baby" in haystack:
@@ -396,6 +398,8 @@ def _composition_for_product(product: str, product_type: str) -> str:
 
 def _composition_template_for_category(category: str, fallback: str) -> str:
     lowered = category.casefold()
+    if "digital paper" in lowered:
+        return "single seamless pattern, full-bleed repeating tile, one pattern only, no text, no labels"
     if "clipart" in lowered:
         return "isolated elements on transparent or clean white background"
     if "teacher wall art" in lowered:
@@ -403,15 +407,13 @@ def _composition_template_for_category(category: str, fallback: str) -> str:
     if "bridal shower printable" in lowered:
         return "neutral boho stationery game layout with refined typography hierarchy"
     if "wall art" in lowered:
-        return "finished artwork with listing mockup-ready composition"
+        return "complete centered printable artwork with generous safe margins and no cropped edges"
     if "invitation" in lowered or "wedding" in lowered:
         return "complete invitation layout with typography hierarchy"
     if "sticker" in lowered:
         return "individual cuttable sticker elements with white outlines on a clean light background"
     if "teacher" in lowered:
         return "bright readable classroom printable layout"
-    if "digital paper" in lowered:
-        return "seamless pattern presentation with tiled preview"
     return fallback
 
 

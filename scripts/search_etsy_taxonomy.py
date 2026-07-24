@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import os
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -29,30 +28,21 @@ class TaxonomyMatch:
     score: int
 
 
-def load_config_from_environment() -> EtsyConfig:
+def load_config_from_environment(local_env_path: Path | None = None) -> EtsyConfig:
     """Load Etsy API credentials without saving or printing secrets."""
-    client_id = os.getenv("ETSY_CLIENT_ID")
-    shared_secret = os.getenv("ETSY_SHARED_SECRET")
-    access_token = os.getenv("ETSY_ACCESS_TOKEN")
+    config = EtsyConfig.from_environment(local_env_path=local_env_path)
     missing: list[str] = []
-    if not client_id:
+    if not config.client_id:
         missing.append("ETSY_CLIENT_ID")
-    if not shared_secret:
+    if not config.shared_secret:
         missing.append("ETSY_SHARED_SECRET")
-    if not access_token:
+    if not config.access_token:
         missing.append("ETSY_ACCESS_TOKEN")
     if missing:
         raise RuntimeError(
             "Missing required environment variables: " + ", ".join(missing)
         )
-
-    return EtsyConfig(
-        mode="live",
-        client_id=str(client_id),
-        shared_secret=str(shared_secret),
-        access_token=str(access_token),
-        api_base_url=API_BASE_URL,
-    )
+    return config
 
 
 def fetch_taxonomy_nodes(client: EtsyClient) -> list[dict[str, Any]]:
@@ -185,7 +175,9 @@ def main(argv: list[str] | None = None) -> None:
         raise SystemExit(1)
 
     try:
-        config = load_config_from_environment()
+        config = load_config_from_environment(
+            PROJECT_ROOT / "config" / "aurora.local.env"
+        )
         client = EtsyClient(config=config)
         match = find_best_match(" ".join(args), client)
     except RuntimeError as error:

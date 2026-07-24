@@ -79,6 +79,8 @@ class PromptComposer:
     ) -> PromptRecipe:
         """Compose a prompt from Muse art-direction fields."""
         merchant_requirements = _safe_merchant_requirements(category or product, product)
+        category_negative_constraints = _category_negative_constraints(category or product, product)
+        negative_constraints = tuple(negative_style_constraints) + category_negative_constraints
         final_prompt = (
             f"Product: {product},\n"
             f"{merchant_requirements}\n"
@@ -91,7 +93,7 @@ class PromptComposer:
             f"Texture: {texture or 'style-consistent texture'},\n"
             f"Mood: {mood},\n"
             f"Typography Direction: {typography_direction or 'none unless product type requires it'},\n"
-            f"Negative Style Constraints: {', '.join(negative_style_constraints) if negative_style_constraints else 'avoid mismatched rendering styles'},\n"
+            f"Negative Style Constraints: {', '.join(negative_constraints) if negative_constraints else 'avoid mismatched rendering styles'},\n"
             "commercial digital printable artwork, cohesive product collection, "
             "high detail, clean production-ready assets."
         )
@@ -109,7 +111,7 @@ class PromptComposer:
             negative_prompt=(
                 "No text, No watermark, No logo, No cropped objects, "
                 "No inconsistent style, No mismatched palette, "
-                + ", ".join(negative_style_constraints)
+                + ", ".join(negative_constraints)
             ),
             provider_formatting="single image prompt, comma-separated descriptive phrases",
             final_prompt=final_prompt,
@@ -222,3 +224,31 @@ def _safe_merchant_requirements(category: str, product: str) -> str:
         return merchant_prompt_requirements(category, product)
     except RuntimeError:
         return "Commercial use digital download ready, Etsy-ready product specifications."
+
+
+def _category_negative_constraints(category: str, product: str) -> tuple[str, ...]:
+    lowered = f"{category} {product}".casefold()
+    if "digital paper" in lowered or "paper pack" in lowered:
+        return (
+            "no text",
+            "no labels",
+            "no product title",
+            "no typography",
+            "no mockup",
+            "no layered paper sheets",
+            "no paper stack",
+            "no collage",
+            "no preview layout",
+            "no ribbon band",
+            "no frame",
+            "no multiple patterns in one image",
+        )
+    if "wall art" in lowered or "poster" in lowered or "print" in lowered:
+        return (
+            "no framed room mockup",
+            "no gallery wall collage",
+            "no partial frames",
+            "no cropped artwork edges",
+            "no cut off motifs",
+        )
+    return ()

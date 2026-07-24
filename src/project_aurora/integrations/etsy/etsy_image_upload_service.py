@@ -12,6 +12,13 @@ from project_aurora.integrations.etsy.etsy_result import (
     EtsyImageUploadResult,
 )
 from project_aurora.integrations.etsy.etsy_upload_manager import EtsyUploadManager
+from project_aurora.image_generation.commercial_image_exporter import (
+    DIGITAL_PAPER_IMAGE_SIZE,
+    DIGITAL_PAPER_MIN_SHARPNESS,
+    WALL_ART_MIN_SHARPNESS,
+    WALL_ART_RATIOS,
+    validate_commercial_jpg,
+)
 from project_aurora.image_generation.image_inspector import inspect_png
 from project_aurora.storage.memory_manager import MemoryManager
 
@@ -52,12 +59,12 @@ class EtsyImageUploadService:
         if not listing_id:
             errors.append("Latest Etsy draft does not include etsy_listing_id.")
         if not image_files:
-            errors.append("No non-empty PNG image files found.")
+            errors.append("No non-empty final image files found.")
         if self._images_dir.name != "final_product_images":
             errors.append("Etsy image upload must use final_product_images only.")
         if image_files and len(image_files) != self._required_image_count:
             errors.append(
-                f"Exactly {self._required_image_count} final commercial PNG "
+                f"Exactly {self._required_image_count} final commercial "
                 f"files are required, found {len(image_files)}."
             )
         if invalid_images:
@@ -178,14 +185,33 @@ class EtsyImageUploadService:
             return []
         return [
             path
-            for path in sorted(self._images_dir.glob("*.png"), key=lambda p: p.name)
-            if path.is_file() and path.stat().st_size > 0
+            for path in sorted(self._images_dir.glob("*"), key=lambda p: p.name)
+            if path.is_file()
+            and path.stat().st_size > 0
+            and path.suffix.casefold() in {".png", ".jpg", ".jpeg"}
+            and "preview" not in path.stem.casefold()
         ]
 
     @staticmethod
     def _invalid_images(image_files: list[Path]) -> tuple[str, ...]:
         errors: list[str] = []
         for image_path in image_files:
+            if image_path.suffix.casefold() in {".jpg", ".jpeg"}:
+                expected_size = dict(WALL_ART_RATIOS).get(
+                    _ratio_label_from_name(image_path)
+                )
+                if expected_size is None:
+                    expected_size = DIGITAL_PAPER_IMAGE_SIZE
+                    minimum_sharpness = DIGITAL_PAPER_MIN_SHARPNESS
+                else:
+                    minimum_sharpness = WALL_ART_MIN_SHARPNESS
+                for error in validate_commercial_jpg(
+                    image_path,
+                    expected_size,
+                    minimum_sharpness=minimum_sharpness,
+                ):
+                    errors.append(f"{image_path.name}: {error}")
+                continue
             inspection = inspect_png(image_path)
             if not inspection.is_valid:
                 errors.append(
@@ -225,3 +251,11 @@ def _existing_id(record: dict[str, Any] | None) -> str | None:
         return None
     value = record.get("listing_image_id") or record.get("image_id")
     return str(value) if value is not None else None
+
+
+def _ratio_label_from_name(path: Path) -> str:
+    stem = path.stem.casefold().replace("_", "x").replace("-", "x")
+    for label, _size in WALL_ART_RATIOS:
+        if label in stem:
+            return label
+    return ""

@@ -27,7 +27,10 @@ def main(argv: list[str] | None = None) -> None:
     """Preview and optionally repair existing Etsy draft titles."""
     parse_args(argv)
     memory = MemoryManager(CSVStorage(base_path=PROJECT_ROOT / "data" / "aurora"))
-    config = EtsyConfig.from_environment(PROJECT_ROOT / "config" / "etsy.yaml")
+    config = EtsyConfig.from_environment(
+        PROJECT_ROOT / "config" / "etsy.yaml",
+        PROJECT_ROOT / "config" / "aurora.local.env",
+    )
     client = EtsyClient(config)
     report = repair_existing_etsy_titles(memory, client, input)
     print_title_repair_report(report)

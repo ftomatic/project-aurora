@@ -8,6 +8,11 @@ from typing import Any
 
 from project_aurora.integrations.etsy.etsy_config import EtsyConfig
 from project_aurora.image_generation.commercial_image_exporter import (
+    DIGITAL_PAPER_IMAGE_SIZE,
+    DIGITAL_PAPER_MIN_SHARPNESS,
+    WALL_ART_RATIOS,
+    WALL_ART_MIN_SHARPNESS,
+    validate_commercial_jpg,
     validate_commercial_png,
 )
 from project_aurora.listing.listing_package import ListingPackage
@@ -168,17 +173,70 @@ class EtsyListingMapper:
         if payload.is_digital and payload.quantity != 999:
             errors.append("Digital listing quantity must be 999.")
         if payload.is_digital:
-            if len(payload.image_files) != 4:
-                errors.append("Exactly 4 final commercial PNG files are required.")
-            for image_file in payload.image_files:
-                image_errors = validate_commercial_png(Path(image_file))
-                errors.extend(
-                    f"{Path(image_file).name}: {error}"
-                    for error in image_errors
-                )
+            errors.extend(_validate_digital_asset_files(payload.image_files))
         if (
             payload.listing_type == "physical"
             and payload.shipping_profile_id is None
         ):
             errors.append("shipping_profile_id is required for physical listings.")
         return tuple(errors)
+
+
+def _validate_digital_asset_files(image_files: tuple[str, ...]) -> list[str]:
+    errors: list[str] = []
+    paths = tuple(Path(image_file) for image_file in image_files)
+    if not paths:
+        return ["Final commercial image files are required."]
+    suffixes = {path.suffix.casefold() for path in paths}
+    if suffixes <= {".png"}:
+        if len(paths) != 4:
+            errors.append("Exactly 4 final commercial PNG files are required.")
+        for path in paths:
+            errors.extend(f"{path.name}: {error}" for error in validate_commercial_png(path))
+        return errors
+    if suffixes <= {".jpg", ".jpeg"}:
+        if _is_digital_paper_file_set(paths):
+            if len(paths) != 12:
+                errors.append("Exactly 12 final digital paper JPG files are required.")
+            for path in paths:
+                errors.extend(
+                    f"{path.name}: {error}"
+                    for error in validate_commercial_jpg(
+                        path,
+                        DIGITAL_PAPER_IMAGE_SIZE,
+                        minimum_sharpness=DIGITAL_PAPER_MIN_SHARPNESS,
+                    )
+                )
+            return errors
+        if len(paths) != len(WALL_ART_RATIOS):
+            errors.append("Exactly 5 final printable wall art JPG files are required.")
+        expected_by_label = dict(WALL_ART_RATIOS)
+        for path in paths:
+            label = _ratio_label_from_name(path)
+            expected_size = expected_by_label.get(label)
+            if expected_size is None:
+                errors.append(f"{path.name}: Missing required wall art ratio label.")
+                continue
+            errors.extend(
+                f"{path.name}: {error}"
+                for error in validate_commercial_jpg(
+                    path,
+                    expected_size,
+                    minimum_sharpness=WALL_ART_MIN_SHARPNESS,
+                )
+            )
+        return errors
+    errors.append("Final commercial files must use one supported format family.")
+    return errors
+
+
+def _is_digital_paper_file_set(paths: tuple[Path, ...]) -> bool:
+    return any(path.stem.casefold().startswith("digital_paper_") for path in paths)
+
+
+def _ratio_label_from_name(path: Path) -> str:
+    stem = path.stem.casefold().replace("_", "x").replace("-", "x")
+    for label, _size in WALL_ART_RATIOS:
+        if label in stem:
+            return label
+    return ""

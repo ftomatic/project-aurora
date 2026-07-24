@@ -137,8 +137,9 @@ class OpenAIImageProvider(ImageProvider):
         data_items = getattr(response, "data", [])
         generated_files: list[str] = []
         slug = self._slugify(request.product_name)
+        start_index = self._next_output_index(slug, request.output_format)
 
-        for index, item in enumerate(data_items, start=1):
+        for index, item in enumerate(data_items, start=start_index):
             image_base64 = getattr(item, "b64_json", None)
             if image_base64 is None and isinstance(item, dict):
                 image_base64 = item.get("b64_json")
@@ -166,6 +167,12 @@ class OpenAIImageProvider(ImageProvider):
         if not generated_files:
             errors.append("OpenAI response did not contain valid image data.")
         return tuple(generated_files)
+
+    def _next_output_index(self, slug: str, output_format: str) -> int:
+        existing = tuple(
+            self._output_dir.glob(f"{slug}_*.{output_format}")
+        )
+        return len(existing) + 1
 
     @staticmethod
     def _slugify(value: str) -> str:

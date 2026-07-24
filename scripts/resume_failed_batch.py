@@ -139,7 +139,10 @@ def run_failed_batch_recovery(
     config = runtime_config or load_batch_runtime_config(DAILY_FACTORY_CONFIG_PATH)
     queue_manager = ProductionQueueManager(queue_path=queue_path)
     failed_jobs = tuple(job for job in queue_manager.list_jobs() if job.status == FAILED)[:limit]
-    etsy_config = EtsyConfig.from_environment(PROJECT_ROOT / "config" / "etsy.yaml")
+    etsy_config = EtsyConfig.from_environment(
+        PROJECT_ROOT / "config" / "etsy.yaml",
+        PROJECT_ROOT / "config" / "aurora.local.env",
+    )
     image_config = _image_config_for_recovery(config)
     print_etsy_config_diagnostics(etsy_config)
 

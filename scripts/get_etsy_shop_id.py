@@ -26,9 +26,9 @@ class EtsyShop:
     shop_id: int
 
 
-def load_credentials() -> EtsyConfig:
+def load_credentials(local_env_path: Path | None = None) -> EtsyConfig:
     """Load Etsy credentials from environment variables."""
-    config = EtsyConfig.from_environment()
+    config = EtsyConfig.from_environment(local_env_path=local_env_path)
     missing = []
     if not config.client_id:
         missing.append("ETSY_CLIENT_ID")
@@ -98,7 +98,7 @@ def _shop_from_payload(payload: dict[str, Any]) -> EtsyShop | None:
 def main() -> None:
     """Print the authenticated user's Etsy shop name and id."""
     try:
-        config = load_credentials()
+        config = load_credentials(PROJECT_ROOT / "config" / "aurora.local.env")
         client = EtsyClient(config=config)
         me = client.get_json("/users/me")
         shop = _shop_from_payload(me)

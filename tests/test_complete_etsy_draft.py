@@ -67,6 +67,9 @@ class FakeCompleteEtsyClient(EtsyClient):
         self.payloads: list[EtsyDraftListingPayload] = []
         self.existing_digital_files: list[dict[str, object]] = []
 
+    def ping(self) -> dict[str, object]:
+        return {"application_id": 1}
+
     def create_draft_listing(
         self,
         payload: EtsyDraftListingPayload,
@@ -116,7 +119,7 @@ class FakeCompleteEtsyClient(EtsyClient):
 
 
 def write_final_png(path: Path, color: tuple[int, int, int, int]) -> None:
-    Image.new("RGBA", (3600, 3600), color).save(
+    Image.new("RGBA", (4000, 4000), color).save(
         path,
         format="PNG",
         dpi=(300, 300),
@@ -685,9 +688,51 @@ class CompleteEtsyDraftTest(unittest.TestCase):
         self.assertEqual(result.status, "FAILED")
         self.assertEqual(result.files_uploaded, 0)
         self.assertEqual(client.digital_uploads, [])
-        self.assertTrue(
-            any("maximum of 5 digital files" in error for error in result.errors)
+
+    def test_sync_digital_package_uploads_zip_once(self) -> None:
+        package_path = self.final_images_dir / "winter_woodland_digital_paper.zip"
+        package_path.write_bytes(b"zip bytes")
+        client = FakeCompleteEtsyClient(self.config)
+
+        result = EtsyDigitalFileService(
+            config=self.config,
+            memory=self.memory,
+            client=client,
+            required_count=1,
+        ).sync_digital_package(
+            listing_id="123456789",
+            package_path=package_path,
         )
+
+        self.assertEqual(result.status, "SUCCESS")
+        self.assertEqual(result.files_found, 1)
+        self.assertEqual(result.files_uploaded, 1)
+        self.assertEqual(client.digital_uploads, [("123456789", package_path.name, 1)])
+
+    def test_sync_digital_package_skips_existing_zip(self) -> None:
+        package_path = self.final_images_dir / "winter_woodland_digital_paper.zip"
+        package_path.write_bytes(b"zip bytes")
+        client = FakeCompleteEtsyClient(self.config)
+        client.existing_digital_files = [
+            {
+                "filename": package_path.name,
+                "listing_file_id": "file-zip",
+            }
+        ]
+
+        result = EtsyDigitalFileService(
+            config=self.config,
+            memory=self.memory,
+            client=client,
+            required_count=1,
+        ).sync_digital_package(
+            listing_id="123456789",
+            package_path=package_path,
+        )
+
+        self.assertEqual(result.status, "SUCCESS")
+        self.assertEqual(result.files_uploaded, 0)
+        self.assertEqual(client.digital_uploads, [])
 
     def test_sync_digital_files_preserves_per_file_upload_error(self) -> None:
         client = FakeCompleteEtsyClient(self.config, fail_stage="digital")

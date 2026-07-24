@@ -91,7 +91,8 @@ def main(argv: list[str] | None = None) -> None:
             storage=CSVStorage(base_path=PROJECT_ROOT / "data" / "aurora")
         )
         etsy_config = EtsyConfig.from_environment(
-            PROJECT_ROOT / "config" / "etsy.yaml"
+            PROJECT_ROOT / "config" / "etsy.yaml",
+            PROJECT_ROOT / "config" / "aurora.local.env",
         )
         print_etsy_config_diagnostics(etsy_config)
         report = ProductFactory(
@@ -153,8 +154,19 @@ def print_etsy_config_diagnostics(config: EtsyConfig) -> None:
     print("yes" if diagnostics["access_token_present"] else "no")
     print("Shop ID Present")
     print("yes" if diagnostics["shop_id_present"] else "no")
+    print("Keystring Length")
+    print(diagnostics["client_id_length"])
+    print("Shared Secret Length")
+    print(diagnostics["shared_secret_length"])
     print("x-api-key Colon Count")
     print(diagnostics["x_api_key_colon_count"])
+    print("Credentials Normalized")
+    normalized = diagnostics["normalized_credentials"]
+    print(", ".join(normalized) if normalized else "none")
+    print("Keystring Last Four")
+    print(diagnostics["client_id_last_four"] or "none")
+    print("Shared Secret Last Four")
+    print(diagnostics["shared_secret_last_four"] or "none")
     print("")
 
 

@@ -5,6 +5,10 @@ taxonomies:
     taxonomy_id: 6844
     taxonomy_name: Clip Art & Image Files
     full_taxonomy_path: Craft Supplies & Tools > Digital > Clip Art & Image Files
+  digital illustration collection:
+    taxonomy_id: 6844
+    taxonomy_name: Clip Art & Image Files
+    full_taxonomy_path: Craft Supplies & Tools > Digital > Clip Art & Image Files
   digital paper:
     taxonomy_id: 6845
     taxonomy_name: Digital Paper

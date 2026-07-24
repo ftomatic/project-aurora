@@ -58,3 +58,8 @@ data/aurora/digital_downloads/*
 !data/aurora/digital_downloads/.gitkeep
 data/aurora/jobs/*
 !data/aurora/jobs/.gitkeep
+
+# Local secrets
+config/aurora.local.env
+config/aurora.local.env.save
+*.local.env

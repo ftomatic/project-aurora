@@ -4,7 +4,7 @@ from __future__ import annotations
 
 
 SUPPORTED_OPENAI_IMAGE_QUALITIES = ("low", "medium", "high", "auto")
-DEFAULT_OPENAI_IMAGE_QUALITY = "medium"
+DEFAULT_OPENAI_IMAGE_QUALITY = "high"
 
 
 def validate_image_quality(quality: str) -> str:

@@ -86,11 +86,40 @@ class EtsyDraftService:
                 )
                 self._save_result(result)
                 return result
+            try:
+                ping = self._client.ping()
+            except RuntimeError as error:
+                result = EtsyDraftResult(
+                    status="ETSY_AUTHENTICATION_BLOCKED",
+                    etsy_listing_id=None,
+                    draft_url=None,
+                    errors=(f"Etsy Open API ping failed: {_sanitize_error(str(error))}",),
+                    metadata={
+                        "api_called": True,
+                        "draft_api_called": False,
+                        "ping_status": "FAILED",
+                        "mode": self._config.mode,
+                    },
+                )
+                self._save_result(result)
+                return result
+            else:
+                ping_metadata = {
+                    "ping_status": "SUCCESS",
+                    "ping_response_keys": sorted(str(key) for key in ping),
+                }
 
         result = self._client.create_draft_listing(payload)
+        if not self._config.is_mock_mode:
+            result.metadata.update(ping_metadata)
         self._save_result(result)
         return result
 
     def _save_result(self, result: EtsyDraftResult) -> None:
         if self._memory is not None:
             self._memory.save_etsy_draft_result(result)
+
+
+def _sanitize_error(message: str) -> str:
+    """Return Etsy error text without control characters or excessive whitespace."""
+    return " ".join(message.replace("\n", " ").replace("\r", " ").split())

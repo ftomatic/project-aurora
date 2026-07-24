@@ -53,6 +53,34 @@ class SEOEngineTest(unittest.TestCase):
         self.assertIn("strawberry party", tags)
         self.assertTrue(all(len(tag) <= 20 for tag in tags))
 
+    def test_keyword_engine_fills_teacher_clipart_tags(self) -> None:
+        tags = KeywordEngine().build_tags(
+            product_name="Teacher Clipart",
+            product_type="clipart",
+            target_buyer="digital printable buyers",
+            style="Flat Vector",
+        )
+
+        self.assertEqual(len(tags), 13)
+        self.assertEqual(len(set(tags)), 13)
+        self.assertTrue(all(tag.strip() for tag in tags))
+        self.assertTrue(all(len(tag) <= 20 for tag in tags))
+        self.assertIn("teacher clipart", tags)
+        self.assertIn("teacher graphics", tags)
+
+    def test_keyword_engine_fallback_handles_sparse_tag_pool(self) -> None:
+        tags = KeywordEngine().build_tags(
+            product_name="Bee",
+            product_type="art",
+            target_buyer="buyers",
+            style="Watercolor",
+        )
+
+        self.assertEqual(len(tags), 13)
+        self.assertEqual(len(set(tags)), 13)
+        self.assertTrue(all(tag.strip() for tag in tags))
+        self.assertTrue(all(len(tag) <= 20 for tag in tags))
+
     def test_title_builder_generates_expected_title(self) -> None:
         title = TitleBuilder().build_title(
             product_name=SAMPLE_PRODUCT_DATA["product_name"],
@@ -78,9 +106,29 @@ class SEOEngineTest(unittest.TestCase):
         self.assertIn(PURCHASE_SECTION, description)
         self.assertIn(DOWNLOAD_DISCLAIMER_SECTION, description)
         self.assertIn("4 high-quality 300 DPI PNG files", description)
-        self.assertIn("3600 × 3600 pixels", description)
+        self.assertIn("4000 × 4000 pixels", description)
         self.assertNotIn("This SEO-ready printable download works beautifully", description)
         self.assertNotIn("classroom, alphabet, wall", description.casefold())
+
+    def test_moody_dark_alphabet_description_is_product_specific(self) -> None:
+        description = DescriptionBuilder().build_description(
+            product_name="Moody Dark Alphabet Posters",
+            product_type="wall art",
+            target_buyer="digital printable buyers",
+            buyer_use_case="Bookish home decor",
+            product_positioning="Moody dark academia alphabet wall art",
+            tags=("moody", "dark", "alphabet", "posters"),
+        )
+
+        lowered = description.casefold()
+        self.assertIn("dark academia alphabet wall art", lowered)
+        self.assertIn("gothic letter posters", lowered)
+        self.assertIn("library and study decor", lowered)
+        self.assertNotIn("teacher printable", lowered)
+        self.assertNotIn("bright classroom", lowered)
+        self.assertNotIn("kids room decor", lowered)
+        self.assertIn(PURCHASE_SECTION, description)
+        self.assertIn(DOWNLOAD_DISCLAIMER_SECTION, description)
 
     def test_seo_engine_builds_package(self) -> None:
         package = SEOEngine().build_package(SAMPLE_PRODUCT_DATA)

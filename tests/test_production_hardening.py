@@ -23,9 +23,14 @@ from project_aurora.integrations.etsy.etsy_upload_manager import (  # noqa: E402
     EtsyUploadPolicy,
 )
 from project_aurora.merchandising.pricing_engine import PricingEngine  # noqa: E402
-from project_aurora.planning.production_queue_manager import ProductionJob  # noqa: E402
+from project_aurora.planning.production_queue_manager import (  # noqa: E402
+    READY,
+    ProductionJob,
+    ProductionQueueManager,
+)
 from project_aurora.production.merchant_package import MerchantPackage  # noqa: E402
 from project_aurora.production.merchant_preflight import MerchantPreflight  # noqa: E402
+from project_aurora.production.merchant_specification import MerchantSpecification  # noqa: E402
 from project_aurora.production.product_capability_resolver import (  # noqa: E402
     IMAGE_ONLY,
     IMAGE_WITH_SHORT_TEXT,
@@ -79,6 +84,38 @@ def write_digital_paper_package(directory: Path) -> None:
     with zipfile.ZipFile(directory / "woodland_digital_paper.zip", "w") as archive:
         for path in files:
             archive.write(path, arcname=path.name)
+
+
+def spec(
+    category: str,
+    *,
+    bundle_size: int = 4,
+    packaging: str = "NONE",
+    preview_requirements: tuple[str, ...] = (),
+    qa_requirements: tuple[str, ...] = (),
+    thumbnail_rules: tuple[str, ...] = (),
+) -> MerchantSpecification:
+    return MerchantSpecification(
+        category=category,
+        physical_dimensions="digital",
+        pixel_dimensions=None,
+        dpi=300,
+        file_formats=("PNG",),
+        bundle_size=bundle_size,
+        preview_requirements=preview_requirements,
+        packaging=packaging,
+        thumbnail_rules=thumbnail_rules,
+        etsy_expectations=("digital download",),
+        qa_requirements=qa_requirements,
+    )
+
+
+class FakeSpecificationLibrary:
+    def __init__(self, merchant_spec: MerchantSpecification) -> None:
+        self._merchant_spec = merchant_spec
+
+    def resolve(self, category: str, product_name: str = "") -> MerchantSpecification:
+        return self._merchant_spec
 
 
 class ProductionHardeningTest(unittest.TestCase):
@@ -157,6 +194,148 @@ class ProductionHardeningTest(unittest.TestCase):
         self.assertEqual(wall.mode, IMAGE_ONLY)
         self.assertTrue(clipart.supported)
         self.assertIn(short.mode, {IMAGE_ONLY, IMAGE_WITH_SHORT_TEXT})
+
+    def test_digital_paper_capability_requires_complete_assets(self) -> None:
+        resolver = ProductCapabilityResolver()
+        missing = resolver.resolve(
+            "Winter Woodland Digital Paper",
+            "digital paper",
+            "digital paper",
+            assets_dir=self.base_path / "missing_assets",
+        )
+        asset_dir = self.base_path / "digital_paper_assets"
+        write_digital_paper_package(asset_dir)
+        complete = resolver.resolve(
+            "Winter Woodland Digital Paper",
+            "digital paper",
+            "digital paper",
+            assets_dir=asset_dir,
+        )
+
+        self.assertFalse(missing.supported)
+        self.assertTrue(missing.requires_zip_package)
+        self.assertEqual(missing.required_deliverable_count, 12)
+        self.assertFalse(complete.supported)
+        self.assertTrue(complete.requires_zip_package)
+
+    def test_transformed_digital_illustration_queue_job_is_not_blocked_by_research_origin(self) -> None:
+        queue = ProductionQueueManager(queue_path=self.base_path / "queue.json")
+
+        current_job = queue.add_job(
+            priority="High",
+            product_name="Winter Woodland Digital Illustration Collection",
+            category="digital illustration collection",
+            style="Watercolor",
+            seasonal_theme="Winter",
+            keywords=("winter", "woodland", "digital paper"),
+            confidence_score=0.9,
+            estimated_competition="Low",
+            estimated_demand="High",
+            estimated_revenue=100,
+            status=READY,
+            original_product_name="Winter Woodland Digital Paper",
+            original_product_type="digital paper",
+            required_image_count=4,
+        )
+
+        self.assertEqual(current_job.status, READY)
+        self.assertEqual(queue.next_ready_job(), current_job)
+
+    def test_capability_allows_supported_categories_when_requirements_fit(self) -> None:
+        for product_name, category in (
+            ("Teacher Clipart", "clipart"),
+            ("Simple Digital Paper", "digital paper"),
+            ("Weekly Planner Pages", "planner"),
+            ("Victorian Botanical Journal Kit", "junk journal"),
+        ):
+            with self.subTest(product_name=product_name):
+                resolver = ProductCapabilityResolver(
+                    specification_library=FakeSpecificationLibrary(
+                        spec(category.title(), bundle_size=20, packaging="NONE")
+                    )
+                )
+                result = resolver.resolve(product_name, category, category)
+
+                self.assertTrue(result.supported)
+                self.assertEqual(result.required_deliverable_count, 20)
+                self.assertFalse(result.requires_zip_package)
+
+    def test_capability_skips_zip_required_product_before_paid_generation(self) -> None:
+        resolver = ProductCapabilityResolver(
+            specification_library=FakeSpecificationLibrary(
+                spec("Clipart", bundle_size=12, packaging="ZIP")
+            )
+        )
+
+        result = resolver.resolve("Teacher Clipart", "clipart", "clipart")
+
+        self.assertFalse(result.supported)
+        self.assertTrue(result.requires_zip_package)
+        self.assertEqual(result.required_deliverable_count, 12)
+        self.assertIn("ZIP package", result.reason)
+
+    def test_capability_skips_product_with_more_than_twenty_deliverables(self) -> None:
+        resolver = ProductCapabilityResolver(
+            specification_library=FakeSpecificationLibrary(
+                spec("Clipart", bundle_size=21, packaging="NONE")
+            )
+        )
+
+        result = resolver.resolve("Mega Clipart", "clipart", "clipart")
+
+        self.assertFalse(result.supported)
+        self.assertEqual(result.required_deliverable_count, 21)
+        self.assertIn("current limit is 20", result.reason)
+
+    def test_capability_skips_sticker_sheet_when_layout_template_is_missing(self) -> None:
+        resolver = ProductCapabilityResolver(
+            specification_library=FakeSpecificationLibrary(
+                spec(
+                    "Stickers",
+                    bundle_size=8,
+                    packaging="NONE",
+                    preview_requirements=("sticker sheet preview",),
+                    qa_requirements=("sheet preview",),
+                )
+            )
+        )
+
+        result = resolver.resolve(
+            "Spring Garden Sticker Sheet",
+            "sticker sheet",
+            "sticker sheet",
+        )
+
+        self.assertFalse(result.supported)
+        self.assertTrue(result.requires_layout_engine)
+        self.assertIn("layout/template engine", result.reason)
+
+    def test_capability_allows_sticker_sheet_when_layout_template_exists(self) -> None:
+        resolver = ProductCapabilityResolver(
+            specification_library=FakeSpecificationLibrary(
+                spec(
+                    "Stickers",
+                    bundle_size=8,
+                    packaging="ZIP",
+                    preview_requirements=("sticker sheet preview",),
+                    qa_requirements=("sheet preview",),
+                )
+            )
+        )
+        assets_dir = self.base_path / "sticker_assets"
+        assets_dir.mkdir()
+        (assets_dir / "sticker_sheet_template.json").write_text("{}", encoding="utf-8")
+
+        result = resolver.resolve(
+            "Planner School Icons",
+            "sticker sheet",
+            "sticker sheet",
+            assets_dir=assets_dir,
+        )
+
+        self.assertTrue(result.supported)
+        self.assertTrue(result.requires_zip_package)
+        self.assertEqual(result.required_deliverable_count, 8)
 
     def test_upload_manager_retries_remote_disconnect_then_success(self) -> None:
         path = self.base_path / "file.png"

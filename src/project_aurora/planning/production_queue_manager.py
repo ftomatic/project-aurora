@@ -15,6 +15,11 @@ IN_PROGRESS = "IN_PROGRESS"
 COMPLETED = "COMPLETED"
 FAILED = "FAILED"
 SKIPPED = "SKIPPED"
+NEEDS_ASSETS = "NEEDS_ASSETS"
+DIGITAL_PAPER_ASSET_BLOCKING_REASON = (
+    "Digital Paper requires 12 JPG files, 1 collage preview, and 1 ZIP package. "
+    "Asset generation for this product type is not implemented yet."
+)
 
 SUPPORTED_JOB_STATUSES = {
     READY,
@@ -22,6 +27,7 @@ SUPPORTED_JOB_STATUSES = {
     COMPLETED,
     FAILED,
     SKIPPED,
+    NEEDS_ASSETS,
 }
 
 
@@ -46,6 +52,16 @@ class ProductionJob:
     demand_score: float = 0.0
     competition_score: float = 0.0
     source_evidence: tuple[str, ...] = field(default_factory=tuple)
+    blocking_reason: str = ""
+    original_product_name: str = ""
+    original_product_type: str = ""
+    transformation_reason: str = ""
+    required_image_count: int = 0
+    requires_zip_package: bool = False
+    requires_template_engine: bool = False
+    requires_layout_engine: bool = False
+    etsy_taxonomy_category: str = ""
+    whimsical_batch_designation: bool = False
 
     def __post_init__(self) -> None:
         for field_name in (
@@ -96,6 +112,16 @@ class ProductionJob:
             "demand_score": self.demand_score,
             "competition_score": self.competition_score,
             "source_evidence": list(self.source_evidence),
+            "blocking_reason": self.blocking_reason,
+            "original_product_name": self.original_product_name,
+            "original_product_type": self.original_product_type,
+            "transformation_reason": self.transformation_reason,
+            "required_image_count": self.required_image_count,
+            "requires_zip_package": self.requires_zip_package,
+            "requires_template_engine": self.requires_template_engine,
+            "requires_layout_engine": self.requires_layout_engine,
+            "etsy_taxonomy_category": self.etsy_taxonomy_category,
+            "whimsical_batch_designation": self.whimsical_batch_designation,
         }
 
     @classmethod
@@ -125,6 +151,18 @@ class ProductionJob:
             competition_score=float(data.get("competition_score", 0.0)),
             source_evidence=tuple(
                 str(value) for value in data.get("source_evidence", ())
+            ),
+            blocking_reason=str(data.get("blocking_reason", "")),
+            original_product_name=str(data.get("original_product_name", "")),
+            original_product_type=str(data.get("original_product_type", "")),
+            transformation_reason=str(data.get("transformation_reason", "")),
+            required_image_count=int(data.get("required_image_count", 0)),
+            requires_zip_package=bool(data.get("requires_zip_package", False)),
+            requires_template_engine=bool(data.get("requires_template_engine", False)),
+            requires_layout_engine=bool(data.get("requires_layout_engine", False)),
+            etsy_taxonomy_category=str(data.get("etsy_taxonomy_category", "")),
+            whimsical_batch_designation=bool(
+                data.get("whimsical_batch_designation", False)
             ),
         )
 
@@ -167,6 +205,16 @@ class ProductionQueueManager:
         demand_score: float = 0.0,
         competition_score: float = 0.0,
         source_evidence: tuple[str, ...] = (),
+        blocking_reason: str = "",
+        original_product_name: str = "",
+        original_product_type: str = "",
+        transformation_reason: str = "",
+        required_image_count: int = 0,
+        requires_zip_package: bool = False,
+        requires_template_engine: bool = False,
+        requires_layout_engine: bool = False,
+        etsy_taxonomy_category: str = "",
+        whimsical_batch_designation: bool = False,
     ) -> ProductionJob:
         """Add and persist a production job, preventing duplicate products."""
         if self._contains_product(product_name):
@@ -188,6 +236,16 @@ class ProductionQueueManager:
             demand_score=demand_score,
             competition_score=competition_score,
             source_evidence=source_evidence,
+            blocking_reason=blocking_reason,
+            original_product_name=original_product_name,
+            original_product_type=original_product_type,
+            transformation_reason=transformation_reason,
+            required_image_count=required_image_count,
+            requires_zip_package=requires_zip_package,
+            requires_template_engine=requires_template_engine,
+            requires_layout_engine=requires_layout_engine,
+            etsy_taxonomy_category=etsy_taxonomy_category,
+            whimsical_batch_designation=whimsical_batch_designation,
         )
         self._jobs = self._sorted_jobs((*self._jobs, job))
         self._save()
@@ -221,6 +279,26 @@ class ProductionQueueManager:
         """Mark a job failed."""
         return self._mark_status(job_id, FAILED)
 
+    def mark_needs_assets(self, job_id: str, blocking_reason: str) -> ProductionJob:
+        """Mark a job blocked until required production assets exist."""
+        updated: list[ProductionJob] = []
+        changed_job: ProductionJob | None = None
+        for job in self._jobs:
+            if job.id == job_id:
+                changed_job = replace(
+                    job,
+                    status=NEEDS_ASSETS,
+                    blocking_reason=blocking_reason,
+                )
+                updated.append(changed_job)
+            else:
+                updated.append(job)
+        if changed_job is None:
+            raise ValueError(f"Production job not found: {job_id}.")
+        self._jobs = self._sorted_jobs(tuple(updated))
+        self._save()
+        return changed_job
+
     def next_ready_job(self) -> ProductionJob | None:
         """Return the highest-confidence ready job."""
         for job in self._sorted_jobs(self._jobs):
@@ -235,6 +313,31 @@ class ProductionQueueManager:
     def product_names(self) -> set[str]:
         """Return normalized product names already in the queue."""
         return {_normalize_product_name(job.product_name) for job in self._jobs}
+
+    def find_by_product_name(self, product_name: str) -> ProductionJob | None:
+        """Return an existing job by normalized product name."""
+        normalized = _normalize_product_name(product_name)
+        for job in self._jobs:
+            if _normalize_product_name(job.product_name) == normalized:
+                return job
+        return None
+
+    def mark_product_ready(self, product_name: str) -> ProductionJob:
+        """Mark an existing product job READY and clear asset blocking text."""
+        normalized = _normalize_product_name(product_name)
+        updated: list[ProductionJob] = []
+        changed_job: ProductionJob | None = None
+        for job in self._jobs:
+            if _normalize_product_name(job.product_name) == normalized:
+                changed_job = replace(job, status=READY, blocking_reason="")
+                updated.append(changed_job)
+            else:
+                updated.append(job)
+        if changed_job is None:
+            raise ValueError(f"Production job not found: {product_name}.")
+        self._jobs = self._sorted_jobs(tuple(updated))
+        self._save()
+        return changed_job
 
     def _mark_status(self, job_id: str, status: str) -> ProductionJob:
         updated: list[ProductionJob] = []

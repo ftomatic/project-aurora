@@ -49,6 +49,7 @@ REAL_QUEUE_PATH = (
     / "queue.json"
 )
 DAILY_FACTORY_CONFIG_PATH = PROJECT_ROOT / "config" / "daily_factory.yaml"
+LOCAL_ENV_PATH = PROJECT_ROOT / "config" / "aurora.local.env"
 
 
 @dataclass(frozen=True, slots=True)
@@ -234,8 +235,15 @@ def _run_live_batch(count: int) -> BatchFactoryReport:
     memory = MemoryManager(
         storage=CSVStorage(base_path=PROJECT_ROOT / "data" / "aurora")
     )
-    etsy_config = EtsyConfig.from_environment(PROJECT_ROOT / "config" / "etsy.yaml")
+    etsy_config = EtsyConfig.from_environment(
+        PROJECT_ROOT / "config" / "etsy.yaml",
+        PROJECT_ROOT / "config" / "aurora.local.env",
+    )
     image_config = ImageProviderConfig.from_file(PROJECT_ROOT / "config" / "openai.yaml")
+    openai_api_key = load_openai_api_key(LOCAL_ENV_PATH)
+    print(f"OpenAI API Key Loaded: {'YES' if openai_api_key else 'NO'}")
+    if not openai_api_key:
+        raise RuntimeError("OPENAI_API_KEY is required in config/aurora.local.env.")
     image_config = ImageProviderConfig(
         provider=image_config.provider,
         model=image_config.model,
@@ -247,6 +255,7 @@ def _run_live_batch(count: int) -> BatchFactoryReport:
         prompt_version=image_config.prompt_version,
         rate_limit_max_retries=runtime_config.openai_rate_limit_max_retries,
         rate_limit_safety_seconds=runtime_config.openai_rate_limit_safety_seconds,
+        openai_api_key=openai_api_key,
     )
     print_etsy_config_diagnostics(etsy_config)
     return BatchProductionFactory(
@@ -260,6 +269,21 @@ def _run_live_batch(count: int) -> BatchFactoryReport:
         save_report=True,
         image_delay_seconds=runtime_config.openai_image_delay_seconds,
     ).run(count)
+
+
+def load_openai_api_key(path: Path) -> str | None:
+    """Load OPENAI_API_KEY from Aurora's local env file without printing it."""
+    if not path.exists():
+        return None
+    for raw_line in path.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", maxsplit=1)
+        if key.strip() == "OPENAI_API_KEY":
+            resolved_value = value.strip().strip("\"'")
+            return resolved_value or None
+    return None
 
 
 def load_batch_runtime_config(path: Path) -> BatchRuntimeConfig:

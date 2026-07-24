@@ -21,6 +21,7 @@ sys.path.insert(0, str(SRC_PATH))
 from project_aurora.planning.production_queue_manager import (  # noqa: E402
     COMPLETED,
     FAILED,
+    NEEDS_ASSETS,
     READY,
     ProductionJob,
     ProductionQueueManager,
@@ -78,6 +79,16 @@ def make_visible_png_base64() -> str:
 def write_visible_png(path: Path, size: tuple[int, int] = (2, 2)) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     Image.new("RGBA", size, (255, 0, 0, 255)).save(path, format="PNG")
+
+
+def write_sharp_pattern_png(path: Path, size: tuple[int, int] = (256, 256)) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    image = Image.new("RGBA", size, (255, 255, 255, 255))
+    for x in range(size[0]):
+        for y in range(size[1]):
+            color = (25, 120, 100, 255) if ((x // 8) + (y // 8)) % 2 == 0 else (255, 235, 80, 255)
+            image.putpixel((x, y), color)
+    image.save(path, format="PNG")
 
 
 class FakeOpenAIImagesClient:
@@ -338,6 +349,35 @@ class ProductFactoryTest(unittest.TestCase):
         self.assertIn("OpenAI image generation failed.", report.errors[0])
         self.assertEqual(runner.calls, ["prompt_composition", "image_generation"])
 
+    def test_capability_block_marks_queue_needs_assets(self) -> None:
+        class CapabilityBlockedRunner(FakeStageRunner):
+            def generate_images(self, job: ProductionJob) -> object:
+                self.calls.append("image_generation")
+                from project_aurora.production.product_factory import (
+                    ProductFactoryStageError,
+                )
+
+                raise ProductFactoryStageError(
+                    "product_capability",
+                    ("Product requires a ZIP package before paid image generation.",),
+                )
+
+        runner = CapabilityBlockedRunner()
+
+        report = ProductFactory(
+            queue_manager=self.queue,
+            memory=self.memory,
+            stage_runner=runner,
+        ).execute(self.job)
+
+        self.assertFalse(report.success)
+        self.assertEqual(report.failed_stage, "product_capability")
+        self.assertEqual(self.queue.list_jobs()[0].status, NEEDS_ASSETS)
+        self.assertEqual(
+            self.queue.list_jobs()[0].blocking_reason,
+            "Product requires a ZIP package before paid image generation.",
+        )
+
     def test_etsy_failure_preserves_draft_id_and_partial_images(self) -> None:
         runner = FakeStageRunner(fail_stage="listing_image_upload")
 
@@ -455,9 +495,333 @@ class ProductFactoryTest(unittest.TestCase):
         self.assertEqual(result.status, "SUCCESS")
         self.assertEqual(captured["run_kwargs"]["quality"], "medium")
         self.assertEqual(captured["provider_config"].quality, "medium")
+        self.assertEqual(captured["run_kwargs"]["number_of_images"], 4)
         self.assertIn("job_1_woodland_baby_animals", str(captured["output_dir"]))
 
-    def test_live_image_path_sends_medium_to_openai_sdk_from_config(self) -> None:
+    def test_printable_wall_art_requests_five_images(self) -> None:
+        captured: dict[str, object] = {}
+        wall_art_job = ProductionJob(
+            id="wall-art-job",
+            priority="High",
+            product_name="Autumn Mushroom Alphabet Posters",
+            category="wall art",
+            style="Storybook Watercolor",
+            seasonal_theme="Autumn",
+            keywords=("autumn", "mushroom", "alphabet"),
+            confidence_score=0.96,
+            estimated_competition="Low",
+            estimated_demand="High",
+            estimated_revenue=164.0,
+            status=READY,
+        )
+
+        class FakeImageGenerationEngine:
+            def __init__(self, **kwargs: object) -> None:
+                captured["provider_config"] = kwargs["provider_config"]
+
+            def run(self, **kwargs: object) -> object:
+                captured["run_kwargs"] = kwargs
+                return SimpleNamespace(status="SUCCESS", generated_files=(), warnings=())
+
+        runner = DefaultProductFactoryStageRunner(
+            memory=self.memory,
+            etsy_config=SimpleNamespace(),
+            paths=ProductFactoryPaths(jobs_dir=self.base_path / "jobs"),
+            image_config=ImageProviderConfig(
+                provider="openai",
+                quality="medium",
+                number_of_images=4,
+            ),
+        )
+        self.memory.save_prompt_package(
+            {
+                "product_name": wall_art_job.product_name,
+                "collection": wall_art_job.product_name,
+                "product_type": wall_art_job.category,
+                "style": wall_art_job.style,
+                "image_prompt": "Visible wall art prompt.",
+            },
+            package_id=wall_art_job.id,
+        )
+
+        with patch(
+            "project_aurora.image_generation.image_generation_engine.ImageGenerationEngine",
+            FakeImageGenerationEngine,
+        ):
+            result = runner.generate_images(wall_art_job)
+
+        self.assertEqual(result.status, "SUCCESS")
+        self.assertEqual(captured["run_kwargs"]["number_of_images"], 5)
+
+    def test_transformed_digital_paper_requests_four_images(self) -> None:
+        calls: list[int] = []
+        digital_paper_job = ProductionJob(
+            id="digital-paper-job",
+            priority="High",
+            product_name="Teacher Digital Illustration Collection",
+            category="digital illustration collection",
+            style="Flat Vector",
+            seasonal_theme="Evergreen",
+            keywords=("teacher", "digital", "paper"),
+            confidence_score=0.96,
+            estimated_competition="Low",
+            estimated_demand="High",
+            estimated_revenue=164.0,
+            status=READY,
+            original_product_name="Teacher Digital Paper",
+            original_product_type="digital paper",
+            required_image_count=4,
+        )
+
+        class FakeImageGenerationEngine:
+            def __init__(self, **kwargs: object) -> None:
+                pass
+
+            def run(self, **kwargs: object) -> object:
+                count = int(kwargs["number_of_images"])
+                calls.append(count)
+                return SimpleNamespace(
+                    status="SUCCESS",
+                    generated_files=tuple(f"asset_{len(calls)}_{index}.png" for index in range(count)),
+                    warnings=(),
+                    errors=(),
+                )
+
+        runner = DefaultProductFactoryStageRunner(
+            memory=self.memory,
+            etsy_config=SimpleNamespace(),
+            paths=ProductFactoryPaths(jobs_dir=self.base_path / "jobs"),
+            image_config=ImageProviderConfig(
+                provider="openai",
+                quality="medium",
+                number_of_images=4,
+            ),
+        )
+        self.memory.save_prompt_package(
+            {
+                "product_name": digital_paper_job.product_name,
+                "collection": digital_paper_job.product_name,
+                "product_type": digital_paper_job.category,
+                "style": digital_paper_job.style,
+                "image_prompt": (
+                    "Create one customer-ready digital illustration collection, "
+                    "one original illustration per image. No text, no labels, no mockup, "
+                    "no collage, no layered paper sheets, no multiple patterns in one image."
+                ),
+            },
+            package_id=digital_paper_job.id,
+        )
+
+        with patch(
+            "project_aurora.image_generation.image_generation_engine.ImageGenerationEngine",
+            FakeImageGenerationEngine,
+        ):
+            result = runner.generate_images(digital_paper_job)
+
+        self.assertEqual(result.status, "SUCCESS")
+        self.assertEqual(calls, [4])
+        self.assertEqual(len(result.generated_files), 4)
+
+    def test_sticker_sheet_creates_template_and_requests_eight_images(self) -> None:
+        calls: list[int] = []
+        sticker_job = ProductionJob(
+            id="sticker-job",
+            priority="High",
+            product_name="Planner School Icons",
+            category="sticker sheet",
+            style="Flat Vector",
+            seasonal_theme="Back To School",
+            keywords=("planner", "school", "icons"),
+            confidence_score=0.95,
+            estimated_competition="Low",
+            estimated_demand="High",
+            estimated_revenue=94.0,
+            status=READY,
+        )
+
+        class FakeImageGenerationEngine:
+            def __init__(self, **kwargs: object) -> None:
+                pass
+
+            def run(self, **kwargs: object) -> object:
+                count = int(kwargs["number_of_images"])
+                calls.append(count)
+                return SimpleNamespace(
+                    status="SUCCESS",
+                    generated_files=tuple(f"sticker_{len(calls)}_{index}.png" for index in range(count)),
+                    warnings=(),
+                    errors=(),
+                )
+
+        paths = ProductFactoryPaths(jobs_dir=self.base_path / "jobs")
+        runner = DefaultProductFactoryStageRunner(
+            memory=self.memory,
+            etsy_config=SimpleNamespace(),
+            paths=paths,
+            image_config=ImageProviderConfig(
+                provider="openai",
+                quality="medium",
+                number_of_images=4,
+            ),
+        )
+        self.memory.save_prompt_package(
+            {
+                "product_name": sticker_job.product_name,
+                "collection": sticker_job.product_name,
+                "product_type": sticker_job.category,
+                "style": sticker_job.style,
+                "image_prompt": "Create individual cuttable planner school icon stickers.",
+            },
+            package_id=sticker_job.id,
+        )
+
+        with patch(
+            "project_aurora.image_generation.image_generation_engine.ImageGenerationEngine",
+            FakeImageGenerationEngine,
+        ):
+            result = runner.generate_images(sticker_job)
+
+        template = paths.for_job(sticker_job).final_images_dir / "sticker_sheet_template.json"
+        self.assertTrue(template.exists())
+        self.assertEqual(result.status, "SUCCESS")
+        self.assertEqual(calls, [5, 3])
+        self.assertEqual(len(result.generated_files), 8)
+        self.assertEqual(result.metadata["chunks"], [5, 3])
+
+    def test_digital_paper_prompt_must_be_customer_deliverable_safe(self) -> None:
+        with self.assertRaisesRegex(RuntimeError, "customer-deliverable safe"):
+            _validate_product_type_expectation(
+                self.job,
+                {
+                    "product_type": "digital paper",
+                    "image_prompt": "Create a tiled preview of three paper designs with a product label.",
+                },
+            )
+
+        _validate_product_type_expectation(
+            self.job,
+            {
+                "product_type": "digital paper",
+                "image_prompt": (
+                    "Create one customer-ready seamless tileable digital paper pattern, "
+                    "a single full-bleed 12x12 scrapbook paper design that fills the "
+                    "entire square canvas, one pattern per image. No text, no labels, "
+                    "no mockup, no collage, no layered paper sheets, no multiple "
+                    "patterns in one image."
+                ),
+            },
+        )
+
+    def test_printable_wall_art_archives_stale_four_source_images_before_regeneration(self) -> None:
+        captured: dict[str, object] = {}
+        wall_art_job = ProductionJob(
+            id="wall-art-job",
+            priority="High",
+            product_name="Autumn Mushroom Alphabet Posters",
+            category="wall art",
+            style="Storybook Watercolor",
+            seasonal_theme="Autumn",
+            keywords=("autumn", "mushroom", "alphabet"),
+            confidence_score=0.96,
+            estimated_competition="Low",
+            estimated_demand="High",
+            estimated_revenue=164.0,
+            status=READY,
+        )
+
+        class FakeImageGenerationEngine:
+            def __init__(self, **kwargs: object) -> None:
+                captured["output_dir"] = kwargs["output_dir"]
+
+            def run(self, **kwargs: object) -> object:
+                captured["run_kwargs"] = kwargs
+                return SimpleNamespace(status="SUCCESS", generated_files=(), warnings=())
+
+        runner = DefaultProductFactoryStageRunner(
+            memory=self.memory,
+            etsy_config=SimpleNamespace(),
+            paths=ProductFactoryPaths(jobs_dir=self.base_path / "jobs"),
+            image_config=ImageProviderConfig(
+                provider="openai",
+                quality="medium",
+                number_of_images=4,
+            ),
+        )
+        job_paths = runner.job_paths(wall_art_job)
+        for index in range(1, 5):
+            write_visible_png(
+                job_paths.generated_images_dir / f"stale_{index}.png",
+                size=(1024, 1024),
+            )
+        self.memory.save_prompt_package(
+            {
+                "product_name": wall_art_job.product_name,
+                "collection": wall_art_job.product_name,
+                "product_type": wall_art_job.category,
+                "style": wall_art_job.style,
+                "image_prompt": "Visible wall art prompt.",
+            },
+            package_id=wall_art_job.id,
+        )
+
+        with patch(
+            "project_aurora.image_generation.image_generation_engine.ImageGenerationEngine",
+            FakeImageGenerationEngine,
+        ):
+            result = runner.generate_images(wall_art_job)
+
+        self.assertEqual(result.status, "SUCCESS")
+        self.assertEqual(captured["run_kwargs"]["number_of_images"], 5)
+        self.assertEqual(tuple(job_paths.generated_images_dir.glob("*.png")), ())
+        archived = tuple((job_paths.job_root / "rejected").glob("generated_images_*/*.png"))
+        self.assertEqual(len(archived), 4)
+
+    def test_wall_art_export_ignores_stale_square_png_final_files(self) -> None:
+        wall_art_job = ProductionJob(
+            id="wall-art-stale-final-job",
+            priority="High",
+            product_name="Moody Dark Alphabet Posters",
+            category="wall art",
+            style="Dark Academia",
+            seasonal_theme="Autumn",
+            keywords=("moody", "dark", "alphabet", "posters"),
+            confidence_score=0.96,
+            estimated_competition="Low",
+            estimated_demand="High",
+            estimated_revenue=164.0,
+            status=READY,
+        )
+        runner = DefaultProductFactoryStageRunner(
+            memory=self.memory,
+            etsy_config=SimpleNamespace(),
+            paths=ProductFactoryPaths(jobs_dir=self.base_path / "jobs"),
+            image_config=ImageProviderConfig(
+                provider="openai",
+                quality="high",
+                number_of_images=4,
+            ),
+        )
+        job_paths = runner.job_paths(wall_art_job)
+        for index in range(1, 6):
+            write_sharp_pattern_png(
+                job_paths.generated_images_dir / f"moody_source_{index:02d}.png",
+                size=(1024, 1024),
+            )
+            write_visible_png(
+                job_paths.final_images_dir / f"strawberry_birthday_party_printable_{index:02d}.png",
+                size=(4000, 4000),
+            )
+
+        result = runner.export_commercial_images(wall_art_job)
+
+        self.assertEqual(result.status, "SUCCESS", result.errors)
+        exported = tuple(Path(path) for path in result.exported_files)
+        self.assertEqual(len(exported), 5)
+        self.assertTrue(all(path.suffix == ".jpg" for path in exported))
+        self.assertTrue(all("printable_wall_art" in path.stem for path in exported))
+        self.assertFalse(tuple(job_paths.final_images_dir.glob("*.png")))
+
+    def test_live_image_path_sends_high_to_openai_sdk_from_config(self) -> None:
         fake_client = FakeOpenAIClient()
         self.memory.save_prompt_package(
             {
@@ -485,7 +849,7 @@ class ProductFactoryTest(unittest.TestCase):
             result = runner.generate_images(self.job)
 
         self.assertEqual(result.status, "SUCCESS")
-        self.assertEqual(fake_client.images.calls[0]["quality"], "medium")
+        self.assertEqual(fake_client.images.calls[0]["quality"], "high")
         self.assertEqual(fake_client.images.calls[0]["size"], "1024x1024")
         self.assertEqual(fake_client.images.calls[0]["n"], 4)
 
@@ -619,9 +983,17 @@ class ProductFactoryTest(unittest.TestCase):
             write_visible_png(job_paths.generated_images_dir / f"current_{index}.png")
 
         class FakeCommercialImageExporter:
-            def __init__(self, source_dir: Path, output_dir: Path) -> None:
+            def __init__(
+                self,
+                source_dir: Path,
+                output_dir: Path,
+                required_count: int = 4,
+                category: str = "",
+            ) -> None:
                 captured["source_dir"] = source_dir
                 captured["output_dir"] = output_dir
+                captured["required_count"] = required_count
+                captured["category"] = category
                 captured["source_files"] = tuple(source_dir.glob("*.png"))
 
             def export(self) -> object:
@@ -641,6 +1013,66 @@ class ProductFactoryTest(unittest.TestCase):
         self.assertEqual(result.status, "SUCCESS")
         self.assertEqual(captured["source_dir"], job_paths.generated_images_dir)
         self.assertEqual(len(captured["source_files"]), 4)
+        self.assertEqual(captured["required_count"], 4)
+
+    def test_wall_art_exporter_receives_required_count_five(self) -> None:
+        captured: dict[str, object] = {}
+        wall_art_job = ProductionJob(
+            id="wall-art-job",
+            priority="High",
+            product_name="Neutral Boho Wall Art",
+            category="wall art",
+            style="Coastal Watercolor",
+            seasonal_theme="Evergreen",
+            keywords=("neutral", "boho", "wall", "art"),
+            confidence_score=0.96,
+            estimated_competition="Low",
+            estimated_demand="High",
+            estimated_revenue=164.0,
+            status=READY,
+        )
+        runner = DefaultProductFactoryStageRunner(
+            memory=self.memory,
+            etsy_config=SimpleNamespace(),
+            paths=ProductFactoryPaths(jobs_dir=self.base_path / "jobs"),
+        )
+        job_paths = runner.job_paths(wall_art_job)
+        for index in range(1, 6):
+            write_visible_png(job_paths.generated_images_dir / f"current_{index}.png")
+
+        class FakeCommercialImageExporter:
+            def __init__(
+                self,
+                source_dir: Path,
+                output_dir: Path,
+                required_count: int = 4,
+                category: str = "",
+            ) -> None:
+                captured["source_dir"] = source_dir
+                captured["output_dir"] = output_dir
+                captured["required_count"] = required_count
+                captured["category"] = category
+                captured["source_files"] = tuple(source_dir.glob("*.png"))
+
+            def export(self) -> object:
+                return SimpleNamespace(
+                    status="SUCCESS",
+                    exported_files=tuple(f"final{index}.png" for index in range(1, 6)),
+                    warnings=(),
+                    errors=(),
+                )
+
+        with patch(
+            "project_aurora.image_generation.commercial_image_exporter.CommercialImageExporter",
+            FakeCommercialImageExporter,
+        ):
+            result = runner.export_commercial_images(wall_art_job)
+
+        self.assertEqual(result.status, "SUCCESS")
+        self.assertEqual(captured["source_dir"], job_paths.generated_images_dir)
+        self.assertEqual(len(captured["source_files"]), 5)
+        self.assertEqual(captured["required_count"], 5)
+        self.assertEqual(captured["category"], "Printable Wall Art")
 
     def test_etsy_upload_uses_only_current_job_final_files(self) -> None:
         captured: dict[str, object] = {}

@@ -170,6 +170,41 @@ class OpenAIProviderTest(unittest.TestCase):
         for image_path in result.image_paths:
             self.assertTrue(Path(image_path).exists())
 
+    def test_openai_provider_appends_files_across_multiple_calls(self) -> None:
+        fake_client = FakeOpenAIClient()
+        provider = OpenAIImageProvider(
+            output_dir=self.output_dir,
+            client=fake_client,
+        )
+        request = ImageGenerationEngine.create_request(
+            prompt_package=make_prompt_package(),
+            provider_name=provider.provider_name(),
+            image_type="product_asset",
+            width=1024,
+            height=1024,
+            dpi=300,
+            transparent_background=True,
+            size="1024x1024",
+            quality="medium",
+            background="transparent",
+            output_format="png",
+            number_of_images=2,
+        )
+
+        first = provider.generate_image(request)
+        second = provider.generate_image(request)
+
+        names = [Path(path).name for path in (*first.image_paths, *second.image_paths)]
+        self.assertEqual(
+            names,
+            [
+                "summer_strawberry_birthday_01.png",
+                "summer_strawberry_birthday_02.png",
+                "summer_strawberry_birthday_03.png",
+                "summer_strawberry_birthday_04.png",
+            ],
+        )
+
     def test_engine_saves_openai_result_to_memory(self) -> None:
         self.memory.save_prompt_package(make_prompt_package())
         config = ImageProviderConfig(

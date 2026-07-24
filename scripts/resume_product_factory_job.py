@@ -18,6 +18,8 @@ sys.path.insert(0, str(SRC_PATH))
 
 from project_aurora.image_generation.commercial_image_exporter import (  # noqa: E402
     COMMERCIAL_IMAGE_COUNT,
+    WALL_ART_RATIOS,
+    validate_commercial_jpg,
     validate_commercial_png,
 )
 from project_aurora.integrations.etsy.etsy_client import EtsyClient  # noqa: E402
@@ -27,6 +29,9 @@ from project_aurora.integrations.etsy.etsy_digital_file_service import (  # noqa
 )
 from project_aurora.integrations.etsy.etsy_result import (  # noqa: E402
     EtsyImageUploadAttempt,
+)
+from project_aurora.integrations.etsy.etsy_upload_manager import (  # noqa: E402
+    EtsyUploadManager,
 )
 from project_aurora.image_generation.provider_registry import ImageProviderConfig  # noqa: E402
 from project_aurora.planning.production_queue_manager import (  # noqa: E402
@@ -113,6 +118,7 @@ class ProductFactoryResumeService:
     ) -> ResumeResult:
         final_images_dir = _final_images_dir_from_report(report_data)
         final_files = _valid_final_image_files(final_images_dir)
+        expected_count = len(final_files)
         existing_images = self._client.list_listing_images(listing_id)
         existing_by_rank = _existing_listing_images_by_rank(existing_images)
         attempts: list[EtsyImageUploadAttempt] = []
@@ -120,7 +126,7 @@ class ProductFactoryResumeService:
         for rank, image_path in enumerate(final_files, start=1):
             if _image_already_present(existing_by_rank.get(rank), image_path, rank):
                 continue
-            attempts.append(self._upload_one(listing_id, image_path, rank))
+            attempts.append(self._upload_one(job_id, listing_id, image_path, rank))
 
         uploaded_now = sum(1 for attempt in attempts if attempt.status == "SUCCESS")
         failed_attempts = tuple(
@@ -128,16 +134,16 @@ class ProductFactoryResumeService:
         )
         verified_images = self._verified_listing_images(listing_id)
         images_after = len(verified_images)
-        if failed_attempts or images_after != COMMERCIAL_IMAGE_COUNT:
+        if failed_attempts or images_after != expected_count:
             reason = (
-                f"expected {COMMERCIAL_IMAGE_COUNT} Etsy images, found "
+                f"expected {expected_count} Etsy images, found "
                 f"{images_after} after recovery"
             )
             updated = _updated_report(
                 report_data=report_data,
                 success=False,
                 failed_stage="listing_image_upload",
-                images=min(images_after, COMMERCIAL_IMAGE_COUNT),
+                images=min(images_after, expected_count),
                 downloads=int(report_data.get("downloads") or 0),
                 metadata_update={
                     "listing_image_upload": {
@@ -146,7 +152,7 @@ class ProductFactoryResumeService:
                         "images_already_present": len(existing_by_rank),
                         "images_uploaded_now": uploaded_now,
                         "images_present_after": images_after,
-                        "expected_images": COMMERCIAL_IMAGE_COUNT,
+                        "expected_images": expected_count,
                         "verification": "FAIL",
                         "failed": len(failed_attempts),
                         "attempts": [_attempt_to_dict(attempt) for attempt in attempts],
@@ -180,19 +186,20 @@ class ProductFactoryResumeService:
             config=self._config,
             memory=self._memory,
             client=self._client,
+            required_count=expected_count,
         ).sync_digital_files(
             listing_id=listing_id,
             final_images_dir=final_images_dir,
         )
         digital_total = self._verified_digital_file_count(listing_id)
-        success = digital_result.status == "SUCCESS" and digital_total == 4
+        success = digital_result.status == "SUCCESS" and digital_total == expected_count
         final_status = "COMPLETED" if success else "NEEDS_REPAIR"
         verification = "PASS" if success else "FAIL"
         updated_report = _updated_report(
             report_data=report_data,
             success=success,
             failed_stage=None if success else "customer_download_upload",
-            images=COMMERCIAL_IMAGE_COUNT,
+            images=expected_count,
             downloads=digital_total,
             metadata_update={
                 "listing_image_upload": {
@@ -201,9 +208,9 @@ class ProductFactoryResumeService:
                         "images_already_present": len(existing_by_rank),
                         "images_uploaded_now": uploaded_now,
                         "images_present_after": images_after,
-                        "expected_images": COMMERCIAL_IMAGE_COUNT,
+                        "expected_images": expected_count,
                         "verification": "PASS",
-                        "total_present": COMMERCIAL_IMAGE_COUNT,
+                        "total_present": expected_count,
                         "attempts": [_attempt_to_dict(attempt) for attempt in attempts],
                     },
                 "customer_download_upload": digital_result,
@@ -238,22 +245,24 @@ class ProductFactoryResumeService:
         listing_id: str,
     ) -> ResumeResult:
         final_images_dir = _final_images_dir_from_report(report_data)
-        _valid_final_image_files(final_images_dir)
+        final_files = _valid_final_image_files(final_images_dir)
+        expected_count = len(final_files)
         digital_result = EtsyDigitalFileService(
             config=self._config,
             memory=self._memory,
             client=self._client,
+            required_count=expected_count,
         ).sync_digital_files(
             listing_id=listing_id,
             final_images_dir=final_images_dir,
         )
         digital_total = self._verified_digital_file_count(listing_id)
-        success = digital_result.status == "SUCCESS" and digital_total == 4
+        success = digital_result.status == "SUCCESS" and digital_total == expected_count
         updated_report = _updated_report(
             report_data=report_data,
             success=success,
             failed_stage=None if success else "customer_download_upload",
-            images=int(report_data.get("images") or COMMERCIAL_IMAGE_COUNT),
+            images=max(int(report_data.get("images") or 0), expected_count),
             downloads=digital_total,
             metadata_update={"customer_download_upload": digital_result},
             errors=tuple(digital_result.errors) if not success else (),
@@ -267,8 +276,8 @@ class ProductFactoryResumeService:
             job_id=job_id,
             etsy_listing_id=listing_id,
             resumed_from_stage="customer_download_upload",
-            images_already_present=int(report_data.get("images") or 0),
-            images_present_after=int(report_data.get("images") or 0),
+            images_already_present=max(int(report_data.get("images") or 0), expected_count),
+            images_present_after=max(int(report_data.get("images") or 0), expected_count),
             digital_files_present_after=digital_total,
             images_uploaded_now=0,
             downloads_uploaded=int(digital_result.files_uploaded),
@@ -316,30 +325,37 @@ class ProductFactoryResumeService:
 
     def _upload_one(
         self,
+        job_id: str,
         listing_id: str,
         image_path: Path,
         rank: int,
     ) -> EtsyImageUploadAttempt:
-        try:
-            response = self._client.upload_listing_image(
+        manager = EtsyUploadManager(memory=self._memory)
+        checkpoint = manager.upload_one(
+            listing_id=listing_id,
+            job_id=job_id,
+            upload_type="listing_image",
+            file_path=image_path,
+            rank=rank,
+            uploader=lambda: self._client.upload_listing_image(
                 listing_id=listing_id,
                 image_path=image_path,
                 rank=rank,
-            )
-        except RuntimeError as error:
+            ),
+        )
+        if checkpoint.status != "SUCCESS":
             return EtsyImageUploadAttempt(
                 image_path=str(image_path),
                 rank=rank,
                 status="FAILED",
-                errors=(str(error),),
+                errors=(checkpoint.error,),
             )
-        image_id = response.get("listing_image_id") or response.get("image_id")
         return EtsyImageUploadAttempt(
             image_path=str(image_path),
             rank=rank,
             status="SUCCESS",
-            etsy_image_id=str(image_id) if image_id is not None else None,
-            metadata={"response": response},
+            etsy_image_id=checkpoint.etsy_resource_id,
+            metadata={"checkpoint": checkpoint.to_dict()},
         )
 
     def _save_report(self, report: ProductionReport) -> None:
@@ -426,6 +442,7 @@ class StageAwareResumeRunner(DefaultProductFactoryStageRunner):
         if not listing_id:
             raise RuntimeError("Existing Etsy draft ID is required for image sync.")
         final_files = _valid_final_image_files(self.job_paths(job).final_images_dir)
+        expected_count = len(final_files)
         existing = self._resume_client.list_listing_images(listing_id)
         existing_by_rank = _existing_listing_images_by_rank(existing)
         attempts: list[EtsyImageUploadAttempt] = []
@@ -448,11 +465,11 @@ class StageAwareResumeRunner(DefaultProductFactoryStageRunner):
         errors = ()
         status = "SUCCESS"
         failed = 0
-        if images_after != COMMERCIAL_IMAGE_COUNT:
+        if images_after != expected_count:
             status = "PARTIAL_FAILURE"
             failed = 1
             errors = (
-                f"expected {COMMERCIAL_IMAGE_COUNT} Etsy images, found "
+                f"expected {expected_count} Etsy images, found "
                 f"{images_after} after recovery",
             )
         return SimpleNamespace(
@@ -461,7 +478,7 @@ class StageAwareResumeRunner(DefaultProductFactoryStageRunner):
             images_uploaded=len(attempts),
             images_already_present=len(existing_by_rank),
             images_present_after=images_after,
-            expected_images=COMMERCIAL_IMAGE_COUNT,
+            expected_images=expected_count,
             failed=failed,
             warnings=(),
             errors=errors,
@@ -469,10 +486,12 @@ class StageAwareResumeRunner(DefaultProductFactoryStageRunner):
 
     def upload_customer_downloads(self, job: ProductionJob, listing_id: str | None) -> Any:
         resolved_listing_id = listing_id or self._existing_draft_id or _latest_draft_id(self._memory)
+        final_files = _valid_final_image_files(self.job_paths(job).final_images_dir)
         return EtsyDigitalFileService(
             config=self._etsy_config,
             memory=self._memory,
             client=self._resume_client,
+            required_count=len(final_files),
         ).sync_digital_files(
             listing_id=resolved_listing_id,
             final_images_dir=self.job_paths(job).final_images_dir,
@@ -483,6 +502,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     """Parse resume CLI arguments."""
     parser = argparse.ArgumentParser(description="Resume one Product Factory job.")
     parser.add_argument("--job-id", required=True, help="Production queue job id.")
+    parser.add_argument(
+        "--live",
+        action="store_true",
+        help="Accepted for consistency with production factory commands.",
+    )
     return parser.parse_args(argv)
 
 
@@ -491,7 +515,10 @@ def main(argv: list[str] | None = None) -> None:
     args = parse_args(argv)
     memory = MemoryManager(storage=CSVStorage(base_path=PROJECT_ROOT / "data" / "aurora"))
     queue_manager = ProductionQueueManager(queue_path=QUEUE_PATH)
-    config = EtsyConfig.from_environment(PROJECT_ROOT / "config" / "etsy.yaml")
+    config = EtsyConfig.from_environment(
+        PROJECT_ROOT / "config" / "etsy.yaml",
+        PROJECT_ROOT / "config" / "aurora.local.env",
+    )
     try:
         result = ProductFactoryResumeService(
             memory=memory,
@@ -582,20 +609,57 @@ def _final_images_dir_from_report(report_data: dict[str, Any]) -> Path:
 def _valid_final_image_files(final_images_dir: Path) -> tuple[Path, ...]:
     if final_images_dir.name != "final_product_images":
         raise RuntimeError("Resume must use job final_product_images directory.")
-    files = tuple(sorted(final_images_dir.glob("*.png"), key=lambda path: path.name))
-    if len(files) != COMMERCIAL_IMAGE_COUNT:
-        raise RuntimeError(
-            f"Expected exactly {COMMERCIAL_IMAGE_COUNT} final PNG files, "
-            f"found {len(files)}."
-        )
-    errors = tuple(
-        f"{path.name}: {error}"
-        for path in files
-        for error in validate_commercial_png(path)
+    png_files = tuple(sorted(final_images_dir.glob("*.png"), key=lambda path: path.name))
+    jpg_files = tuple(
+        path
+        for path in sorted(final_images_dir.glob("*"), key=lambda path: path.name)
+        if path.is_file()
+        and path.suffix.casefold() in {".jpg", ".jpeg"}
+        and "preview" not in path.stem.casefold()
     )
+    if png_files:
+        files = png_files
+        if len(files) != COMMERCIAL_IMAGE_COUNT:
+            raise RuntimeError(
+                f"Expected exactly {COMMERCIAL_IMAGE_COUNT} final PNG files, "
+                f"found {len(files)}."
+            )
+        errors = tuple(
+            f"{path.name}: {error}"
+            for path in files
+            for error in validate_commercial_png(path)
+        )
+    else:
+        files = jpg_files
+        expected_jpg_count = len(WALL_ART_RATIOS)
+        if len(files) != expected_jpg_count:
+            raise RuntimeError(
+                f"Expected exactly {expected_jpg_count} final wall art JPG files, "
+                f"found {len(files)}."
+            )
+        errors = tuple(
+            f"{path.name}: {error}"
+            for path in files
+            for error in _validate_wall_art_jpg(path)
+        )
     if errors:
         raise RuntimeError("Invalid final image files: " + "; ".join(errors))
     return files
+
+
+def _validate_wall_art_jpg(file_path: Path) -> tuple[str, ...]:
+    expected_size = dict(WALL_ART_RATIOS).get(_wall_art_ratio_label(file_path))
+    if expected_size is None:
+        return ("Missing required wall art ratio label.",)
+    return tuple(validate_commercial_jpg(file_path, expected_size))
+
+
+def _wall_art_ratio_label(path: Path) -> str:
+    stem = path.stem.casefold().replace("_", "x").replace("-", "x")
+    for label, _size in WALL_ART_RATIOS:
+        if label in stem:
+            return label
+    return ""
 
 
 def _archive_rejected_generated_images(generated_images_dir: Path) -> None:

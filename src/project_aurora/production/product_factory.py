@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from dataclasses import fields, is_dataclass
 from dataclasses import replace
 from datetime import datetime
 import json
 from pathlib import Path
 import re
+import shutil
 from time import perf_counter
 from types import SimpleNamespace
 from typing import Any, Protocol
@@ -20,6 +21,7 @@ from project_aurora.listing.listing_package import (
     ListingPackage,
 )
 from project_aurora.planning.production_queue_manager import (
+    NEEDS_ASSETS,
     ProductionJob,
     ProductionQueueManager,
 )
@@ -35,6 +37,19 @@ DEFAULT_OPENAI_CONFIG_PATH = PROJECT_ROOT / "config" / "openai.yaml"
 DEFAULT_JOBS_DIR = PROJECT_ROOT / "data" / "aurora" / "jobs"
 DEFAULT_LOCAL_CREDENTIAL_PATH = PROJECT_ROOT / "config" / "aurora.local.env"
 DEFAULT_ETSY_CONFIG_PATH = PROJECT_ROOT / "config" / "etsy.yaml"
+MAX_OPENAI_IMAGES_PER_REQUEST = 5
+
+
+@dataclass(frozen=True, slots=True)
+class ImageGenerationBatchResult:
+    """Aggregated result for category jobs split across provider requests."""
+
+    status: str
+    generated_files: tuple[str, ...] = field(default_factory=tuple)
+    image_paths: tuple[str, ...] = field(default_factory=tuple)
+    warnings: tuple[str, ...] = field(default_factory=tuple)
+    errors: tuple[str, ...] = field(default_factory=tuple)
+    metadata: dict[str, Any] = field(default_factory=dict)
 
 
 class ProductFactoryStageRunner(Protocol):
@@ -216,11 +231,20 @@ class DefaultProductFactoryStageRunner:
 
     def generate_images(self, job: ProductionJob) -> Any:
         """Generate four OpenAI images through the image engine."""
-        capability = _resolve_product_capability(job)
+        job_paths = self.job_paths(job)
+        _ensure_required_layout_template(job, job_paths)
+        capability = _resolve_product_capability(job, assets_dir=job_paths.final_images_dir)
         if not capability.supported:
             raise ProductFactoryStageError("product_capability", (capability.reason,))
-        job_paths = self.job_paths(job)
-        reused = self._reuse_completed_generated_images(job, job_paths)
+        number_of_images = _resolve_generation_image_count(
+            job,
+            configured_count=self._image_config.number_of_images,
+        )
+        reused = self._reuse_completed_generated_images(
+            job,
+            job_paths,
+            expected_count=number_of_images,
+        )
         if reused is not None:
             return reused
         self._prepare_generated_images_dir(job_paths)
@@ -235,22 +259,20 @@ class DefaultProductFactoryStageRunner:
             prompt_package = {}
         _validate_product_type_expectation(job, prompt_package)
         _print_art_direction_diagnostics(prompt_package, job)
-        return ImageGenerationEngine(
+        engine = ImageGenerationEngine(
             memory=self._memory,
             output_dir=job_paths.generated_images_dir,
             provider_config=self._image_config,
-        ).run(
+        )
+        return _run_image_generation_chunks(
+            engine=engine,
             prompt_package_id=job.id,
             provider=self._image_config.provider,
-            image_type="product_asset",
-            width=1024,
-            height=1024,
-            dpi=300,
             size=self._image_config.size,
             quality=self._image_config.quality,
             background=self._image_config.background,
             output_format=self._image_config.output_format,
-            number_of_images=self._image_config.number_of_images,
+            number_of_images=number_of_images,
         )
 
     def run_image_qa(self, job: ProductionJob) -> Any:
@@ -268,17 +290,38 @@ class DefaultProductFactoryStageRunner:
     def export_commercial_images(self, job: ProductionJob) -> Any:
         """Export final commercial PNGs."""
         job_paths = self.job_paths(job)
-        reused = self._reuse_completed_final_images(job_paths)
+        expected_count = _resolve_generation_image_count(
+            job,
+            configured_count=self._image_config.number_of_images,
+        )
+        export_category = _resolve_export_category(job)
+        reused = self._reuse_completed_final_images(job, job_paths, expected_count)
         if reused is not None:
             return reused
         from project_aurora.image_generation.commercial_image_exporter import (
             CommercialImageExporter,
         )
 
-        return CommercialImageExporter(
+        result = CommercialImageExporter(
             source_dir=job_paths.generated_images_dir,
             output_dir=job_paths.final_images_dir,
+            required_count=expected_count,
+            category=export_category,
         ).export()
+        if getattr(result, "status", "").upper() != "SUCCESS":
+            return result
+        package_result = _build_required_product_package(job, job_paths.final_images_dir)
+        if package_result is not None and package_result.status != "SUCCESS":
+            from project_aurora.image_generation.commercial_image_exporter import (
+                CommercialImageExportResult,
+            )
+
+            return CommercialImageExportResult(
+                status="FAILED",
+                exported_files=tuple(getattr(result, "exported_files", ())),
+                errors=tuple(package_result.errors),
+            )
+        return result
 
     def generate_seo(self, job: ProductionJob) -> Any:
         """Generate and save SEO package."""
@@ -295,8 +338,14 @@ class DefaultProductFactoryStageRunner:
                     previous_title=_previous_product_title(self._memory, job.id),
                 )
             except RuntimeError as error:
-                if "title" not in str(error).casefold():
-                    raise
+                if not getattr(self._etsy_config, "is_mock_mode", True):
+                    print("SEO PACKAGE REGENERATION")
+                    print("")
+                    print("Product")
+                    print(job.product_name)
+                    print("")
+                    print("Reason")
+                    print(str(error))
             else:
                 if not getattr(self._etsy_config, "is_mock_mode", True):
                     _print_seo_diagnostics(job, package)
@@ -343,13 +392,7 @@ class DefaultProductFactoryStageRunner:
             previous_tags=_previous_product_tags(self._memory, job.id),
             previous_title=_previous_product_title(self._memory, job.id),
         )
-        final_files = tuple(
-            str(path)
-            for path in sorted(
-                job_paths.final_images_dir.glob("*.png"),
-                key=lambda item: item.name,
-            )
-        )
+        final_files = tuple(str(path) for path in _final_asset_files(job, job_paths.final_images_dir))
         merchant_package = _build_and_save_merchant_package(
             job=job,
             seo_package=seo_package,
@@ -402,6 +445,17 @@ class DefaultProductFactoryStageRunner:
             config=self._etsy_config,
             memory=self._memory,
             images_dir=self.job_paths(job).final_images_dir,
+            max_images=min(
+                10,
+                _resolve_generation_image_count(
+                    job,
+                    configured_count=self._image_config.number_of_images,
+                ),
+            ),
+            required_image_count=_resolve_generation_image_count(
+                job,
+                configured_count=self._image_config.number_of_images,
+            ),
         ).upload_latest_draft_images()
 
     def upload_customer_downloads(self, job: ProductionJob, listing_id: str | None) -> Any:
@@ -411,9 +465,23 @@ class DefaultProductFactoryStageRunner:
         )
 
         self._refresh_etsy_config()
+        package_file = _required_zip_package_file(job, self.job_paths(job).final_images_dir)
+        if package_file is not None:
+            return EtsyDigitalFileService(
+                config=self._etsy_config,
+                memory=self._memory,
+                required_count=1,
+            ).sync_digital_package(
+                listing_id=listing_id,
+                package_path=package_file,
+            )
         return EtsyDigitalFileService(
             config=self._etsy_config,
             memory=self._memory,
+            required_count=_resolve_generation_image_count(
+                job,
+                configured_count=self._image_config.number_of_images,
+            ),
         ).upload_digital_files(
             listing_id=listing_id,
             final_images_dir=self.job_paths(job).final_images_dir,
@@ -425,22 +493,29 @@ class DefaultProductFactoryStageRunner:
             return
         result = EtsyTokenManager(DEFAULT_LOCAL_CREDENTIAL_PATH).refresh_if_needed()
         if result.refreshed:
-            self._etsy_config = EtsyConfig.from_environment(DEFAULT_ETSY_CONFIG_PATH)
+            self._etsy_config = EtsyConfig.from_environment(
+                DEFAULT_ETSY_CONFIG_PATH,
+                DEFAULT_LOCAL_CREDENTIAL_PATH,
+            )
 
     def _prepare_generated_images_dir(self, job_paths: ProductFactoryJobPaths) -> None:
         job_paths.generated_images_dir.mkdir(parents=True, exist_ok=True)
         existing_pngs = tuple(job_paths.generated_images_dir.glob("*.png"))
         if existing_pngs:
-            raise RuntimeError(
-                "Generated images directory must be empty before generation; "
-                f"found {len(existing_pngs)} PNG files in "
-                f"{job_paths.generated_images_dir}."
+            rejected_dir = (
+                job_paths.job_root
+                / "rejected"
+                / f"generated_images_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
             )
+            rejected_dir.mkdir(parents=True, exist_ok=True)
+            for png_path in existing_pngs:
+                shutil.move(str(png_path), str(rejected_dir / png_path.name))
 
     def _reuse_completed_generated_images(
         self,
         job: ProductionJob,
         job_paths: ProductFactoryJobPaths,
+        expected_count: int,
     ) -> Any | None:
         from project_aurora.image_generation.image_inspector import inspect_png
         from project_aurora.image_generation.image_result import ImageResult
@@ -453,8 +528,7 @@ class DefaultProductFactoryStageRunner:
         if not pngs:
             return None
         valid_pngs = tuple(path for path in pngs if inspect_png(path).is_valid)
-        expected = int(self._image_config.number_of_images)
-        if len(pngs) == expected and len(valid_pngs) == expected:
+        if len(pngs) == expected_count and len(valid_pngs) == expected_count:
             result = ImageResult(
                 status="SUCCESS",
                 provider="OpenAI GPT Image",
@@ -472,42 +546,115 @@ class DefaultProductFactoryStageRunner:
             )
             self._memory.save_image_result(result)
             return result
+        if len(pngs) != expected_count:
+            return None
         raise RuntimeError(
             "Generated images directory contains incomplete or unexpected PNG files; "
-            f"expected exactly {expected} valid PNGs, found {len(valid_pngs)} valid "
+            f"expected exactly {expected_count} valid PNGs, found {len(valid_pngs)} valid "
             f"out of {len(pngs)} total in {job_paths.generated_images_dir}."
         )
 
     @staticmethod
-    def _reuse_completed_final_images(job_paths: ProductFactoryJobPaths) -> Any | None:
+    def _reuse_completed_final_images(
+        job: ProductionJob,
+        job_paths: ProductFactoryJobPaths,
+        expected_count: int,
+    ) -> Any | None:
         from project_aurora.image_generation.commercial_image_exporter import (
-            COMMERCIAL_IMAGE_COUNT,
+            DIGITAL_PAPER_IMAGE_SIZE,
+            DIGITAL_PAPER_MIN_SHARPNESS,
+            PARTY_PRINTABLE_IMAGE_SIZE,
+            WALL_ART_MIN_SHARPNESS,
+            WALL_ART_RATIOS,
             CommercialImageExportResult,
+            validate_commercial_jpg,
             validate_commercial_png,
         )
         from project_aurora.image_generation.image_inspector import inspect_png
+        from project_aurora.production.merchant_specification import (
+            MerchantSpecificationLibrary,
+        )
 
         if not job_paths.final_images_dir.exists():
             return None
-        pngs = tuple(
-            sorted(job_paths.final_images_dir.glob("*.png"), key=lambda path: path.name)
-        )
+        try:
+            spec = MerchantSpecificationLibrary().resolve(job.category, job.product_name)
+        except RuntimeError:
+            spec = None
+        if spec is not None:
+            suffixes = {f".{fmt.casefold()}" for fmt in spec.file_formats}
+            files = tuple(
+                path
+                for path in sorted(job_paths.final_images_dir.glob("*"), key=lambda item: item.name)
+                if path.is_file()
+                and path.suffix.casefold() in suffixes
+                and "preview" not in path.stem.casefold()
+            )
+            if not files:
+                return None
+            if len(files) != expected_count:
+                return None
+            errors: list[str] = []
+            if spec.category == "Printable Wall Art":
+                expected_sizes = dict(WALL_ART_RATIOS)
+                for path in files:
+                    label = _ratio_label_from_final_file(path)
+                    expected_size = expected_sizes.get(label)
+                    if expected_size is None:
+                        errors.append(f"{path.name}: Missing required wall art ratio label.")
+                    else:
+                        errors.extend(
+                            f"{path.name}: {error}"
+                            for error in validate_commercial_jpg(
+                                path,
+                                expected_size,
+                                minimum_sharpness=WALL_ART_MIN_SHARPNESS,
+                            )
+                        )
+            elif spec.category == "Digital Paper":
+                for path in files:
+                    errors.extend(
+                        f"{path.name}: {error}"
+                        for error in validate_commercial_jpg(
+                            path,
+                            DIGITAL_PAPER_IMAGE_SIZE,
+                            minimum_sharpness=DIGITAL_PAPER_MIN_SHARPNESS,
+                        )
+                    )
+            elif spec.category == "Party Printables":
+                for path in files:
+                    errors.extend(
+                        f"{path.name}: {error}"
+                        for error in validate_commercial_jpg(path, PARTY_PRINTABLE_IMAGE_SIZE)
+                    )
+            else:
+                for path in files:
+                    if path.suffix.casefold() == ".png":
+                        errors.extend(
+                            f"{path.name}: {error}" for error in validate_commercial_png(path)
+                        )
+            if errors:
+                return None
+            return CommercialImageExportResult(
+                status="SUCCESS",
+                exported_files=tuple(str(path) for path in files),
+                warnings=("Reused existing valid category-specific final commercial images.",),
+                inspections=tuple(
+                    inspect_png(path) for path in files if path.suffix.casefold() == ".png"
+                ),
+            )
+        pngs = tuple(sorted(job_paths.final_images_dir.glob("*.png"), key=lambda path: path.name))
         if not pngs:
             return None
         valid_pngs = tuple(path for path in pngs if not validate_commercial_png(path))
-        if len(pngs) == COMMERCIAL_IMAGE_COUNT and len(valid_pngs) == COMMERCIAL_IMAGE_COUNT:
+        if len(pngs) == expected_count and len(valid_pngs) == expected_count:
             return CommercialImageExportResult(
                 status="SUCCESS",
                 exported_files=tuple(str(path) for path in valid_pngs),
                 warnings=("Reused existing valid final commercial images.",),
                 inspections=tuple(inspect_png(path) for path in valid_pngs),
             )
-        raise RuntimeError(
-            "Final product images directory contains incomplete or unexpected PNG files; "
-            f"expected exactly {COMMERCIAL_IMAGE_COUNT} valid PNGs, found "
-            f"{len(valid_pngs)} valid out of {len(pngs)} total in "
-            f"{job_paths.final_images_dir}."
-        )
+        return None
 
 
 class DryRunProductFactoryStageRunner:
@@ -680,9 +827,15 @@ class ProductFactory:
                 metadata=_report_metadata(metadata),
             )
         except Exception as error:
-            if not self._dry_run:
-                self._queue_manager.mark_failed(job.id)
             failed_stage = _failed_stage_from(error)
+            if not self._dry_run:
+                if (
+                    isinstance(error, ProductFactoryStageError)
+                    and error.stage == "product_capability"
+                ):
+                    self._queue_manager.mark_needs_assets(job.id, str(error))
+                else:
+                    self._queue_manager.mark_failed(job.id)
             draft_id = draft_id or _draft_id_from_metadata(metadata)
             report = ProductionReport(
                 job_id=job.id,
@@ -1159,6 +1312,9 @@ SUPPORTED_PRODUCT_TYPE_EXPECTATIONS = {
     "sticker sheet",
     "sticker sheets",
     "clipart",
+    "digital illustration",
+    "digital illustration collection",
+    "illustration collection",
     "digital paper",
     "digital journal",
     "journal kit",
@@ -1227,9 +1383,64 @@ def _validate_product_type_expectation(
             "Unsupported product-type expectation before image generation: "
             f"{product_type}."
         )
+    if _product_type_expectation_matches("digital paper", normalized):
+        _validate_digital_paper_prompt_package(prompt_package)
 
 
-def _resolve_product_capability(job: ProductionJob) -> Any:
+def _validate_digital_paper_prompt_package(prompt_package: dict[str, Any]) -> None:
+    """Prevent paid digital-paper generation from using preview/mockup prompts."""
+    prompt_text = " ".join(
+        str(prompt_package.get(key) or "")
+        for key in (
+            "image_prompt",
+            "final_prompt",
+            "prompt",
+            "commercial_requirements",
+            "composition",
+            "negative_prompt",
+        )
+    ).casefold()
+    required_positive_concepts = (
+        ("seamless",),
+        ("tileable", "repeating"),
+        ("single", "one pattern", "one customer-ready", "one continuous"),
+        ("full-bleed", "fills the entire square canvas", "entire square canvas"),
+    )
+    required_negative_concepts = (
+        ("no text",),
+        ("no labels", "no label"),
+        ("no mockup",),
+        ("no collage",),
+        ("no layered paper", "no layered paper sheets"),
+        ("no multiple patterns", "one pattern per image"),
+    )
+    missing_positive = tuple(
+        "/".join(options)
+        for options in required_positive_concepts
+        if not any(option in prompt_text for option in options)
+    )
+    missing_negative = tuple(
+        "/".join(options)
+        for options in required_negative_concepts
+        if not any(option in prompt_text for option in options)
+    )
+    if missing_positive or missing_negative:
+        pieces: list[str] = []
+        if missing_positive:
+            pieces.append(f"missing production concepts: {', '.join(missing_positive)}")
+        if missing_negative:
+            pieces.append(f"missing negative constraints: {', '.join(missing_negative)}")
+        raise RuntimeError(
+            "Digital Paper prompt is not customer-deliverable safe before image generation: "
+            + "; ".join(pieces)
+            + "."
+        )
+
+
+def _resolve_product_capability(
+    job: ProductionJob,
+    assets_dir: Path | None = None,
+) -> Any:
     from project_aurora.production.product_capability_resolver import (
         ProductCapabilityResolver,
     )
@@ -1238,7 +1449,206 @@ def _resolve_product_capability(job: ProductionJob) -> Any:
         product_name=job.product_name,
         product_type=job.category,
         category=job.category,
+        assets_dir=assets_dir,
     )
+
+
+def _ensure_required_layout_template(
+    job: ProductionJob,
+    job_paths: ProductFactoryJobPaths,
+) -> None:
+    """Create deterministic local templates required before paid image generation."""
+    lowered = f"{job.product_name} {job.category}".casefold()
+    if "sticker" not in lowered:
+        return
+    from project_aurora.production.layout_template_engine import LayoutTemplateEngine
+    from project_aurora.production.merchant_specification import (
+        MerchantSpecificationLibrary,
+    )
+
+    try:
+        spec = MerchantSpecificationLibrary().resolve(job.category, job.product_name)
+        item_count = int(spec.bundle_size)
+    except RuntimeError:
+        item_count = 8
+    result = LayoutTemplateEngine().create_for_product(
+        product_name=job.product_name,
+        category=job.category,
+        output_dir=job_paths.final_images_dir,
+        item_count=item_count,
+    )
+    if result.status != "SUCCESS":
+        raise ProductFactoryStageError(
+            "product_capability",
+            ("Sticker sheet layout/template could not be created.",),
+        )
+
+
+def _resolve_generation_image_count(
+    job: ProductionJob,
+    configured_count: int,
+) -> int:
+    """Return category-specific generation count required by merchant specs."""
+    try:
+        from project_aurora.production.merchant_specification import (
+            MerchantSpecificationLibrary,
+        )
+
+        spec = MerchantSpecificationLibrary().resolve(job.category, job.product_name)
+    except RuntimeError:
+        return configured_count
+    return max(configured_count, int(spec.bundle_size))
+
+
+def _run_image_generation_chunks(
+    *,
+    engine: Any,
+    prompt_package_id: str,
+    provider: str,
+    size: str,
+    quality: str,
+    background: str,
+    output_format: str,
+    number_of_images: int,
+) -> Any:
+    """Run provider image generation in chunks under provider request limits."""
+    if number_of_images <= MAX_OPENAI_IMAGES_PER_REQUEST:
+        return engine.run(
+            prompt_package_id=prompt_package_id,
+            provider=provider,
+            image_type="product_asset",
+            width=1024,
+            height=1024,
+            dpi=300,
+            size=size,
+            quality=quality,
+            background=background,
+            output_format=output_format,
+            number_of_images=number_of_images,
+        )
+    remaining = number_of_images
+    generated_files: list[str] = []
+    warnings: list[str] = []
+    errors: list[str] = []
+    chunks: list[int] = []
+    while remaining > 0:
+        chunk_size = min(MAX_OPENAI_IMAGES_PER_REQUEST, remaining)
+        chunks.append(chunk_size)
+        result = engine.run(
+            prompt_package_id=prompt_package_id,
+            provider=provider,
+            image_type="product_asset",
+            width=1024,
+            height=1024,
+            dpi=300,
+            size=size,
+            quality=quality,
+            background=background,
+            output_format=output_format,
+            number_of_images=chunk_size,
+        )
+        generated_files.extend(str(path) for path in getattr(result, "generated_files", ()))
+        warnings.extend(str(item) for item in getattr(result, "warnings", ()))
+        errors.extend(str(item) for item in getattr(result, "errors", ()))
+        if str(getattr(result, "status", "")).upper() != "SUCCESS":
+            errors.append(f"Image generation chunk of {chunk_size} failed.")
+            break
+        remaining -= chunk_size
+    status = "SUCCESS" if not errors and len(generated_files) >= number_of_images else "FAILED"
+    if status != "SUCCESS" and not errors:
+        errors.append(
+            f"Expected {number_of_images} generated files, found {len(generated_files)}."
+        )
+    return ImageGenerationBatchResult(
+        status=status,
+        generated_files=tuple(generated_files),
+        image_paths=tuple(generated_files),
+        warnings=tuple(warnings),
+        errors=tuple(errors),
+        metadata={"chunks": chunks, "requested_images": number_of_images},
+    )
+
+
+def _resolve_export_category(job: ProductionJob) -> str:
+    """Return the merchant category that controls final asset export."""
+    try:
+        from project_aurora.production.merchant_specification import (
+            MerchantSpecificationLibrary,
+        )
+
+        return MerchantSpecificationLibrary().resolve(job.category, job.product_name).category
+    except RuntimeError:
+        return job.category
+
+
+def _final_asset_files(job: ProductionJob, final_images_dir: Path) -> tuple[Path, ...]:
+    """Return category-specific final deliverable files in deterministic order."""
+    try:
+        from project_aurora.production.merchant_specification import (
+            MerchantSpecificationLibrary,
+        )
+
+        spec = MerchantSpecificationLibrary().resolve(job.category, job.product_name)
+        suffixes = {f".{fmt.casefold()}" for fmt in spec.file_formats}
+    except RuntimeError:
+        suffixes = {".png"}
+    return tuple(
+        path
+        for path in sorted(final_images_dir.glob("*"), key=lambda item: item.name)
+        if path.is_file()
+        and path.suffix.casefold() in suffixes
+        and "preview" not in path.stem.casefold()
+    )
+
+
+def _ratio_label_from_final_file(path: Path) -> str:
+    """Return wall-art ratio label encoded in a final filename."""
+    stem = path.stem.casefold().replace("_", "x").replace("-", "x")
+    for label in ("2x3", "3x4", "4x5", "11x14", "iso"):
+        if label in stem:
+            return label
+    return ""
+
+
+def _build_required_product_package(job: ProductionJob, final_images_dir: Path) -> Any | None:
+    """Build a ZIP package when the merchant spec requires one."""
+    try:
+        from project_aurora.production.merchant_specification import (
+            MerchantSpecificationLibrary,
+        )
+        from project_aurora.production.product_packager import ProductPackager
+
+        spec = MerchantSpecificationLibrary().resolve(job.category, job.product_name)
+    except RuntimeError:
+        return None
+    if spec.packaging != "ZIP":
+        return None
+    return ProductPackager().package(
+        product_name=job.product_name,
+        category=job.category,
+        product_dir=final_images_dir,
+    )
+
+
+def _required_zip_package_file(job: ProductionJob, final_images_dir: Path) -> Path | None:
+    """Return the required ZIP package file for ZIP-packaged products."""
+    try:
+        from project_aurora.production.merchant_specification import (
+            MerchantSpecificationLibrary,
+        )
+
+        spec = MerchantSpecificationLibrary().resolve(job.category, job.product_name)
+    except RuntimeError:
+        return None
+    if spec.packaging != "ZIP":
+        return None
+    packages = tuple(sorted(final_images_dir.glob("*.zip"), key=lambda item: item.name))
+    if not packages:
+        raise ProductFactoryStageError(
+            "customer_download_upload",
+            (f"{spec.category} requires a ZIP package before Etsy upload.",),
+        )
+    return packages[0]
 
 
 def _build_and_save_merchant_package(
@@ -1259,7 +1669,7 @@ def _build_and_save_merchant_package(
     from project_aurora.merchandising.pricing_engine import PricingEngine
     from project_aurora.production.merchant_package import MerchantPackage
 
-    capability = _resolve_product_capability(job)
+    capability = _resolve_product_capability(job, assets_dir=job_paths.final_images_dir)
     if not capability.supported:
         raise ProductFactoryStageError("product_capability", (capability.reason,))
     taxonomy = EtsyTaxonomyResolver().resolve(
@@ -1538,6 +1948,12 @@ def _description_is_relevant_to_job(description: str, job: ProductionJob) -> boo
     if "this seo-ready printable download works beautifully" in lowered:
         return False
     if "classroom, alphabet, wall" in lowered and "classroom" not in product_lower:
+        return False
+    if (
+        ("dark" in product_lower or "moody" in product_lower or "academia" in product_lower)
+        and "classroom" not in product_lower
+        and ("teacher printable" in lowered or "bright classroom" in lowered or "kids room decor" in lowered)
+    ):
         return False
     strawberry_terms = ("strawberry", "berry")
     party_terms = ("cupcake", "favor tag")

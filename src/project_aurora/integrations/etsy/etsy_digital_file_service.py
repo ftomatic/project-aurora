@@ -5,6 +5,11 @@ from __future__ import annotations
 from pathlib import Path
 
 from project_aurora.image_generation.commercial_image_exporter import (
+    DIGITAL_PAPER_IMAGE_SIZE,
+    DIGITAL_PAPER_MIN_SHARPNESS,
+    WALL_ART_MIN_SHARPNESS,
+    WALL_ART_RATIOS,
+    validate_commercial_jpg,
     validate_commercial_png,
 )
 from project_aurora.integrations.etsy.etsy_client import EtsyClient
@@ -319,6 +324,125 @@ class EtsyDigitalFileService:
         self._save_result(result)
         return result
 
+    def sync_digital_package(
+        self,
+        listing_id: str | None,
+        package_path: Path,
+    ) -> EtsyDigitalFileUploadResult:
+        """Idempotently sync one ZIP customer download package to an Etsy draft."""
+        errors = list(self._package_preflight_errors(listing_id, package_path))
+        if errors:
+            result = EtsyDigitalFileUploadResult(
+                status="CONFIGURATION_REQUIRED",
+                etsy_listing_id=listing_id,
+                digital_file_path=str(package_path),
+                uploaded=False,
+                files_found=1 if package_path.exists() else 0,
+                files_uploaded=0,
+                failed=0,
+                errors=tuple(errors),
+                metadata={"api_called": False},
+            )
+            self._save_result(result)
+            return result
+
+        try:
+            existing_records = self._client.list_listing_digital_files(str(listing_id))
+        except RuntimeError as error:
+            result = EtsyDigitalFileUploadResult(
+                status="FAILED",
+                etsy_listing_id=listing_id,
+                digital_file_path=str(package_path),
+                uploaded=False,
+                files_found=1,
+                files_uploaded=0,
+                failed=0,
+                errors=(f"Could not query Etsy digital files: {error}",),
+                metadata={"api_called": True},
+            )
+            self._save_result(result)
+            return result
+
+        existing = self._records_by_filename(existing_records)
+        if package_path.name in existing:
+            file_id = (
+                existing[package_path.name].get("listing_file_id")
+                or existing[package_path.name].get("file_id")
+                or existing[package_path.name].get("digital_file_id")
+            )
+            result = EtsyDigitalFileUploadResult(
+                status="SUCCESS",
+                etsy_listing_id=listing_id,
+                digital_file_path=str(package_path),
+                uploaded=True,
+                files_found=1,
+                files_uploaded=0,
+                failed=0,
+                metadata={
+                    "api_called": True,
+                    "already_present": [
+                        {
+                            "filename": package_path.name,
+                            "etsy_file_id": str(file_id) if file_id is not None else None,
+                        }
+                    ],
+                    "total_present": 1,
+                },
+            )
+            self._save_result(result)
+            return result
+        if len(existing) >= ETSY_MAX_DIGITAL_FILES:
+            result = EtsyDigitalFileUploadResult(
+                status="FAILED",
+                etsy_listing_id=listing_id,
+                digital_file_path=str(package_path),
+                uploaded=False,
+                files_found=1,
+                files_uploaded=0,
+                failed=0,
+                errors=("Etsy allows a maximum of 5 digital files; no slot is available for the ZIP package.",),
+                metadata={
+                    "api_called": True,
+                    "already_present": self._existing_file_records(existing),
+                },
+            )
+            self._save_result(result)
+            return result
+
+        manager = EtsyUploadManager(memory=self._memory)
+        attempt = self._upload_one(
+            listing_id=str(listing_id),
+            file_path=package_path,
+            rank=1,
+            manager=manager,
+        )
+        success = attempt.status == "SUCCESS"
+        result = EtsyDigitalFileUploadResult(
+            status="SUCCESS" if success else "PARTIAL_FAILURE",
+            etsy_listing_id=listing_id,
+            digital_file_path=str(package_path),
+            uploaded=success,
+            files_found=1,
+            files_uploaded=1 if success else 0,
+            failed=0 if success else 1,
+            attempts=(attempt,),
+            errors=attempt.errors if not success else (),
+            metadata={
+                "api_called": True,
+                "uploaded": [
+                    {
+                        "filename": attempt.filename,
+                        "etsy_file_id": attempt.etsy_file_id,
+                    }
+                ]
+                if success
+                else [],
+                "total_present": 1 if success else len(existing),
+            },
+        )
+        self._save_result(result)
+        return result
+
     def _upload_one(
         self,
         listing_id: str,
@@ -372,7 +496,7 @@ class EtsyDigitalFileService:
             errors.append("Digital file upload must use final_product_images only.")
         if len(files) != self._required_count:
             errors.append(
-                f"Exactly {self._required_count} final PNG files are required, "
+                f"Exactly {self._required_count} final commercial files are required, "
                 f"found {len(files)}."
             )
         for file_path in files:
@@ -380,17 +504,45 @@ class EtsyDigitalFileService:
                 errors.append(
                     f"{file_path.name} exceeds Etsy's 20 MB digital file limit."
                 )
-            errors.extend(
-                f"{file_path.name}: {error}"
-                for error in validate_commercial_png(file_path)
+            errors.extend(_validate_final_file(file_path))
+        return tuple(errors)
+
+    def _package_preflight_errors(
+        self,
+        listing_id: str | None,
+        package_path: Path,
+    ) -> tuple[str, ...]:
+        errors: list[str] = []
+        missing = self._missing_config()
+        if missing:
+            errors.append(
+                "Missing Etsy configuration: " + ", ".join(missing) + "."
             )
+        if not listing_id:
+            errors.append("etsy_listing_id is required.")
+        if package_path.parent.name != "final_product_images":
+            errors.append("Digital package upload must use final_product_images only.")
+        if not package_path.exists() or not package_path.is_file():
+            errors.append(f"ZIP package does not exist: {package_path}.")
+        elif package_path.suffix.casefold() != ".zip":
+            errors.append(f"Digital package must be a ZIP file: {package_path.name}.")
+        elif package_path.stat().st_size <= 0:
+            errors.append(f"ZIP package is empty: {package_path.name}.")
+        elif package_path.stat().st_size >= MAX_DIGITAL_FILE_SIZE_BYTES:
+            errors.append(f"{package_path.name} exceeds Etsy's 20 MB digital file limit.")
         return tuple(errors)
 
     @staticmethod
     def _find_pngs(final_images_dir: Path) -> tuple[Path, ...]:
         if not final_images_dir.exists():
             return ()
-        return tuple(sorted(final_images_dir.glob("*.png"), key=lambda path: path.name))
+        return tuple(
+            path
+            for path in sorted(final_images_dir.glob("*"), key=lambda path: path.name)
+            if path.is_file()
+            and path.suffix.casefold() in {".png", ".jpg", ".jpeg"}
+            and "preview" not in path.stem.casefold()
+        )
 
     def _missing_config(self) -> tuple[str, ...]:
         missing: list[str] = []
@@ -503,3 +655,40 @@ class EtsyDigitalFileService:
             if file_path.name == filename:
                 return index
         raise ValueError(f"Unknown digital file: {filename}")
+
+
+def _validate_final_file(file_path: Path) -> tuple[str, ...]:
+    if file_path.suffix.casefold() == ".png":
+        return tuple(
+            f"{file_path.name}: {error}" for error in validate_commercial_png(file_path)
+        )
+    if file_path.suffix.casefold() in {".jpg", ".jpeg"}:
+        if file_path.stem.casefold().startswith("digital_paper_"):
+            return tuple(
+                f"{file_path.name}: {error}"
+                for error in validate_commercial_jpg(
+                    file_path,
+                    DIGITAL_PAPER_IMAGE_SIZE,
+                    minimum_sharpness=DIGITAL_PAPER_MIN_SHARPNESS,
+                )
+            )
+        expected_size = dict(WALL_ART_RATIOS).get(_ratio_label_from_name(file_path))
+        if expected_size is None:
+            return (f"{file_path.name}: Missing required wall art ratio label.",)
+        return tuple(
+            f"{file_path.name}: {error}"
+            for error in validate_commercial_jpg(
+                file_path,
+                expected_size,
+                minimum_sharpness=WALL_ART_MIN_SHARPNESS,
+            )
+        )
+    return (f"{file_path.name}: Unsupported final file format.",)
+
+
+def _ratio_label_from_name(path: Path) -> str:
+    stem = path.stem.casefold().replace("_", "x").replace("-", "x")
+    for label, _size in WALL_ART_RATIOS:
+        if label in stem:
+            return label
+    return ""

@@ -144,7 +144,16 @@ class EtsyUploadManager:
 
 
 def _is_transient_upload_error(error: Exception) -> bool:
-    if isinstance(error, (RemoteDisconnected, ConnectionResetError, TimeoutError, socket.timeout)):
+    if isinstance(
+        error,
+        (
+            BrokenPipeError,
+            RemoteDisconnected,
+            ConnectionResetError,
+            TimeoutError,
+            socket.timeout,
+        ),
+    ):
         return True
     if isinstance(error, HTTPError):
         return error.code in TRANSIENT_HTTP_CODES
@@ -156,6 +165,7 @@ def _is_transient_upload_error(error: Exception) -> bool:
         for marker in (
             "remote end closed connection",
             "remote disconnected",
+            "broken pipe",
             "timed out",
             "http 429",
             "http 500",

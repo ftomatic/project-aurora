@@ -18,6 +18,7 @@ SRC_PATH = PROJECT_ROOT / "src"
 sys.path.insert(0, str(SRC_PATH))
 
 from project_aurora.integrations.etsy.etsy_client import EtsyClient  # noqa: E402
+from project_aurora.integrations.etsy.etsy_auth import build_x_api_key  # noqa: E402
 from project_aurora.integrations.etsy.etsy_config import EtsyConfig  # noqa: E402
 from project_aurora.integrations.etsy.etsy_draft_service import (  # noqa: E402
     EtsyDraftService,
@@ -129,10 +130,39 @@ class EtsyIntegrationTest(unittest.TestCase):
         paths: list[str] = []
         for index in range(1, 5):
             path = image_dir / f"strawberry_birthday_party_printable_{index:02d}.png"
-            Image.new("RGBA", (3600, 3600), (255, index * 20, 0, 255)).save(
+            Image.new("RGBA", (4000, 4000), (255, index * 20, 0, 255)).save(
                 path,
                 format="PNG",
                 dpi=(300, 300),
+            )
+            paths.append(str(path))
+        return tuple(paths)
+
+    def _create_digital_paper_files(self) -> tuple[str, ...]:
+        image_dir = Path(self.temp_dir.name) / "digital_paper_final_images"
+        image_dir.mkdir()
+        paths: list[str] = []
+        for index in range(1, 13):
+            path = image_dir / f"digital_paper_{index:02d}.jpg"
+            image = Image.new("RGB", (3600, 3600), (255, 240, 160))
+            pixels = image.load()
+            for x in range(0, 3600, 120):
+                for y in range(3600):
+                    color = (30 + index, 130, 110) if (x // 120) % 2 == 0 else (255, 230, 80)
+                    for offset in range(0, 18):
+                        if x + offset < 3600:
+                            pixels[x + offset, y] = color
+            for y in range(0, 3600, 120):
+                for x in range(3600):
+                    color = (30 + index, 130, 110) if (y // 120) % 2 == 0 else (255, 230, 80)
+                    for offset in range(0, 18):
+                        if y + offset < 3600:
+                            pixels[x, y + offset] = color
+            image.save(
+                path,
+                format="JPEG",
+                dpi=(300, 300),
+                quality=95,
             )
             paths.append(str(path))
         return tuple(paths)
@@ -214,6 +244,24 @@ class EtsyIntegrationTest(unittest.TestCase):
         )
 
         self.assertEqual(mapper.validate_payload(payload), ())
+
+    def test_payload_validation_accepts_digital_paper_jpgs(self) -> None:
+        mapper = EtsyListingMapper()
+        payload = mapper.map_to_draft(
+            listing_package=make_listing_package(self._create_digital_paper_files()),
+            seo_package=self.seo_package,
+            config=self.config,
+        )
+
+        errors = mapper.validate_payload(payload)
+
+        self.assertEqual(errors, ())
+        self.assertFalse(
+            any("printable wall art" in error.casefold() for error in errors)
+        )
+        self.assertFalse(
+            any("wall art ratio" in error.casefold() for error in errors)
+        )
 
     def test_mock_client_does_not_call_etsy_api(self) -> None:
         payload = EtsyListingMapper().map_to_draft(
@@ -420,6 +468,212 @@ class EtsyIntegrationTest(unittest.TestCase):
             "Bearer fake_access_token",
         )
         self.assertIn("/shops/shop/listings", calls[0][0].full_url)
+
+    def test_x_api_key_builder_uses_keystring_colon_secret(self) -> None:
+        self.assertEqual(
+            build_x_api_key("keystring", "shared_secret"),
+            "keystring:shared_secret",
+        )
+
+    def test_x_api_key_builder_strips_whitespace_and_quotes(self) -> None:
+        self.assertEqual(
+            build_x_api_key(' "keystring" ', " 'shared_secret' "),
+            "keystring:shared_secret",
+        )
+
+    def test_x_api_key_does_not_use_access_token(self) -> None:
+        config = EtsyConfig(
+            mode="live",
+            client_id="keystring",
+            shared_secret="shared_secret",
+            access_token="access-token-that-must-not-be-api-key",
+            api_base_url="https://example.test/v3/application",
+        )
+        calls = []
+
+        def fake_urlopen(api_request, timeout: int):  # type: ignore[no-untyped-def]
+            calls.append(api_request)
+            return FakeResponse({"ok": True})
+
+        EtsyClient(config=config, urlopen=fake_urlopen).get_json("/openapi-ping")
+
+        headers = calls[0].headers
+        self.assertEqual(headers["X-api-key"], "keystring:shared_secret")
+        self.assertNotIn("access-token", headers["X-api-key"])
+        self.assertEqual(
+            headers["Authorization"],
+            "Bearer access-token-that-must-not-be-api-key",
+        )
+
+    def test_missing_shared_secret_fails_before_http_request(self) -> None:
+        config = EtsyConfig(
+            mode="live",
+            client_id="keystring",
+            shared_secret=None,
+            access_token="token",
+            api_base_url="https://example.test/v3/application",
+        )
+        calls = []
+
+        def fake_urlopen(api_request, timeout: int):  # type: ignore[no-untyped-def]
+            calls.append(api_request)
+            return FakeResponse({"ok": True})
+
+        with self.assertRaisesRegex(RuntimeError, "ETSY_SHARED_SECRET"):
+            EtsyClient(config=config, urlopen=fake_urlopen).get_json("/openapi-ping")
+
+        self.assertEqual(calls, [])
+
+    def test_local_env_values_override_shell_and_are_normalized(self) -> None:
+        config_path = Path(self.temp_dir.name) / "etsy.yaml"
+        config_path.write_text(
+            "mode: live\napi_base_url: https://example.test/v3/application\n",
+            encoding="utf-8",
+        )
+        local_env = Path(self.temp_dir.name) / "aurora.local.env"
+        local_env.write_text(
+            "\n".join(
+                (
+                    'ETSY_CLIENT_ID= "local-key" ',
+                    "ETSY_SHARED_SECRET= 'local-secret' ",
+                    'ETSY_ACCESS_TOKEN= "local-token" ',
+                    "ETSY_SHOP_ID= '321' ",
+                )
+            ),
+            encoding="utf-8",
+        )
+
+        with patch.dict(
+            "os.environ",
+            {
+                "ETSY_CLIENT_ID": "shell-key",
+                "ETSY_SHARED_SECRET": "shell-secret",
+                "ETSY_ACCESS_TOKEN": "shell-token",
+                "ETSY_SHOP_ID": "123",
+            },
+            clear=True,
+        ):
+            config = EtsyConfig.from_environment(config_path, local_env)
+
+        self.assertEqual(config.client_id, "local-key")
+        self.assertEqual(config.shared_secret, "local-secret")
+        self.assertEqual(config.access_token, "local-token")
+        self.assertEqual(config.shop_id, "321")
+        diagnostics = config.credential_diagnostics()
+        self.assertEqual(diagnostics["x_api_key_colon_count"], 1)
+        self.assertIn("ETSY_CLIENT_ID", diagnostics["normalized_credentials"])
+
+    def test_draft_service_successful_ping_allows_draft_creation(self) -> None:
+        config = EtsyConfig(
+            mode="live",
+            shop_id="shop",
+            client_id="keystring",
+            shared_secret="shared_secret",
+            access_token="token",
+            taxonomy_id=123,
+            api_base_url="https://example.test/v3/application",
+        )
+        calls = []
+
+        def fake_urlopen(api_request, timeout: int):  # type: ignore[no-untyped-def]
+            calls.append(api_request)
+            if api_request.full_url.endswith("/openapi-ping"):
+                return FakeResponse({"application_id": 1})
+            return FakeResponse({"listing_id": 987654})
+
+        result = EtsyDraftService(
+            config=config,
+            memory=self.memory,
+            client=EtsyClient(config=config, urlopen=fake_urlopen),
+        ).create_draft(
+            listing_package=make_listing_package(self.final_image_files),
+            seo_package=self.seo_package,
+        )
+
+        self.assertEqual(result.status, "DRAFT_CREATED")
+        self.assertEqual(len(calls), 2)
+        self.assertTrue(calls[0].full_url.endswith("/openapi-ping"))
+        self.assertIn("/shops/shop/listings", calls[1].full_url)
+        self.assertEqual(calls[0].headers["X-api-key"], "keystring:shared_secret")
+        self.assertEqual(calls[1].headers["X-api-key"], "keystring:shared_secret")
+        self.assertEqual(result.metadata["ping_status"], "SUCCESS")
+
+    def test_draft_service_failed_ping_blocks_before_listing_creation(self) -> None:
+        config = EtsyConfig(
+            mode="live",
+            shop_id="shop",
+            client_id="keystring",
+            shared_secret="shared_secret",
+            access_token="token",
+            taxonomy_id=123,
+            api_base_url="https://example.test/v3/application",
+        )
+        calls = []
+
+        def fake_urlopen(api_request, timeout: int):  # type: ignore[no-untyped-def]
+            calls.append(api_request)
+            raise HTTPError(
+                api_request.full_url,
+                403,
+                "Forbidden",
+                hdrs=None,
+                fp=BytesIO(b'{"error":"Invalid API credentials."}'),
+            )
+
+        result = EtsyDraftService(
+            config=config,
+            memory=self.memory,
+            client=EtsyClient(config=config, urlopen=fake_urlopen),
+        ).create_draft(
+            listing_package=make_listing_package(self.final_image_files),
+            seo_package=self.seo_package,
+        )
+
+        self.assertEqual(result.status, "ETSY_AUTHENTICATION_BLOCKED")
+        self.assertEqual(len(calls), 1)
+        self.assertTrue(calls[0].full_url.endswith("/openapi-ping"))
+        self.assertFalse(result.metadata["draft_api_called"])
+        self.assertIn("HTTP 403", result.errors[0])
+
+    def test_etsy_endpoints_use_centralized_header_builder(self) -> None:
+        config = EtsyConfig(
+            mode="live",
+            shop_id="shop",
+            client_id="keystring",
+            shared_secret="shared_secret",
+            access_token="token",
+            taxonomy_id=123,
+            api_base_url="https://example.test/v3/application",
+        )
+        image_path = Path(self.temp_dir.name) / "image.png"
+        Image.new("RGBA", (10, 10), (255, 0, 0, 255)).save(image_path)
+        calls = []
+
+        def fake_urlopen(api_request, timeout: int):  # type: ignore[no-untyped-def]
+            calls.append(api_request)
+            return FakeResponse({"results": [], "ok": True})
+
+        def fake_headers(config_arg: EtsyConfig, include_json: bool = False) -> dict[str, str]:
+            headers = {
+                "x-api-key": "central-key:central-secret",
+                "Authorization": "Bearer central-token",
+            }
+            if include_json:
+                headers["Content-Type"] = "application/json"
+            return headers
+
+        client = EtsyClient(config=config, urlopen=fake_urlopen)
+        with patch(
+            "project_aurora.integrations.etsy.etsy_client.build_etsy_auth_headers",
+            side_effect=fake_headers,
+        ) as builder:
+            client.get_json("/openapi-ping")
+            client.update_listing_fields("listing", {"title": "Title"})
+            client.upload_listing_image("listing", image_path, rank=1)
+            client.upload_listing_digital_file("listing", image_path, rank=1)
+
+        self.assertEqual(builder.call_count, 4)
+        self.assertTrue(all(call.headers["X-api-key"] == "central-key:central-secret" for call in calls))
 
     def test_live_client_updates_only_automatic_renewal_field(self) -> None:
         config = EtsyConfig(

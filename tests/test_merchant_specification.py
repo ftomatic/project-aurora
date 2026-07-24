@@ -23,6 +23,8 @@ from project_aurora.production.merchant_specification import (  # noqa: E402
     MerchantSpecificationQA,
     merchant_prompt_requirements,
 )
+from project_aurora.production.product_packager import ProductPackager  # noqa: E402
+from project_aurora.production import product_packager  # noqa: E402
 from project_aurora.prompt_factory.prompt_composer import PromptComposer  # noqa: E402
 
 
@@ -144,6 +146,81 @@ class MerchantSpecificationTest(unittest.TestCase):
         self.assertEqual(library.resolve("wall art").category, "Printable Wall Art")
         self.assertEqual(library.resolve("sticker sheet").category, "Stickers")
         self.assertEqual(library.resolve("party printable").category, "Party Printables")
+        self.assertEqual(
+            library.resolve("Victorian Botanical Journal Kit").category,
+            "Junk Journal Kits",
+        )
+        self.assertEqual(library.resolve("wedding planner").category, "Planner Products")
+
+    def test_junk_journal_and_planner_specs_do_not_require_zip_or_preview(self) -> None:
+        library = MerchantSpecificationLibrary()
+
+        journal = library.resolve("junk journal")
+        planner = library.resolve("Weekly Planner Pages")
+
+        self.assertEqual(journal.packaging, "NONE")
+        self.assertEqual(planner.packaging, "NONE")
+        self.assertEqual(journal.preview_requirements, ())
+        self.assertEqual(planner.preview_requirements, ())
+        self.assertLessEqual(journal.bundle_size, 20)
+        self.assertLessEqual(planner.bundle_size, 20)
+
+    def test_current_clipart_spec_accepts_four_resized_pngs_without_zip(self) -> None:
+        directory = self.base_path / "clipart_current"
+        directory.mkdir()
+        for index in range(1, 5):
+            _save_png(directory / f"clipart_{index:02d}.png", (4000, 4000), transparent=True)
+
+        result = MerchantSpecificationQA().validate("clipart", directory)
+
+        self.assertEqual(result.status, "PASS")
+        self.assertEqual(result.manifest.bundle_size, 4)
+        self.assertEqual(result.manifest.packaging, "NONE")
+        self.assertEqual(len(result.manifest.files), 4)
+
+    def test_current_clipart_spec_rejects_source_sized_pngs(self) -> None:
+        directory = self.base_path / "clipart_source_sized"
+        directory.mkdir()
+        for index in range(1, 5):
+            _save_png(directory / f"clipart_{index:02d}.png", (1024, 1024), transparent=True)
+
+        result = MerchantSpecificationQA().validate("clipart", directory)
+
+        self.assertEqual(result.status, "FAIL")
+        self.assertTrue(any("Longest edge must be at least 4000px" in error for error in result.errors))
+
+    def test_digital_paper_prompt_requirements_are_customer_files_not_previews(self) -> None:
+        requirements = merchant_prompt_requirements(
+            "digital paper",
+            "Sage Botanical Digital Paper",
+        ).casefold()
+
+        self.assertIn("one customer-ready digital paper file", requirements)
+        self.assertIn("single seamless", requirements)
+        self.assertIn("full-bleed", requirements)
+        self.assertIn("crisp high-resolution edges", requirements)
+        self.assertIn("no blur", requirements)
+        self.assertIn("one pattern per image", requirements)
+        self.assertIn("no text", requirements)
+        self.assertIn("no labels", requirements)
+        self.assertIn("no mockup", requirements)
+        self.assertIn("no layered paper sheets", requirements)
+        self.assertIn("no collage", requirements)
+        self.assertIn("no preview layout", requirements)
+        self.assertIn("no multiple patterns in one image", requirements)
+
+    def test_sticker_prompt_requirements_include_layout_template_constraints(self) -> None:
+        requirements = merchant_prompt_requirements(
+            "sticker sheet",
+            "Planner School Icons",
+        ).casefold()
+
+        self.assertIn("individual cuttable sticker elements", requirements)
+        self.assertIn("one sticker motif per customer file", requirements)
+        self.assertIn("transparent background", requirements)
+        self.assertIn("white kiss-cut outline", requirements)
+        self.assertIn("no overlapping objects", requirements)
+        self.assertIn("no page mockup", requirements)
 
     def test_valid_category_packages_pass(self) -> None:
         cases = (
@@ -212,6 +289,47 @@ class MerchantSpecificationTest(unittest.TestCase):
 
         self.assertEqual(result.status, "FAIL")
         self.assertTrue(any("ZIP package" in error for error in result.errors))
+
+    def test_product_packager_creates_required_digital_paper_zip(self) -> None:
+        directory = self.base_path / "package_digital_paper"
+        _digital_paper(directory)
+        for package in directory.glob("*.zip"):
+            package.unlink()
+
+        result = ProductPackager().package(
+            product_name="Winter Woodland Digital Paper",
+            category="digital paper",
+            product_dir=directory,
+        )
+
+        self.assertEqual(result.status, "SUCCESS")
+        package_path = Path(result.package_files[0])
+        self.assertTrue(package_path.exists())
+        with zipfile.ZipFile(package_path) as archive:
+            names = archive.namelist()
+        self.assertEqual(len(names), 12)
+        self.assertTrue(all(name.endswith(".jpg") for name in names))
+        self.assertFalse(any("preview" in name for name in names))
+
+    def test_product_packager_rejects_zip_over_etsy_limit(self) -> None:
+        directory = self.base_path / "oversized_digital_paper"
+        _digital_paper(directory)
+        for package in directory.glob("*.zip"):
+            package.unlink()
+
+        original_limit = product_packager.ETSY_MAX_DIGITAL_PACKAGE_SIZE_BYTES
+        product_packager.ETSY_MAX_DIGITAL_PACKAGE_SIZE_BYTES = 1
+        try:
+            result = ProductPackager().package(
+                product_name="Winter Woodland Digital Paper",
+                category="digital paper",
+                product_dir=directory,
+            )
+        finally:
+            product_packager.ETSY_MAX_DIGITAL_PACKAGE_SIZE_BYTES = original_limit
+
+        self.assertEqual(result.status, "FAILED")
+        self.assertTrue(any("20 MB" in error for error in result.errors))
 
     def test_merchant_preflight_blocks_spec_violation_before_etsy_upload(self) -> None:
         directory = self.base_path / "preflight_bad"

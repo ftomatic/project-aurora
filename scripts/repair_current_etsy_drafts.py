@@ -29,7 +29,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 def main(argv: list[str] | None = None) -> None:
     args = parse_args(argv)
     memory = MemoryManager(CSVStorage(base_path=PROJECT_ROOT / "data" / "aurora"))
-    config = EtsyConfig.from_environment(PROJECT_ROOT / "config" / "etsy.yaml")
+    config = EtsyConfig.from_environment(
+        PROJECT_ROOT / "config" / "etsy.yaml",
+        PROJECT_ROOT / "config" / "aurora.local.env",
+    )
     client = EtsyClient(config)
     try:
         report = build_repair_preview(memory, client)

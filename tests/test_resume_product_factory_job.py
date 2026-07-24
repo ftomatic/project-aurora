@@ -16,7 +16,14 @@ SRC_PATH = PROJECT_ROOT / "src"
 sys.path.insert(0, str(PROJECT_ROOT))
 sys.path.insert(0, str(SRC_PATH))
 
+from project_aurora.image_generation.commercial_image_exporter import (  # noqa: E402
+    WALL_ART_RATIOS,
+)
 from project_aurora.integrations.etsy.etsy_config import EtsyConfig  # noqa: E402
+from project_aurora.integrations.etsy.etsy_upload_manager import (  # noqa: E402
+    EtsyUploadManager,
+    EtsyUploadPolicy,
+)
 from project_aurora.planning.production_queue_manager import (  # noqa: E402
     COMPLETED,
     FAILED,
@@ -46,17 +53,20 @@ class FakeResumeEtsyClient:
         existing_images: tuple[dict[str, object], ...],
         existing_files: tuple[dict[str, object], ...] = (),
         fail_image_rank: int | None = None,
+        transient_image_failures: dict[int, int] | None = None,
         mutate_upload_state: bool = True,
     ) -> None:
         self.existing_images = list(existing_images)
         self.existing_files = list(existing_files)
         self.fail_image_rank = fail_image_rank
+        self.transient_image_failures = dict(transient_image_failures or {})
         self.mutate_upload_state = mutate_upload_state
         self.created_drafts = 0
         self.uploaded_images: list[tuple[str, str, int]] = []
         self.uploaded_files: list[tuple[str, str, int | None]] = []
         self.list_image_calls = 0
         self.list_file_calls = 0
+        self.image_attempt_counts: dict[int, int] = {}
 
     def list_listing_images(self, listing_id: str) -> tuple[dict[str, object], ...]:
         self.list_image_calls += 1
@@ -68,6 +78,11 @@ class FakeResumeEtsyClient:
         image_path: Path,
         rank: int,
     ) -> dict[str, object]:
+        self.image_attempt_counts[rank] = self.image_attempt_counts.get(rank, 0) + 1
+        remaining_transient_failures = self.transient_image_failures.get(rank, 0)
+        if remaining_transient_failures > 0:
+            self.transient_image_failures[rank] = remaining_transient_failures - 1
+            raise RuntimeError("Etsy API request failed: [Errno 32] Broken pipe")
         if rank == self.fail_image_rank:
             raise RuntimeError("image upload failed")
         self.uploaded_images.append((listing_id, image_path.name, rank))
@@ -158,10 +173,36 @@ class ResumeProductFactoryJobTest(unittest.TestCase):
     def write_final_images(self) -> None:
         self.final_dir.mkdir(parents=True)
         for index in range(1, 5):
-            Image.new("RGBA", (3600, 3600), (255, index, 0, 255)).save(
+            Image.new("RGBA", (4000, 4000), (255, index, 0, 255)).save(
                 self.final_dir / f"strawberry_birthday_party_printable_{index:02d}.png",
                 format="PNG",
                 dpi=(300, 300),
+            )
+
+    def write_wall_art_jpgs(self) -> None:
+        self.final_dir.mkdir(parents=True, exist_ok=True)
+        for path in self.final_dir.glob("*"):
+            path.unlink()
+        for index, (label, size) in enumerate(WALL_ART_RATIOS, start=1):
+            image = Image.new("RGB", size, (245, 245, 235))
+            pixels = image.load()
+            for x in range(0, size[0], 120):
+                for y in range(size[1]):
+                    color = (20 + index, 80, 120) if (x // 120) % 2 == 0 else (220, 180, 80)
+                    for offset in range(0, 18):
+                        if x + offset < size[0]:
+                            pixels[x + offset, y] = color
+            for y in range(0, size[1], 120):
+                for x in range(size[0]):
+                    color = (20 + index, 80, 120) if (y // 120) % 2 == 0 else (220, 180, 80)
+                    for offset in range(0, 18):
+                        if y + offset < size[1]:
+                            pixels[x, y + offset] = color
+            image.save(
+                self.final_dir / f"printable_wall_art_{label}.jpg",
+                format="JPEG",
+                dpi=(300, 300),
+                quality=95,
             )
 
     def save_failed_report(self) -> None:
@@ -273,6 +314,40 @@ class ResumeProductFactoryJobTest(unittest.TestCase):
         self.assertEqual(saved["downloads"], 4)
         self.assertEqual(saved["metadata"]["listing_image_upload"]["status"], "SUCCESS")
 
+    def test_resume_retries_transient_listing_image_broken_pipe(self) -> None:
+        client = FakeResumeEtsyClient(
+            existing_images=(
+                {"rank": 1, "filename": "strawberry_birthday_party_printable_01.png"},
+                {"rank": 2, "filename": "strawberry_birthday_party_printable_02.png"},
+                {"rank": 3, "filename": "strawberry_birthday_party_printable_03.png"},
+            ),
+            transient_image_failures={4: 1},
+        )
+
+        def no_sleep_manager(memory: MemoryManager | None = None) -> EtsyUploadManager:
+            return EtsyUploadManager(
+                memory=memory,
+                policy=EtsyUploadPolicy(backoff_seconds=(0, 0, 0)),
+                sleeper=lambda _seconds: None,
+            )
+
+        with patch("scripts.resume_product_factory_job.EtsyUploadManager", no_sleep_manager):
+            result = self.service(client).resume(JOB_ID)
+
+        self.assertEqual(result.final_status, "COMPLETED")
+        self.assertEqual(result.images_uploaded_now, 1)
+        self.assertEqual(client.image_attempt_counts[4], 2)
+        self.assertEqual(
+            client.uploaded_images,
+            [
+                (
+                    LISTING_ID,
+                    "strawberry_birthday_party_printable_04.png",
+                    4,
+                )
+            ],
+        )
+
     def test_resume_skips_all_existing_images(self) -> None:
         client = FakeResumeEtsyClient(
             existing_images=tuple(
@@ -362,6 +437,28 @@ class ResumeProductFactoryJobTest(unittest.TestCase):
         self.assertIn("HTTP 404", rendered)
         self.assertNotIn("Traceback", rendered)
 
+    def test_cli_accepts_live_flag(self) -> None:
+        class FailingResumeService:
+            def __init__(self, **kwargs: object) -> None:
+                pass
+
+            def resume(self, job_id: str) -> object:
+                raise RuntimeError("stop before live call")
+
+        with patch(
+            "scripts.resume_product_factory_job.ProductFactoryResumeService",
+            FailingResumeService,
+        ), patch(
+            "scripts.resume_product_factory_job.MemoryManager",
+        ), patch(
+            "scripts.resume_product_factory_job.ProductionQueueManager",
+        ), patch(
+            "scripts.resume_product_factory_job.EtsyConfig.from_environment",
+            return_value=self.config,
+        ), patch("sys.stdout", new_callable=StringIO):
+            with self.assertRaises(SystemExit):
+                main(["--job-id", JOB_ID, "--live"])
+
     def test_resume_supports_all_factory_failed_stages(self) -> None:
         stages = (
             "image_generation",
@@ -444,6 +541,38 @@ class ResumeProductFactoryJobTest(unittest.TestCase):
         self.assertEqual(result.digital_files_present_after, 4)
         self.assertEqual(len(client.uploaded_files), 2)
         self.assertEqual([item[2] for item in client.uploaded_files], [3, 4])
+
+    def test_resume_customer_download_upload_supports_wall_art_jpgs(self) -> None:
+        self.write_wall_art_jpgs()
+        self.save_failed_report_for_stage("customer_download_upload", draft_id=LISTING_ID)
+        client = FakeResumeEtsyClient(
+            existing_images=(),
+            existing_files=tuple(
+                {
+                    "rank": index,
+                    "filename": f"printable_wall_art_{label}.jpg",
+                    "listing_file_id": f"file-{index}",
+                }
+                for index, (label, _size) in enumerate(WALL_ART_RATIOS, start=1)
+                if label != "11x14"
+            ),
+        )
+
+        result = self.service(client).resume(JOB_ID)
+
+        self.assertEqual(result.resumed_from_stage, "customer_download_upload")
+        self.assertEqual(result.final_status, "COMPLETED")
+        self.assertEqual(result.downloads_uploaded, 1)
+        self.assertEqual(result.digital_files_present_after, 5)
+        self.assertEqual(result.images_present_after, 5)
+        self.assertEqual(
+            client.uploaded_files,
+            [(LISTING_ID, "printable_wall_art_11x14.jpg", 1)],
+        )
+        saved = self.memory.load_record(REPORT_COLLECTION, JOB_ID)
+        self.assertTrue(saved["success"])
+        self.assertEqual(saved["images"], 5)
+        self.assertEqual(saved["downloads"], 5)
 
 
 if __name__ == "__main__":

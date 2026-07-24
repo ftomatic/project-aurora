@@ -30,6 +30,7 @@ class ImageProviderConfig:
     prompt_version: str = "v1"
     rate_limit_max_retries: int = 3
     rate_limit_safety_seconds: float = 3.0
+    openai_api_key: str | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "quality", validate_image_quality(self.quality))
@@ -100,6 +101,7 @@ class ProviderRegistry:
                 ),
                 OpenAIImageProvider(
                     output_dir=output_dir,
+                    api_key=resolved_config.openai_api_key,
                     model=resolved_config.model,
                     client=openai_client,
                     rate_limit_config=resolved_config.openai_rate_limit_config(),

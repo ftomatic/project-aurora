@@ -11,7 +11,7 @@ FREE COMMERCIAL LICENSE
 EACH IMAGE SIZE:
 12" × 12"
 300 DPI
-3600 × 3600 pixels"""
+4000 × 4000 pixels"""
 
 DOWNLOAD_DISCLAIMER_SECTION = """After purchase, access your files by visiting:
 Etsy Profile > Purchases and Reviews
@@ -96,6 +96,20 @@ Perfect for:
                 "scrapbook accents",
                 "digital planning projects",
             )
+        elif "dark" in lowered or "moody" in lowered or "academia" in lowered:
+            gothic_use = (
+                "gothic alphabet posters"
+                if "alphabet" in lowered
+                else "gothic printable displays"
+            )
+            uses = (
+                "dark academia gallery walls",
+                "library and study decor",
+                "moody office wall art",
+                gothic_use,
+                "vintage-inspired printable displays",
+                "bookish home decor",
+            )
         elif "nursery" in lowered or "wall art" in lowered or "print" in lowered:
             uses = (
                 "nursery wall art",
@@ -104,6 +118,15 @@ Perfect for:
                 "baby shower gifts",
                 "framed printable art",
                 "seasonal home decor",
+            )
+        elif "illustration collection" in lowered or "digital illustration" in lowered:
+            uses = (
+                "commercial craft projects",
+                "scrapbook pages",
+                "cards and tags",
+                "small business product designs",
+                "mugs and tumblers",
+                "mixed-media projects",
             )
         elif "clipart" in lowered or "animal" in lowered or "woodland" in lowered:
             uses = (
@@ -146,6 +169,8 @@ Perfect for:
 
 def _search_phrase(product_name: str, product_type: str) -> str:
     lowered = f"{product_name} {product_type}".casefold()
+    if "alphabet" in lowered and ("dark" in lowered or "moody" in lowered or "academia" in lowered):
+        return "dark academia alphabet wall art, gothic letter posters, and moody printable decor"
     if "alphabet" in lowered or "classroom" in lowered:
         return "classroom alphabet wall art and teacher printable decor"
     if "bridal shower" in lowered or "wedding" in lowered or "invitation" in lowered:
@@ -154,6 +179,8 @@ def _search_phrase(product_name: str, product_type: str) -> str:
         return "printable sticker sheets and planner sticker downloads"
     if "nursery" in lowered or "baby" in lowered:
         return "nursery wall art, baby room decor, and printable kids room art"
+    if "illustration collection" in lowered or "digital illustration" in lowered:
+        return "4 PNG illustrations, printable digital art, and commercial craft graphics"
     if "dark academia" in lowered:
         return "dark academia printable art and moody vintage wall decor"
     if "mushroom" in lowered or "clipart" in lowered:
@@ -173,6 +200,8 @@ def _style_phrase(product_name: str, product_type: str) -> str:
         return "neutral boho"
     if "dark academia" in lowered:
         return "moody vintage academic"
+    if "alphabet" in lowered and ("dark" in lowered or "moody" in lowered):
+        return "moody vintage academic"
     if "strawberry" in lowered:
         return "cute summer berry"
     if "wildflower" in lowered or "wedding" in lowered:
@@ -183,4 +212,6 @@ def _style_phrase(product_name: str, product_type: str) -> str:
         return "fresh spring garden"
     if "autumn" in lowered or "mushroom" in lowered:
         return "cozy woodland"
+    if "illustration collection" in lowered or "digital illustration" in lowered:
+        return "coordinated handmade illustration"
     return "polished commercial"

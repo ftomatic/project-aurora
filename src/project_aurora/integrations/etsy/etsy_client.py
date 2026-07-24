@@ -10,6 +10,7 @@ from typing import Any, Callable
 from urllib import request
 from urllib.error import HTTPError, URLError
 
+from project_aurora.integrations.etsy.etsy_auth import build_etsy_auth_headers
 from project_aurora.integrations.etsy.etsy_config import EtsyConfig
 from project_aurora.integrations.etsy.etsy_listing_mapper import (
     EtsyDraftListingPayload,
@@ -39,6 +40,10 @@ class EtsyClient:
     def get_json(self, path: str) -> dict[str, Any]:
         """Execute an authenticated Etsy Open API v3 GET request."""
         return self._request_json(path=path, method="GET")
+
+    def ping(self) -> dict[str, Any]:
+        """Check Etsy Open API connectivity with the configured auth headers."""
+        return self.get_json("/openapi-ping")
 
     def upload_listing_image(
         self,
@@ -297,7 +302,10 @@ class EtsyClient:
         result = manager.refresh_if_needed(force=True)
         if not result.refreshed:
             return False
-        self._config = EtsyConfig.from_environment(DEFAULT_ETSY_CONFIG_PATH)
+        self._config = EtsyConfig.from_environment(
+            DEFAULT_ETSY_CONFIG_PATH,
+            DEFAULT_LOCAL_CREDENTIAL_PATH,
+        )
         return True
 
     def _clone_request(self, api_request: request.Request) -> request.Request:
@@ -319,22 +327,7 @@ class EtsyClient:
         return f"{base_url}{normalized_path}"
 
     def _build_headers(self, include_json: bool = False) -> dict[str, str]:
-        if not self._config.client_id:
-            raise RuntimeError("ETSY_CLIENT_ID is required.")
-        if not self._config.shared_secret:
-            raise RuntimeError("ETSY_SHARED_SECRET is required.")
-        if not self._config.access_token:
-            raise RuntimeError("ETSY_ACCESS_TOKEN is required.")
-
-        headers = {
-            "x-api-key": (
-                f"{self._config.client_id}:{self._config.shared_secret}"
-            ),
-            "Authorization": f"Bearer {self._config.access_token}",
-        }
-        if include_json:
-            headers["Content-Type"] = "application/json"
-        return headers
+        return build_etsy_auth_headers(self._config, include_json=include_json)
 
     def _build_multipart_body(
         self,

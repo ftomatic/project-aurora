@@ -22,6 +22,12 @@ class TitleBuilder:
             title_parts.extend(("Party Printable Bundle", "Digital Party Download"))
             if "strawberry" in product_lower:
                 title_parts.append("Berry Birthday Printable")
+        elif (
+            "illustration collection" in type_lower
+            or "digital illustration" in type_lower
+            or "illustration set" in product_lower
+        ):
+            title_parts.extend(("4 PNG Illustrations", "Digital Art Download"))
         elif "clipart" in product_lower or "clipart" in type_lower:
             title_parts.extend(("PNG Clipart Bundle", "Commercial Use Graphics"))
         elif "sticker" in product_lower or "sticker" in type_lower:

@@ -136,7 +136,7 @@ class MerchantSpecificationQA:
                 f"{spec.category} requires at least {spec.bundle_size} "
                 f"{'/'.join(spec.file_formats)} files, found {len(files)}."
             )
-        if not previews:
+        if spec.preview_requirements and not previews:
             errors.append(f"{spec.category} requires {', '.join(spec.preview_requirements)}.")
         if spec.packaging == "ZIP" and not packages:
             errors.append(f"{spec.category} requires a ZIP package.")
@@ -192,6 +192,30 @@ def merchant_prompt_requirements(category: str, product_name: str = "") -> str:
     ]
     if spec.pixel_dimensions:
         parts.append(f"Pixel dimensions: {spec.pixel_dimensions[0]}x{spec.pixel_dimensions[1]} px")
+    if spec.category == "Digital Paper":
+        parts.append(
+            "Generate one customer-ready digital paper file only: a single seamless, "
+            "tileable, full-bleed 12x12 inch scrapbook paper pattern that fills the "
+            "entire square canvas. Crisp high-resolution edges, sharp printable detail, "
+            "no blur, no soft focus. One pattern per image. No text, no labels, no "
+            "product title, no typography, no mockup, no layered paper sheets, no "
+            "paper stack, no collage, no preview layout, no ribbon band, no frame, "
+            "and no multiple patterns in one image."
+        )
+    if spec.category == "Printable Wall Art":
+        parts.append(
+            "Generate the purchased artwork itself, not a listing mockup. "
+            "Single complete printable art composition, centered with generous safe margins. "
+            "No picture frames, no room scene, no gallery wall collage, no cropped objects, "
+            "no artwork cut off by the canvas edge."
+        )
+    if spec.category == "Stickers":
+        parts.append(
+            "Generate individual cuttable sticker elements for a sticker sheet. "
+            "One sticker motif per customer file, transparent background, clean white "
+            "kiss-cut outline, generous spacing, no overlapping objects, no page mockup, "
+            "no text unless the product name explicitly requires readable sticker text."
+        )
     if "seamless" in spec.qa_requirements:
         parts.append("Must be seamless and tileable.")
     if spec.transparent:
@@ -203,8 +227,14 @@ def merchant_prompt_requirements(category: str, product_name: str = "") -> str:
 
 def _category_key(value: str) -> str:
     lowered = value.casefold()
+    if "digital illustration collection" in lowered or "illustration collection" in lowered:
+        return "digital illustration collection"
     if "digital paper" in lowered or "pattern" in lowered:
         return "digital paper"
+    if "junk journal" in lowered or "journal kit" in lowered or "digital journal" in lowered:
+        return "junk journal kits"
+    if "planner" in lowered and "sheet" not in lowered:
+        return "planner products"
     if "clipart" in lowered or "clip art" in lowered:
         return "clipart"
     if "sticker" in lowered:
@@ -335,13 +365,27 @@ _SPECIFICATIONS: dict[str, MerchantSpecification] = {
         pixel_dimensions=None,
         dpi=300,
         file_formats=("PNG",),
-        bundle_size=20,
-        preview_requirements=("grid preview",),
-        packaging="ZIP",
+        bundle_size=4,
+        preview_requirements=(),
+        packaging="NONE",
         thumbnail_rules=("show all individual elements on grid",),
         etsy_expectations=("transparent PNG", "commercial-use friendly"),
         qa_requirements=("transparent", "individual assets", "commercial quality"),
         transparent=True,
+        minimum_longest_edge=4000,
+    ),
+    "digital illustration collection": MerchantSpecification(
+        category="Digital Illustration Collection",
+        physical_dimensions="square digital illustration artwork",
+        pixel_dimensions=(4000, 4000),
+        dpi=300,
+        file_formats=("PNG",),
+        bundle_size=4,
+        preview_requirements=(),
+        packaging="NONE",
+        thumbnail_rules=("show all four illustrations clearly",),
+        etsy_expectations=("digital download", "4 PNG files", "commercial quality"),
+        qa_requirements=("300 DPI", "commercial quality", "nonblank"),
         minimum_longest_edge=4000,
     ),
     "printable wall art": MerchantSpecification(
@@ -352,7 +396,7 @@ _SPECIFICATIONS: dict[str, MerchantSpecification] = {
         file_formats=("JPG",),
         bundle_size=5,
         preview_requirements=("lifestyle mockup",),
-        packaging="ZIP",
+        packaging="NONE",
         thumbnail_rules=("show finished wall art mockup",),
         etsy_expectations=("multiple ratios", "print-ready JPG"),
         qa_requirements=("correct ratios", "300 DPI", "JPG"),
@@ -384,5 +428,31 @@ _SPECIFICATIONS: dict[str, MerchantSpecification] = {
         thumbnail_rules=("show printable pages clearly",),
         etsy_expectations=("letter size", "safe zones", "print margins"),
         qa_requirements=("letter size", "300 DPI", "print margins respected"),
+    ),
+    "planner products": MerchantSpecification(
+        category="Planner Products",
+        physical_dimensions="square digital planner artwork",
+        pixel_dimensions=(4000, 4000),
+        dpi=300,
+        file_formats=("PNG",),
+        bundle_size=4,
+        preview_requirements=(),
+        packaging="NONE",
+        thumbnail_rules=("show finished planner artwork clearly",),
+        etsy_expectations=("digital download", "commercial quality", "printable"),
+        qa_requirements=("300 DPI", "commercial quality", "nonblank"),
+    ),
+    "junk journal kits": MerchantSpecification(
+        category="Junk Journal Kits",
+        physical_dimensions="square digital journal artwork",
+        pixel_dimensions=(4000, 4000),
+        dpi=300,
+        file_formats=("PNG",),
+        bundle_size=4,
+        preview_requirements=(),
+        packaging="NONE",
+        thumbnail_rules=("show cohesive journal artwork clearly",),
+        etsy_expectations=("digital download", "commercial quality", "printable"),
+        qa_requirements=("300 DPI", "commercial quality", "nonblank"),
     ),
 }

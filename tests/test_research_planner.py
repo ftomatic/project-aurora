@@ -16,6 +16,9 @@ sys.path.insert(0, str(SRC_PATH))
 sys.path.insert(0, str(PROJECT_ROOT))
 
 from project_aurora.planning.production_queue_manager import (  # noqa: E402
+    FAILED,
+    NEEDS_ASSETS,
+    READY,
     ProductionQueueManager,
 )
 from project_aurora.portfolio.atlas_portfolio_manager import (  # noqa: E402
@@ -261,7 +264,36 @@ class ResearchPlannerTest(unittest.TestCase):
 
         self.assertEqual(created, 5)
         self.assertEqual(len(self.queue.list_jobs()), 5)
-        self.assertTrue(all(job.status == "READY" for job in self.queue.list_jobs()))
+        for job in self.queue.list_jobs():
+            self.assertEqual(job.status, READY)
+
+    def test_handoff_reactivates_existing_failed_transformed_jobs(self) -> None:
+        opportunities = (
+            opportunity(
+                1,
+                product_type="digital paper",
+                niche="Woodland",
+                style="Storybook Watercolor",
+            ),
+        )
+        plan = AtlasPortfolioManager(
+            config=self.config(daily_products=1, minimum_portfolio_size=1),
+            queue_manager=self.queue,
+            memory=self.memory,
+        ).build_portfolio(opportunities)
+        created = handoff_to_forge(plan, self.queue)
+        self.assertEqual(created, 1)
+        existing = self.queue.next_ready_job()
+        self.assertIsNotNone(existing)
+        assert existing is not None
+        self.queue.mark_failed(existing.id)
+
+        with redirect_stdout(StringIO()) as output:
+            requeued = handoff_to_forge(plan, self.queue)
+
+        self.assertEqual(requeued, 1)
+        self.assertEqual(self.queue.next_ready_job().status, READY)  # type: ignore[union-attr]
+        self.assertIn("Existing FAILED job reactivated to READY", output.getvalue())
 
     def test_four_selected_with_confidence_pass_uses_replacement_search(self) -> None:
         opportunities = (

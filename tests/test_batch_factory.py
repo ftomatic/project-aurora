@@ -30,6 +30,8 @@ from scripts.run_batch_factory import (  # noqa: E402
     BatchProductionFactory,
     BatchRuntimeConfig,
     _build_batch_report,
+    _run_live_batch,
+    load_openai_api_key,
     load_batch_runtime_config,
     parse_args,
     print_batch_report,
@@ -465,6 +467,78 @@ class BatchFactoryTest(unittest.TestCase):
                 openai_rate_limit_safety_seconds=5,
             ),
         )
+
+    def test_load_openai_api_key_reads_local_env_file(self) -> None:
+        path = self.base_path / "aurora.local.env"
+        path.write_text(
+            "\n".join(
+                (
+                    "ETSY_SHOP_ID=123",
+                    "OPENAI_API_KEY=local-openai-key",
+                )
+            ),
+            encoding="utf-8",
+        )
+
+        self.assertEqual(load_openai_api_key(path), "local-openai-key")
+
+    def test_live_batch_uses_local_openai_key_over_shell_environment(self) -> None:
+        queue_path = self.base_path / "queue.json"
+        local_env_path = self.base_path / "aurora.local.env"
+        daily_config_path = self.base_path / "daily_factory.yaml"
+        queue = ProductionQueueManager(queue_path=queue_path)
+        queue.add_existing_job(make_job(1))
+        local_env_path.write_text(
+            "OPENAI_API_KEY=local-openai-key\n",
+            encoding="utf-8",
+        )
+        captured_keys: list[str | None] = []
+
+        class FakeProductFactory:
+            def __init__(self, **kwargs: object) -> None:
+                self._queue_manager = kwargs["queue_manager"]
+                stage_runner = kwargs["stage_runner"]
+                captured_keys.append(stage_runner._image_config.openai_api_key)
+
+            def execute(self, job: ProductionJob) -> ProductionReport:
+                self._queue_manager.mark_completed(job.id)
+                return ProductionReport(
+                    job_id=job.id,
+                    product=job.product_name,
+                    style=job.style,
+                    draft_id="draft-1",
+                    images=4,
+                    downloads=4,
+                    time=1.0,
+                    success=True,
+                )
+
+        with patch("scripts.run_batch_factory.REAL_QUEUE_PATH", queue_path), patch(
+            "scripts.run_batch_factory.LOCAL_ENV_PATH",
+            local_env_path,
+        ), patch(
+            "scripts.run_batch_factory.DAILY_FACTORY_CONFIG_PATH",
+            daily_config_path,
+        ), patch(
+            "scripts.run_batch_factory.EtsyConfig.from_environment",
+            return_value=SimpleNamespace(),
+        ), patch(
+            "scripts.run_batch_factory.print_etsy_config_diagnostics",
+        ), patch(
+            "scripts.run_batch_factory.ProductFactory",
+            FakeProductFactory,
+        ), patch.dict(
+            "os.environ",
+            {"OPENAI_API_KEY": "shell-openai-key"},
+        ), patch(
+            "sys.stdout",
+            new_callable=StringIO,
+        ) as output:
+            report = _run_live_batch(count=1)
+
+        self.assertEqual(captured_keys, ["local-openai-key"])
+        self.assertEqual(report.completed, 1)
+        self.assertIn("OpenAI API Key Loaded: YES", output.getvalue())
 
 
 if __name__ == "__main__":

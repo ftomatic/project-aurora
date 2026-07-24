@@ -35,7 +35,10 @@ def main() -> None:
     memory = MemoryManager(
         storage=CSVStorage(base_path=PROJECT_ROOT / "data" / "aurora")
     )
-    config = EtsyConfig.from_file(PROJECT_ROOT / "config" / "etsy.yaml")
+    config = EtsyConfig.from_environment(
+        PROJECT_ROOT / "config" / "etsy.yaml",
+        PROJECT_ROOT / "config" / "aurora.local.env",
+    )
     if not confirm_live_creation(config):
         print("COMPLETE ETSY DRAFT")
         print("")

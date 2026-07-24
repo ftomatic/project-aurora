@@ -97,6 +97,19 @@ class MuseTest(unittest.TestCase):
         self.assertNotEqual(teacher.recommended_style, "Coastal Watercolor")
         self.assertNotEqual(wedding.recommended_style, "Coastal Watercolor")
 
+    def test_neutral_boho_wall_art_does_not_receive_coastal_mockup_direction(self) -> None:
+        direction = self.engine.select_style(
+            product="Neutral Boho Wall Art",
+            audience="home decor buyers",
+            season="Evergreen",
+            product_type="wall art",
+        )
+
+        self.assertEqual(direction.category, "boho wall art")
+        self.assertNotEqual(direction.recommended_style, "Coastal Watercolor")
+        self.assertNotIn("mockup", direction.composition.casefold())
+        self.assertIn("safe margins", direction.composition.casefold())
+
     def test_different_products_choose_different_styles(self) -> None:
         chosen: list[str] = []
         for product, audience, season, competition, product_type in PRODUCTS:
@@ -147,6 +160,9 @@ class MuseTest(unittest.TestCase):
 
         self.assertIn("isolated", clipart.composition)
         self.assertIn("seamless pattern", paper.composition)
+        self.assertIn("one pattern only", paper.composition)
+        self.assertIn("no text", paper.composition.casefold())
+        self.assertIn("no labels", paper.composition.casefold())
         self.assertIn("invitation", invitation.composition)
         self.assertIn("cuttable", sticker.composition)
 
@@ -226,6 +242,62 @@ class MuseTest(unittest.TestCase):
         self.assertIn(f"Mood: {direction.mood}", recipe.final_prompt)
         for constraint in direction.negative_style_constraints:
             self.assertIn(constraint, recipe.final_prompt)
+
+    def test_wall_art_prompt_rejects_mockups_and_cropped_edges(self) -> None:
+        recipe = PromptComposer(memory=self.memory).compose_art_directed(
+            product="Neutral Boho Wall Art",
+            style="Editorial Minimal",
+            palette="ivory, linen, taupe",
+            rendering_method="minimal editorial",
+            composition="complete centered printable artwork with safe margins",
+            mood="calm neutral home decor",
+            category="wall art",
+        )
+
+        lowered_prompt = recipe.final_prompt.casefold()
+        lowered_negative = recipe.negative_prompt.casefold()
+        self.assertIn("generate the purchased artwork itself", lowered_prompt)
+        self.assertIn("no picture frames", lowered_prompt)
+        self.assertIn("no gallery wall collage", lowered_prompt)
+        self.assertIn("no framed room mockup", lowered_negative)
+        self.assertIn("no cropped artwork edges", lowered_negative)
+
+    def test_digital_paper_prompt_rejects_preview_label_and_multi_pattern_layouts(self) -> None:
+        direction = self.engine.select_style(
+            product="Sage Botanical Digital Paper",
+            audience="scrapbookers",
+            season="Evergreen",
+            product_type="digital paper",
+        )
+        recipe = PromptComposer(memory=self.memory).compose_art_directed(
+            product="Sage Botanical Digital Paper",
+            style=direction.recommended_style,
+            palette=direction.palette,
+            rendering_method=direction.rendering_method,
+            composition=direction.composition,
+            mood=direction.mood,
+            background_treatment=direction.background_treatment,
+            lighting=direction.lighting,
+            texture=direction.texture,
+            typography_direction=direction.typography_direction,
+            negative_style_constraints=direction.negative_style_constraints,
+            category="digital paper",
+        )
+
+        lowered_prompt = recipe.final_prompt.casefold()
+        lowered_negative = recipe.negative_prompt.casefold()
+        self.assertIn("one customer-ready digital paper file", lowered_prompt)
+        self.assertIn("single seamless", lowered_prompt)
+        self.assertIn("full-bleed", lowered_prompt)
+        self.assertIn("one pattern per image", lowered_prompt)
+        self.assertIn("no text", lowered_negative)
+        self.assertIn("no labels", lowered_negative)
+        self.assertIn("no product title", lowered_negative)
+        self.assertIn("no mockup", lowered_negative)
+        self.assertIn("no layered paper sheets", lowered_negative)
+        self.assertIn("no collage", lowered_negative)
+        self.assertIn("no preview layout", lowered_negative)
+        self.assertIn("no multiple patterns in one image", lowered_negative)
 
     def test_style_memory_updates(self) -> None:
         direction = self.engine.select_style(

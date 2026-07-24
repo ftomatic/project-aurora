@@ -8,8 +8,10 @@ import sys
 import tempfile
 import unittest
 from datetime import datetime
+from io import BytesIO
 from pathlib import Path
 from types import SimpleNamespace
+from urllib.error import HTTPError
 from unittest.mock import patch
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -184,6 +186,76 @@ class Sprint22DailyFactoryTest(unittest.TestCase):
 
         self.assertTrue(result.refreshed)
         self.assertEqual(len(calls), 1)
+
+    def test_token_refresh_http_error_is_returned_not_raised(self) -> None:
+        def fake_urlopen(api_request, timeout: int):  # type: ignore[no-untyped-def]
+            raise HTTPError(
+                url="https://api.etsy.com/v3/public/oauth/token",
+                code=403,
+                msg="Forbidden",
+                hdrs=None,
+                fp=BytesIO(b'{"error":"invalid_client"}'),
+            )
+
+        with patch.dict(
+            os.environ,
+            {
+                "ETSY_CLIENT_ID": "client",
+                "ETSY_REFRESH_TOKEN": "refresh",
+            },
+            clear=True,
+        ):
+            result = EtsyTokenManager(
+                credential_path=self.base_path / "aurora.local.env",
+                urlopen=fake_urlopen,
+            ).refresh_if_needed(force=True)
+
+        self.assertEqual(result.status, "FAILED")
+        self.assertFalse(result.refreshed)
+        self.assertIn("HTTP 403", result.message)
+        self.assertIn("invalid_client", result.message)
+
+    def test_token_refresh_uses_local_env_when_shell_is_empty(self) -> None:
+        env_path = self.base_path / "aurora.local.env"
+        env_path.write_text(
+            "\n".join(
+                (
+                    "ETSY_CLIENT_ID=local-client",
+                    "ETSY_SHARED_SECRET=local-secret",
+                    "ETSY_ACCESS_TOKEN=expired-access",
+                    "ETSY_REFRESH_TOKEN=local-refresh",
+                    "ETSY_SHOP_ID=shop-123",
+                )
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        bodies: list[str] = []
+
+        def fake_urlopen(api_request, timeout: int):  # type: ignore[no-untyped-def]
+            bodies.append(api_request.data.decode("utf-8"))
+            return FakeResponse(
+                {
+                    "access_token": "new-access",
+                    "refresh_token": "new-refresh",
+                    "expires_in": 3600,
+                }
+            )
+
+        with patch.dict(os.environ, {}, clear=True):
+            result = EtsyTokenManager(
+                credential_path=env_path,
+                urlopen=fake_urlopen,
+            ).refresh_if_needed(force=True)
+
+        self.assertTrue(result.refreshed)
+        self.assertIn("client_id=local-client", bodies[0])
+        self.assertIn("refresh_token=local-refresh", bodies[0])
+        saved = env_path.read_text(encoding="utf-8")
+        self.assertIn("ETSY_ACCESS_TOKEN=new-access", saved)
+        self.assertIn("ETSY_REFRESH_TOKEN=new-refresh", saved)
+        self.assertIn("ETSY_SHARED_SECRET=local-secret", saved)
+        self.assertIn("ETSY_SHOP_ID=shop-123", saved)
 
     def test_scheduler_script_generation_and_lock_behavior(self) -> None:
         runner = (PROJECT_ROOT / "scripts" / "run_daily_factory_scheduled.sh").read_text(

@@ -54,6 +54,7 @@ class SEOEngine:
             product_name,
             product_type,
             target_buyer,
+            style=style,
         )
         title = self._title_builder.build_title(
             product_name,
@@ -131,6 +132,8 @@ class SEOEngine:
             theme = "moody vintage academic"
         elif "sticker" in lowered or "planner" in lowered:
             theme = "organized planner"
+        elif "illustration collection" in lowered or "digital illustration" in lowered:
+            theme = "coordinated digital illustration"
         elif "paper" in lowered:
             theme = "coordinated patterned"
         elif "birthday" in lowered or "party" in lowered:
