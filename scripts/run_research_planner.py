@@ -16,7 +16,7 @@ from project_aurora.image_generation.image_cost_estimator import (  # noqa: E402
     ImageCostEstimate,
     ImageCostEstimator,
 )
-from project_aurora.brand_profile import score_brand_fit  # noqa: E402
+from project_aurora.brand_profile import load_brand_profile, score_brand_fit  # noqa: E402
 from project_aurora.image_generation.provider_registry import (  # noqa: E402
     ImageProviderConfig,
 )
@@ -66,8 +66,12 @@ def main(argv: list[str] | None = None) -> None:
         for status in research.provider_statuses
     )
     atlas = AtlasPortfolioManager(config=config, queue_manager=queue_manager)
+    brand_candidates = build_brand_profile_portfolio_candidates(
+        research.opportunities,
+        target_count=max(config.daily_products * 2, 10),
+    )
     plan = atlas.build_portfolio(
-        research.opportunities + recovery_watercolor_opportunities(),
+        brand_candidates,
         provider_status=provider_status,
     )
     atlas.save_report(plan)
@@ -184,6 +188,177 @@ def recovery_watercolor_opportunities() -> tuple[MarketOpportunity, ...]:
     )
 
 
+def build_brand_profile_portfolio_candidates(
+    research_opportunities: tuple[MarketOpportunity, ...],
+    *,
+    target_count: int = 10,
+) -> tuple[MarketOpportunity, ...]:
+    """Build Atlas input from RainbowMilkStudio brand-fit opportunities."""
+    profile = load_brand_profile()
+    pool = _dedupe_opportunities(
+        research_opportunities
+        + brand_profile_opportunities(profile)
+        + recovery_watercolor_opportunities()
+    )
+    accepted: list[MarketOpportunity] = []
+    filtered: list[tuple[MarketOpportunity, str]] = []
+    for opportunity in pool:
+        scope = resolve_watercolor_scope(
+            opportunity.keyword,
+            opportunity.product_type,
+            opportunity.recommended_artistic_style,
+        )
+        if not scope.supported:
+            filtered.append((opportunity, scope.reason))
+            continue
+        brand_score = score_brand_fit(
+            opportunity.keyword,
+            opportunity.product_type,
+            opportunity.recommended_artistic_style,
+            profile=profile,
+        )
+        if not brand_score.accepted:
+            filtered.append(
+                (
+                    opportunity,
+                    f"{brand_score.reason} Brand score {brand_score.score}.",
+                )
+            )
+            continue
+        accepted.append(_with_canonical_scope(opportunity, scope.canonical_product_type))
+    accepted = sorted(
+        accepted,
+        key=lambda item: (
+            -score_brand_fit(
+                item.keyword,
+                item.product_type,
+                item.recommended_artistic_style,
+                profile=profile,
+            ).score,
+            -item.confidence,
+            -item.trend_score,
+            item.keyword.casefold(),
+        ),
+    )
+    print_brand_candidate_diagnostics(accepted, filtered)
+    return tuple(accepted[:target_count])
+
+
+def brand_profile_opportunities(profile: dict[str, object]) -> tuple[MarketOpportunity, ...]:
+    """Create fresh product ideas from the persisted RainbowMilkStudio brand profile."""
+    animals = _profile_terms(profile, "popular_animals")
+    themes = _profile_terms(profile, "popular_themes")
+    pairings = (
+        (animals[0], themes[0], "signature_storybook_animal_collection", "Whimsical Storybook"),
+        (animals[1], themes[1], "watercolor_animal_collection", "Storybook Watercolor"),
+        (animals[2], themes[2], "watercolor_woodland_collection", "Loose Watercolor"),
+        (animals[3], themes[3], "watercolor_animal_collection", "Cottagecore"),
+        (animals[4], themes[4], "watercolor_animal_collection", "Soft Nursery"),
+        ("mushroom", "cottagecore", "watercolor_botanical_collection", "Vintage Botanical"),
+        ("fox", "woodland homes", "signature_storybook_animal_collection", "Whimsical Storybook"),
+        ("rabbit", "gardening", "watercolor_seasonal_collection", "Storybook Watercolor"),
+    )
+    opportunities: list[MarketOpportunity] = []
+    for index, (subject, theme, product_type, style) in enumerate(pairings):
+        keyword = f"{subject.title()} {theme.title()} Watercolor Clipart"
+        opportunities.append(
+            MarketOpportunity(
+                keyword=keyword,
+                primary_niche=f"{subject.title()} {theme.title()}",
+                subcategory=f"{theme} woodland clipart",
+                target_audience="crafters and nursery buyers",
+                season=_season_for_theme(theme),
+                product_type=product_type,
+                recommended_artistic_style=style,
+                trend_score=96 - index,
+                competition_score=30 + index,
+                commercial_potential=96 - index,
+                confidence=96 - index,
+                research_sources=("RainbowMilkStudio Brand Profile",),
+            )
+        )
+    return tuple(opportunities)
+
+
+def print_brand_candidate_diagnostics(
+    accepted: list[MarketOpportunity],
+    filtered: list[tuple[MarketOpportunity, str]],
+) -> None:
+    """Print explicit planner decision diagnostics before Atlas selection."""
+    print("")
+    print("Planner Candidate Diagnostics")
+    print("Products Selected For Portfolio Input")
+    print(len(accepted))
+    for opportunity in accepted[:10]:
+        print(f"- {opportunity.keyword.title()}")
+    print("")
+    print("Products Filtered")
+    print(len(filtered))
+    for opportunity, reason in filtered:
+        print(f"- {opportunity.keyword.title()}: {reason}")
+
+
+def _profile_terms(profile: dict[str, object], key: str) -> tuple[str, ...]:
+    value = profile.get(key)
+    if not isinstance(value, list | tuple):
+        value = ()
+    fallback = {
+        "popular_animals": ("rabbit", "fox", "mouse", "bear", "hedgehog"),
+        "popular_themes": ("tea party", "baking", "gardening", "reading", "nursery"),
+    }[key]
+    terms = tuple(str(term).strip().casefold() for term in value if str(term).strip())
+    return (terms + fallback)[:5]
+
+
+def _season_for_theme(theme: str) -> str:
+    text = theme.casefold()
+    if "garden" in text:
+        return "Spring"
+    if "tea" in text or "picnic" in text:
+        return "Summer"
+    if "mushroom" in text or "cottage" in text:
+        return "Autumn"
+    return "Evergreen"
+
+
+def _dedupe_opportunities(
+    opportunities: tuple[MarketOpportunity, ...],
+) -> tuple[MarketOpportunity, ...]:
+    seen: set[str] = set()
+    deduped: list[MarketOpportunity] = []
+    for opportunity in opportunities:
+        key = opportunity.keyword.casefold().strip()
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(opportunity)
+    return tuple(deduped)
+
+
+def _with_canonical_scope(
+    opportunity: MarketOpportunity,
+    canonical_product_type: str,
+) -> MarketOpportunity:
+    if opportunity.product_type == canonical_product_type:
+        return opportunity
+    return MarketOpportunity(
+        keyword=opportunity.keyword,
+        primary_niche=opportunity.primary_niche,
+        subcategory=opportunity.subcategory,
+        target_audience=opportunity.target_audience,
+        season=opportunity.season,
+        product_type=canonical_product_type,
+        recommended_artistic_style=opportunity.recommended_artistic_style,
+        trend_score=opportunity.trend_score,
+        competition_score=opportunity.competition_score,
+        commercial_potential=opportunity.commercial_potential,
+        confidence=opportunity.confidence,
+        research_sources=opportunity.research_sources,
+        id=opportunity.id,
+        created_at=opportunity.created_at,
+    )
+
+
 def request_production_approval(
     plan: AtlasPortfolioPlan,
     estimate: ImageCostEstimate,
@@ -265,13 +440,18 @@ def handoff_to_forge(
     ready_before = sum(1 for job in queue_manager.list_jobs() if job.status == READY)
     transformed_created = len(plan.selected)
     enqueue_attempted = 0
+    decision_logs: list[tuple[str, str, str]] = []
     for opportunity in plan.selected:
+        enqueue_attempted += 1
         decision = resolve_watercolor_scope(
             opportunity.keyword,
             opportunity.product_type,
             opportunity.recommended_artistic_style,
         )
         if not decision.supported:
+            decision_logs.append(
+                (opportunity.keyword.title(), "SKIPPED", decision.reason)
+            )
             continue
         brand_score = score_brand_fit(
             opportunity.keyword,
@@ -279,13 +459,19 @@ def handoff_to_forge(
             opportunity.recommended_artistic_style,
         )
         if not brand_score.accepted:
+            decision_logs.append(
+                (
+                    opportunity.keyword.title(),
+                    "SKIPPED",
+                    f"{brand_score.reason} Brand score {brand_score.score}.",
+                )
+            )
             continue
-        enqueue_attempted += 1
         try:
-            queue_manager.add_job(
+            job = queue_manager.add_job(
                 priority="High" if opportunity.confidence >= 90 else "Medium",
                 product_name=opportunity.keyword.title(),
-                category=opportunity.product_type,
+                category=decision.canonical_product_type,
                 style=opportunity.recommended_artistic_style,
                 seasonal_theme=opportunity.season,
                 keywords=tuple(opportunity.keyword.casefold().split()),
@@ -300,8 +486,22 @@ def handoff_to_forge(
                 source_evidence=opportunity.research_sources,
             )
         except ValueError:
+            decision_logs.append(
+                (
+                    opportunity.keyword.title(),
+                    "SKIPPED",
+                    "Production job already exists in queue.",
+                )
+            )
             continue
         created += 1
+        decision_logs.append(
+            (
+                opportunity.keyword.title(),
+                "ENQUEUED",
+                f"Queue write succeeded with READY status for job {job.id}.",
+            )
+        )
     queue_after = len(queue_manager.list_jobs())
     ready_after = sum(1 for job in queue_manager.list_jobs() if job.status == READY)
     next_job = queue_manager.next_ready_job()
@@ -325,6 +525,12 @@ def handoff_to_forge(
     print(ready_before)
     print("next_ready_job() Result")
     print(next_job.product_name if next_job else "None")
+    print("")
+    print("Forge Handoff Decision Log")
+    for product, status, reason in decision_logs:
+        print(product)
+        print(status)
+        print(reason)
     return created
 
 

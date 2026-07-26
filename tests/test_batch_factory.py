@@ -19,6 +19,7 @@ from project_aurora.planning.production_queue_manager import (  # noqa: E402
     COMPLETED,
     FAILED,
     READY,
+    UNSUPPORTED_PRODUCT_TYPE,
     ProductionJob,
     ProductionQueueManager,
 )
@@ -189,8 +190,46 @@ class BatchFactoryTest(unittest.TestCase):
         self.assertEqual(report.attempted, 0)
         self.assertEqual(report.completed, 0)
         self.assertEqual(report.failed, 0)
+        self.assertEqual(report.skipped, 0)
         self.assertEqual(report.drafts_created, 0)
         self.assertEqual(report.draft_ids, ())
+
+    def test_ready_capability_skip_is_reported_not_silently_ignored(self) -> None:
+        self.queue.add_existing_job(
+            ProductionJob(
+                id="teacher-job",
+                priority="High",
+                product_name="Teacher Boho Rainbow Decor",
+                category="classroom printable",
+                style="Flat Vector",
+                seasonal_theme="Back To School",
+                keywords=("teacher", "decor"),
+                confidence_score=0.95,
+                estimated_competition="Low",
+                estimated_demand="High",
+                estimated_revenue=100,
+                status=READY,
+            )
+        )
+
+        with patch("sys.stdout", new_callable=StringIO) as output:
+            report = BatchProductionFactory(
+                queue_manager=self.queue,
+                memory=self.memory,
+                stage_runner_factory=lambda _job: FakeBatchStageRunner(),
+            ).run(1)
+
+        self.assertEqual(report.attempted, 1)
+        self.assertEqual(report.completed, 0)
+        self.assertEqual(report.failed, 0)
+        self.assertEqual(report.skipped, 1)
+        self.assertEqual(report.reports[0].failed_stage, "product_capability")
+        self.assertEqual(self.queue.list_jobs()[0].status, UNSUPPORTED_PRODUCT_TYPE)
+        rendered = output.getvalue()
+        self.assertIn("Jobs loaded\n1", rendered)
+        self.assertIn("READY jobs\n1", rendered)
+        self.assertIn("Selected\nteacher-job - Teacher Boho Rainbow Decor", rendered)
+        self.assertIn("READY Job Skipped", rendered)
 
     def test_count_exceeds_queue_size(self) -> None:
         self.add_jobs(2)

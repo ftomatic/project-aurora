@@ -29,6 +29,7 @@ from project_aurora.research.research_config import ResearchPlannerConfig  # noq
 from project_aurora.storage.csv_storage import CSVStorage  # noqa: E402
 from project_aurora.storage.memory_manager import MemoryManager  # noqa: E402
 from scripts.run_research_planner import (  # noqa: E402
+    build_brand_profile_portfolio_candidates,
     handoff_to_forge,
     print_quality_gate,
     request_production_approval,
@@ -302,6 +303,61 @@ class ResearchPlannerTest(unittest.TestCase):
         self.assertEqual(created, 5)
         self.assertEqual(len(self.queue.list_jobs()), 5)
         self.assertTrue(all(job.status == "READY" for job in self.queue.list_jobs()))
+
+    def test_brand_profile_candidates_filter_legacy_products_before_atlas(self) -> None:
+        legacy = (
+            opportunity(
+                0,
+                product_name="Teacher Boho Rainbow Decor",
+                niche="Teacher",
+                product_type="classroom printable",
+                style="Flat Vector",
+            ),
+            opportunity(
+                1,
+                product_name="Vintage Lace Digital Paper",
+                niche="Digital Paper",
+                product_type="digital paper",
+                style="Vintage Botanical",
+            ),
+        )
+
+        with redirect_stdout(StringIO()) as output:
+            candidates = build_brand_profile_portfolio_candidates(
+                legacy,
+                target_count=5,
+            )
+
+        names = {candidate.keyword for candidate in candidates}
+        self.assertNotIn("Teacher Boho Rainbow Decor", names)
+        self.assertNotIn("Vintage Lace Digital Paper", names)
+        self.assertTrue(any("Watercolor Clipart" in name for name in names))
+        self.assertIn("Teacher Boho Rainbow Decor", output.getvalue())
+        self.assertIn("Products Filtered", output.getvalue())
+
+    def test_handoff_logs_skipped_products_and_counts_attempts(self) -> None:
+        opportunities = (
+            opportunity(
+                0,
+                product_name="Teacher Boho Rainbow Decor",
+                product_type="classroom printable",
+                style="Flat Vector",
+            ),
+        )
+        plan = AtlasPortfolioManager(
+            config=self.config(daily_products=1, minimum_confidence=85),
+            queue_manager=self.queue,
+            memory=self.memory,
+        ).build_portfolio(opportunities)
+
+        with redirect_stdout(StringIO()) as output:
+            created = handoff_to_forge(plan, self.queue)
+
+        self.assertEqual(created, 0)
+        self.assertIn("Enqueue Attempted\n1", output.getvalue())
+        self.assertIn("Teacher Boho Rainbow Decor", output.getvalue())
+        self.assertIn("SKIPPED", output.getvalue())
+        self.assertIn("Unsupported recovery product type: teacher", output.getvalue())
 
     def test_four_selected_with_confidence_pass_uses_replacement_search(self) -> None:
         opportunities = (

@@ -70,6 +70,7 @@ class BatchFactoryReport:
     attempted: int
     completed: int
     failed: int
+    skipped: int
     drafts_created: int
     draft_ids: tuple[str, ...]
     images_generated: int
@@ -86,6 +87,7 @@ class BatchFactoryReport:
             "attempted": self.attempted,
             "completed": self.completed,
             "failed": self.failed,
+            "skipped": self.skipped,
             "drafts_created": self.drafts_created,
             "draft_ids": list(self.draft_ids),
             "images_generated": self.images_generated,
@@ -124,15 +126,27 @@ class BatchProductionFactory:
         reports: list[ProductionReport] = []
         completed = 0
         failed = 0
+        skipped = 0
         draft_ids: list[str] = []
         images_generated = 0
         downloads_uploaded = 0
         elapsed_time = 0.0
         previous_generated_images = False
+        print_queue_selection_diagnostics(self._queue_manager)
         while completed + failed < count:
             job = self._queue_manager.next_ready_job()
             if job is None:
+                print("")
+                print("Queue Selection")
+                print("Selected")
+                print("None")
+                print("Reason")
+                print("No READY jobs remain after queue loading and capability skips.")
                 break
+            print("")
+            print("Queue Selection")
+            print("Selected")
+            print(f"{job.id} - {job.product_name}")
             if previous_generated_images and self._image_delay_seconds > 0:
                 self._sleeper(self._image_delay_seconds)
             factory = ProductFactory(
@@ -158,6 +172,13 @@ class BatchProductionFactory:
                     for error in report.errors
                 )
             ):
+                skipped += 1
+                reports.append(report)
+                print("READY Job Skipped")
+                print(job.product_name)
+                print("Reason")
+                print("; ".join(report.errors) if report.errors else "product_capability")
+                print("")
                 continue
             reports.append(report)
             if report.success:
@@ -177,6 +198,7 @@ class BatchProductionFactory:
             reports=tuple(reports),
             completed=completed,
             failed=failed,
+            skipped=skipped,
             draft_ids=tuple(draft_ids),
             images_generated=images_generated,
             downloads_uploaded=downloads_uploaded,
@@ -331,7 +353,16 @@ def _build_batch_report(
         requested=requested,
         attempted=len(reports),
         completed=sum(1 for report in reports if report.success),
-        failed=sum(1 for report in reports if not report.success),
+        failed=sum(
+            1
+            for report in reports
+            if not report.success and report.failed_stage != "product_capability"
+        ),
+        skipped=sum(
+            1
+            for report in reports
+            if not report.success and report.failed_stage == "product_capability"
+        ),
         drafts_created=sum(1 for report in reports if _draft_created_from_report(report)),
         draft_ids=draft_ids,
         images_generated=sum(report.images for report in reports),
@@ -347,6 +378,7 @@ def _build_batch_report_from_returned_reports(
     reports: tuple[ProductionReport, ...],
     completed: int,
     failed: int,
+    skipped: int,
     draft_ids: tuple[str, ...],
     images_generated: int,
     downloads_uploaded: int,
@@ -368,6 +400,7 @@ def _build_batch_report_from_returned_reports(
         attempted=len(reports),
         completed=completed,
         failed=failed,
+        skipped=skipped,
         drafts_created=len(draft_ids),
         draft_ids=draft_ids,
         images_generated=images_generated,
@@ -405,6 +438,9 @@ def print_batch_report(report: BatchFactoryReport) -> None:
     print("Failed")
     print(report.failed)
     print("")
+    print("Skipped")
+    print(report.skipped)
+    print("")
     print("Drafts Created")
     print(report.drafts_created)
     print("")
@@ -435,6 +471,39 @@ def print_batch_report(report: BatchFactoryReport) -> None:
             )
             for error in failure.get("errors", ()):
                 print(f"  {error}")
+
+
+def print_queue_selection_diagnostics(queue_manager: ProductionQueueManager) -> None:
+    """Print the queue state used by Batch Factory before selecting work."""
+    jobs = queue_manager.list_jobs()
+    ready_jobs = tuple(job for job in jobs if job.status == "READY")
+    print("")
+    print("Loaded queue")
+    print(queue_manager.queue_path.resolve())
+    print("")
+    print("Queue file path")
+    print(queue_manager.queue_path)
+    print("")
+    print("Absolute path")
+    print(queue_manager.queue_path.resolve())
+    print("")
+    print("Jobs loaded")
+    print(len(jobs))
+    print("")
+    print("READY jobs")
+    print(len(ready_jobs))
+    print("")
+    print("Candidate IDs")
+    if ready_jobs:
+        for job in ready_jobs:
+            print(f"{job.id} - {job.product_name}")
+    else:
+        print("None")
+    print("")
+    print("Non-READY jobs")
+    for job in jobs:
+        if job.status != "READY":
+            print(f"{job.id} - {job.product_name} - {job.status}")
 
 
 def print_report_diagnostics(report: ProductionReport) -> None:
