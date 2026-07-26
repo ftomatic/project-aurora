@@ -169,7 +169,7 @@ class ProductTransformationTest(unittest.TestCase):
 
     def test_daily_handoff_creates_five_ready_whimsical_safe_jobs(self) -> None:
         opportunities = (
-            opportunity("Woodland Bunny Digital Paper Pack", "digital paper", style="Watercolor", niche="Nursery"),
+            opportunity("Woodland Fox Digital Paper Pack", "digital paper", style="Watercolor", niche="Nursery"),
             opportunity("Cottage Mouse Junk Journal Kit", "junk journal", style="Storybook", niche="Journals"),
             opportunity("Vintage Floral Scrapbook Paper Pack", "scrapbook paper", niche="Botanical"),
             opportunity("Autumn Pumpkin Planner Kit", "planner kit", season="Fall", niche="Seasonal"),

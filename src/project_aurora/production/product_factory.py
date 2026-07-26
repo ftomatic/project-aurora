@@ -67,6 +67,9 @@ class ProductFactoryStageRunner(Protocol):
     def export_commercial_images(self, job: ProductionJob) -> Any:
         """Export final commercial image files."""
 
+    def run_commercial_image_qa(self, job: ProductionJob) -> Any:
+        """Run commercial image-set QA before Etsy draft creation."""
+
     def generate_seo(self, job: ProductionJob) -> Any:
         """Generate SEO package."""
 
@@ -151,7 +154,22 @@ class DefaultProductFactoryStageRunner:
     def compose_prompts(self, job: ProductionJob) -> Any:
         """Compose and save prompt recipe/package-compatible prompt data."""
         from project_aurora.muse.muse_engine import MuseEngine
+        from project_aurora.creative.product_creative_director import (
+            ProductionCreativeDirector,
+        )
+        from project_aurora.image_generation.image_prompt_builder import (
+            StructuredImagePromptBuilder,
+        )
+        from project_aurora.research.seasonal_intelligence import SeasonalIntelligence
 
+        seasonal_review = SeasonalIntelligence().evaluate(
+            product_name=job.product_name,
+            season=job.seasonal_theme,
+            product_type=job.category,
+        )
+        _print_seasonal_review(seasonal_review)
+        if seasonal_review.production_decision in {"HOLD", "REJECT_OUT_OF_SEASON"}:
+            raise ProductFactoryStageError("seasonal_review", (seasonal_review.reason,))
         art_direction = MuseEngine(memory=self._memory).select_style(
             product=job.product_name,
             audience=job.target_customer,
@@ -174,6 +192,15 @@ class DefaultProductFactoryStageRunner:
         print(f"{art_direction.confidence}%")
         if art_direction.status == "REJECTED":
             raise RuntimeError("Muse rejected style below confidence threshold.")
+
+        creative_brief = ProductionCreativeDirector().create_brief(job, art_direction)
+        image_prompts = StructuredImagePromptBuilder().build_prompts(
+            creative_brief,
+            seasonal_review,
+        )
+        _print_creative_brief(creative_brief)
+        _print_image_blueprints(creative_brief)
+        _print_prompt_diagnostics(image_prompts, seasonal_review)
 
         recipe = PromptComposer(memory=self._memory).compose_art_directed(
             product=job.product_name,
@@ -207,8 +234,17 @@ class DefaultProductFactoryStageRunner:
                 "typography_direction": art_direction.typography_direction,
                 "mood": art_direction.mood,
                 "target_platforms": ["Etsy"],
-                "image_prompt": recipe.final_prompt,
-                "negative_prompt": recipe.negative_prompt,
+                "image_prompt": _combined_generation_prompt(image_prompts),
+                "negative_prompt": ", ".join(creative_brief.negative_prompt),
+                "image_prompts": [prompt.to_dict() for prompt in image_prompts],
+                "creative_brief": creative_brief.to_dict(),
+                "seasonal_review": seasonal_review.to_dict(),
+                "consistency_key": creative_brief.consistency_key,
+                "text_policy": creative_brief.text_policy,
+                "expected_image_count": _resolve_generation_image_count(
+                    job,
+                    configured_count=self._image_config.number_of_images,
+                ),
                 "keywords": job.keywords,
                 "art_direction": {
                     "recommended_style": art_direction.recommended_style,
@@ -321,6 +357,32 @@ class DefaultProductFactoryStageRunner:
                 exported_files=tuple(getattr(result, "exported_files", ())),
                 errors=tuple(package_result.errors),
             )
+        return result
+
+    def run_commercial_image_qa(self, job: ProductionJob) -> Any:
+        """Run commercial image QA on final assets before Etsy draft creation."""
+        from project_aurora.quality.commercial_image_qa import CommercialImageQA
+
+        job_paths = self.job_paths(job)
+        final_files = _final_asset_files(job, job_paths.final_images_dir)
+        try:
+            prompt_package = self._memory.load_prompt_package(job.id)
+        except FileNotFoundError:
+            prompt_package = {}
+        seasonal_review = (
+            prompt_package.get("seasonal_review")
+            if isinstance(prompt_package.get("seasonal_review"), dict)
+            else None
+        )
+        result = CommercialImageQA().evaluate(
+            job=job,
+            final_files=final_files,
+            prompt_package=prompt_package,
+            seasonal_review=seasonal_review,
+        )
+        self._memory.save_record("commercial_image_qa", job.id, result.to_dict())
+        self._memory.save_record("commercial_image_qa", "latest", result.to_dict())
+        print(result.render())
         return result
 
     def generate_seo(self, job: ProductionJob) -> Any:
@@ -700,6 +762,16 @@ class DryRunProductFactoryStageRunner:
             errors=(),
         )
 
+    def run_commercial_image_qa(self, job: ProductionJob) -> Any:
+        """Simulate commercial image QA."""
+        return SimpleNamespace(
+            status="PASS",
+            overall_score=100,
+            blocking_issues=(),
+            warnings=(),
+            errors=(),
+        )
+
     def generate_seo(self, job: ProductionJob) -> Any:
         """Simulate SEO generation."""
         return SimpleNamespace(status="SUCCESS", title=f"{job.product_name} SEO", warnings=())
@@ -770,6 +842,10 @@ class ProductFactory:
             (
                 "commercial_export",
                 lambda: self._stage_runner.export_commercial_images(job),
+            ),
+            (
+                "commercial_image_qa",
+                lambda: _run_commercial_image_qa_stage(self._stage_runner, job),
             ),
             ("seo_generation", lambda: self._stage_runner.generate_seo(job)),
             (
@@ -905,6 +981,21 @@ def _raise_if_failed(stage_name: str, result: Any) -> None:
                     for item in bad
                 ),
             )
+
+
+def _run_commercial_image_qa_stage(
+    stage_runner: ProductFactoryStageRunner,
+    job: ProductionJob,
+) -> Any:
+    runner = getattr(stage_runner, "run_commercial_image_qa", None)
+    if runner is None:
+        return SimpleNamespace(
+            status="PASS",
+            overall_score=100,
+            warnings=("Commercial Image QA skipped by legacy test stage runner.",),
+            errors=(),
+        )
+    return runner(job)
 
 
 def _warnings_from(result: Any) -> tuple[str, ...]:
@@ -1263,6 +1354,78 @@ def _print_art_direction_diagnostics(prompt_package: dict[str, Any], job: Produc
     print("")
     print("Proven Winner Evidence")
     print(art_direction.get("proven_winner_evidence_used", "none"))
+
+
+def _print_seasonal_review(review: Any) -> None:
+    print("SEASONAL REVIEW")
+    print("Product")
+    print(review.product_name)
+    print("Current Date")
+    print(review.current_date.isoformat())
+    print("Seasonal Score")
+    print(review.seasonal_score)
+    print("Lead Time")
+    print(review.lead_time_score)
+    print("Decision")
+    print(review.production_decision)
+    print("Reason")
+    print(review.reason)
+
+
+def _print_creative_brief(brief: Any) -> None:
+    print("CREATIVE BRIEF")
+    print("Target Customer")
+    print(brief.target_customer)
+    print("Commercial Use")
+    print(brief.commercial_use_case)
+    print("Theme")
+    print(brief.theme)
+    print("Required Objects")
+    print(", ".join(brief.required_objects))
+    print("Forbidden Objects")
+    print(", ".join(brief.forbidden_objects))
+    print("Palette")
+    print(", ".join(brief.palette))
+    print("Text Policy")
+    print(brief.text_policy)
+    print("Confidence")
+    print(f"{brief.confidence}%")
+
+
+def _print_image_blueprints(brief: Any) -> None:
+    print("IMAGE BLUEPRINT")
+    for blueprint in brief.image_blueprint:
+        print(f"Image {blueprint.image_number} Role")
+        print(blueprint.role)
+
+
+def _print_prompt_diagnostics(prompts: tuple[Any, ...], seasonal_review: Any) -> None:
+    for prompt in prompts:
+        print("PROMPT DIAGNOSTIC")
+        print("Image Number")
+        print(prompt.image_number)
+        print("Blueprint Role")
+        print(prompt.blueprint_role)
+        print("Required Objects")
+        print(", ".join(prompt.required_objects))
+        print("Forbidden Objects")
+        print(", ".join(prompt.forbidden_objects))
+        print("Text Policy")
+        print(prompt.text_policy)
+        print("Seasonal Decision")
+        print(seasonal_review.production_decision)
+        print("Final Negative Prompt")
+        print(prompt.negative_prompt)
+        print("Consistency Key")
+        print(prompt.consistency_key)
+
+
+def _combined_generation_prompt(prompts: tuple[Any, ...]) -> str:
+    """Return one provider prompt containing all image roles and shared identity."""
+    return "\n\n".join(
+        f"IMAGE {prompt.image_number} ROLE: {prompt.blueprint_role}\n{prompt.prompt}"
+        for prompt in prompts
+    )
 
 
 def _print_qa_findings(findings: Any) -> None:

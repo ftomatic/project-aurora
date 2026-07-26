@@ -1,0 +1,90 @@
+# Aurora seasonal production calendar.
+# Windows use month/day values so they work every year.
+
+lead_time_days:
+  default: 60
+  graduation: 90
+  back_to_school: 45
+  halloween: 90
+  christmas: 120
+  weddings: 120
+
+seasons:
+  valentines_day:
+    keywords: [valentine, valentines, hearts, love]
+    selling_start: "01-01"
+    selling_end: "02-14"
+    production_start: "10-15"
+    production_end: "01-31"
+  easter:
+    keywords: [easter, bunny, rabbit, egg]
+    selling_start: "02-01"
+    selling_end: "04-20"
+    production_start: "11-15"
+    production_end: "03-31"
+  mothers_day:
+    keywords: [mother, mom, mama]
+    selling_start: "03-01"
+    selling_end: "05-15"
+    production_start: "12-15"
+    production_end: "04-30"
+  fathers_day:
+    keywords: [father, dad, papa]
+    selling_start: "04-01"
+    selling_end: "06-20"
+    production_start: "01-15"
+    production_end: "05-31"
+  graduation:
+    keywords: [graduation, graduate, class of, diploma, commencement]
+    selling_start: "02-01"
+    selling_end: "06-30"
+    production_start: "11-15"
+    production_end: "05-31"
+  back_to_school:
+    keywords: [back to school, teacher, classroom, alphabet, school]
+    selling_start: "07-01"
+    selling_end: "09-30"
+    production_start: "06-01"
+    production_end: "08-31"
+  halloween:
+    keywords: [halloween, spooky, pumpkin, ghost, witch]
+    selling_start: "08-01"
+    selling_end: "10-31"
+    production_start: "07-01"
+    production_end: "10-15"
+  thanksgiving:
+    keywords: [thanksgiving, turkey, harvest]
+    selling_start: "09-15"
+    selling_end: "11-25"
+    production_start: "08-01"
+    production_end: "11-01"
+  christmas:
+    keywords: [christmas, santa, holiday, winter]
+    selling_start: "09-01"
+    selling_end: "12-25"
+    production_start: "07-01"
+    production_end: "11-30"
+  weddings:
+    keywords: [wedding, bridal, bride, save the date]
+    selling_start: "01-01"
+    selling_end: "12-31"
+    production_start: "01-01"
+    production_end: "12-31"
+  baby_showers:
+    keywords: [baby shower, nursery, baby]
+    selling_start: "01-01"
+    selling_end: "12-31"
+    production_start: "01-01"
+    production_end: "12-31"
+  birthdays:
+    keywords: [birthday, party]
+    selling_start: "01-01"
+    selling_end: "12-31"
+    production_start: "01-01"
+    production_end: "12-31"
+  evergreen:
+    keywords: [clipart, wall art, botanical, floral, digital illustration]
+    selling_start: "01-01"
+    selling_end: "12-31"
+    production_start: "01-01"
+    production_end: "12-31"

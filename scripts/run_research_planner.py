@@ -37,6 +37,11 @@ from project_aurora.research.athena_market_intelligence import (  # noqa: E402
     AthenaResearchReport,
 )
 from project_aurora.research.research_config import ResearchPlannerConfig  # noqa: E402
+from project_aurora.research.seasonal_intelligence import (  # noqa: E402
+    HOLD,
+    REJECT_OUT_OF_SEASON,
+    SeasonalIntelligence,
+)
 
 
 QUEUE_PATH = PROJECT_ROOT / "data" / "aurora" / "production_queue" / "queue.json"
@@ -203,6 +208,7 @@ def handoff_to_forge(
     """Persist approved products as READY jobs for Forge."""
     created = 0
     transformer = ProductTransformationEngine()
+    seasonal = SeasonalIntelligence()
     transformations = transformer.transform_batch(plan.selected)
     before_jobs = queue_manager.list_jobs()
     print("")
@@ -217,14 +223,27 @@ def handoff_to_forge(
     print("Queue Size Before Enqueue")
     print(len(before_jobs))
     for opportunity, transformation in zip(plan.selected, transformations, strict=True):
+        seasonal_review = seasonal.evaluate(
+            product_name=transformation.production_product_name,
+            season=opportunity.season,
+            product_type=transformation.production_product_type,
+        )
         print("")
         print("Enqueue Attempted")
         print(transformation.production_product_name)
+        print("Seasonal Decision")
+        print(seasonal_review.production_decision)
         if not transformation.eligible:
             print("Enqueue Succeeded")
             print("NO")
             print("Reason")
             print(transformation.transformation_reason)
+            continue
+        if seasonal_review.production_decision in {HOLD, REJECT_OUT_OF_SEASON}:
+            print("Enqueue Succeeded")
+            print("NO")
+            print("Reason")
+            print(seasonal_review.reason)
             continue
         try:
             queue_manager.add_job(
@@ -246,6 +265,7 @@ def handoff_to_forge(
                     *opportunity.research_sources,
                     f"Original research product type: {opportunity.product_type}",
                     f"Product transformation: {transformation.transformation_reason}",
+                    f"Seasonal decision: {seasonal_review.production_decision}",
                 ),
                 **transformation.to_queue_metadata(),
             )

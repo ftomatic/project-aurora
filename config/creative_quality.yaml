@@ -1,0 +1,7 @@
+minimum_commercial_score: 85
+max_regeneration_attempts: 2
+forbid_generated_text: true
+require_consistent_palette: true
+require_consistent_rendering_family: true
+block_outdated_years: true
+block_stale_assets: true
