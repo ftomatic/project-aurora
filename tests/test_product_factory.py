@@ -610,10 +610,12 @@ class ProductFactoryTest(unittest.TestCase):
                 source_dir: Path,
                 output_dir: Path,
                 output_prefix: str = "",
+                product_family: str = "",
             ) -> None:
                 captured["source_dir"] = source_dir
                 captured["output_dir"] = output_dir
                 captured["output_prefix"] = output_prefix
+                captured["product_family"] = product_family
                 captured["source_files"] = tuple(source_dir.glob("*.png"))
 
             def export(self) -> object:
@@ -633,6 +635,7 @@ class ProductFactoryTest(unittest.TestCase):
         self.assertEqual(result.status, "SUCCESS")
         self.assertEqual(captured["source_dir"], job_paths.generated_images_dir)
         self.assertEqual(len(captured["source_files"]), 4)
+        self.assertEqual(captured["product_family"], "CLIPART")
 
     def test_etsy_upload_uses_only_current_job_listing_previews(self) -> None:
         captured: dict[str, object] = {}

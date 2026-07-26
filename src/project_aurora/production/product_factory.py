@@ -25,6 +25,11 @@ from project_aurora.planning.production_queue_manager import (
     ProductionQueueManager,
 )
 from project_aurora.production.watercolor_scope import resolve_watercolor_scope
+from project_aurora.production.product_image_family import (
+    CLIPART,
+    STORYBOOK_SCENE,
+    resolve_product_image_family,
+)
 from project_aurora.production.production_report import ProductionReport
 from project_aurora.seo.seo_engine import SEOEngine
 from project_aurora.storage.memory_manager import MemoryManager
@@ -172,18 +177,27 @@ class DefaultProductFactoryStageRunner:
         if art_direction.status == "REJECTED":
             raise RuntimeError("Muse rejected style below confidence threshold.")
 
-        final_prompt = _simple_clipart_prompt(job, scope.canonical_product_type)
-        negative_prompt = (
-            "no text, no letters, no numbers, no logo, no watermark, no border, "
-            "no poster layout, no mockup, no product title, no typography, "
-            "no promotional cover, no black background"
+        image_family = resolve_product_image_family(
+            job.product_name,
+            scope.canonical_product_type,
+            job.category,
         )
+        final_prompt = _product_family_prompt(
+            job,
+            scope.canonical_product_type,
+            image_family.family,
+        )
+        negative_prompt = _product_family_negative_prompt(image_family.family)
         self._memory.save_prompt_package(
             {
                 "product_name": job.product_name,
                 "collection": job.product_name,
                 "theme": job.seasonal_theme,
                 "product_type": scope.canonical_product_type,
+                "product_family": image_family.family,
+                "transparent_background": image_family.transparent_background,
+                "openai_background": image_family.openai_background,
+                "product_family_requirements": image_family.prompt_requirements,
                 "style": art_direction.recommended_style,
                 "palette": art_direction.palette,
                 "rendering_family": art_direction.rendering_family,
@@ -240,6 +254,11 @@ class DefaultProductFactoryStageRunner:
             prompt_package = {}
         _validate_product_type_expectation(job, prompt_package)
         _print_art_direction_diagnostics(prompt_package, job)
+        image_family = resolve_product_image_family(
+            job.product_name,
+            str(prompt_package.get("product_type") or job.category),
+            job.category,
+        )
         return ImageGenerationEngine(
             memory=self._memory,
             output_dir=job_paths.generated_images_dir,
@@ -253,7 +272,8 @@ class DefaultProductFactoryStageRunner:
             dpi=300,
             size=self._image_config.size,
             quality=self._image_config.quality,
-            background=self._image_config.background,
+            transparent_background=image_family.transparent_background,
+            background=image_family.openai_background,
             output_format=self._image_config.output_format,
             number_of_images=self._image_config.number_of_images,
         )
@@ -273,17 +293,27 @@ class DefaultProductFactoryStageRunner:
     def export_commercial_images(self, job: ProductionJob) -> Any:
         """Export final commercial PNGs."""
         job_paths = self.job_paths(job)
-        reused = self._reuse_completed_final_images(job_paths)
+        reused = self._reuse_completed_final_images(job, job_paths)
         if reused is not None:
             return reused
         from project_aurora.image_generation.commercial_image_exporter import (
             CommercialImageExporter,
+        )
+        try:
+            prompt_package = self._memory.load_prompt_package(job.id)
+        except FileNotFoundError:
+            prompt_package = {}
+        image_family = resolve_product_image_family(
+            job.product_name,
+            str(prompt_package.get("product_type") or job.category),
+            job.category,
         )
 
         return CommercialImageExporter(
             source_dir=job_paths.generated_images_dir,
             output_dir=job_paths.final_images_dir,
             output_prefix=_asset_filename_prefix(job),
+            product_family=image_family.family,
         ).export()
 
     def generate_seo(self, job: ProductionJob) -> Any:
@@ -512,8 +542,11 @@ class DefaultProductFactoryStageRunner:
             f"out of {len(pngs)} total in {job_paths.generated_images_dir}."
         )
 
-    @staticmethod
-    def _reuse_completed_final_images(job_paths: ProductFactoryJobPaths) -> Any | None:
+    def _reuse_completed_final_images(
+        self,
+        job: ProductionJob,
+        job_paths: ProductFactoryJobPaths,
+    ) -> Any | None:
         from project_aurora.image_generation.commercial_image_exporter import (
             COMMERCIAL_IMAGE_COUNT,
             CommercialImageExportResult,
@@ -528,7 +561,23 @@ class DefaultProductFactoryStageRunner:
         )
         if not pngs:
             return None
-        valid_pngs = tuple(path for path in pngs if not validate_commercial_png(path))
+        try:
+            prompt_package = self._memory.load_prompt_package(job.id)
+        except FileNotFoundError:
+            prompt_package = {}
+        image_family = resolve_product_image_family(
+            job.product_name,
+            str(prompt_package.get("product_type") or job.category),
+            job.category,
+        )
+        valid_pngs = tuple(
+            path
+            for path in pngs
+            if not validate_commercial_png(
+                path,
+                product_family=image_family.family,
+            )
+        )
         if len(pngs) == COMMERCIAL_IMAGE_COUNT and len(valid_pngs) == COMMERCIAL_IMAGE_COUNT:
             return CommercialImageExportResult(
                 status="SUCCESS",
@@ -962,6 +1011,55 @@ def _simple_clipart_prompt(job: ProductionJob, canonical_product_type: str) -> s
         "No Etsy cover, no collection overview, no detail preview, no use case mockup, "
         "no poster layout, no packaging, no title card, no product label, no typography. "
         "No text, no words, no letters, no numbers, no logo, no watermark, no border."
+    )
+
+
+def _product_family_prompt(
+    job: ProductionJob,
+    canonical_product_type: str,
+    product_family: str,
+) -> str:
+    if product_family == STORYBOOK_SCENE:
+        return _storybook_scene_prompt(job, canonical_product_type)
+    return _simple_clipart_prompt(job, canonical_product_type)
+
+
+def _storybook_scene_prompt(job: ProductionJob, canonical_product_type: str) -> str:
+    subjects = _prompt_subjects(job)
+    palette = _prompt_palette(job)
+    profile = load_brand_profile()
+    return (
+        "Create one complete customer-ready watercolor storybook scene. "
+        f"Product: {job.product_name}. "
+        f"Product type: {canonical_product_type}. "
+        f"Scene subject: {subjects}. "
+        f"Brand direction: {profile.get('primary_brand', 'storybook watercolor woodland illustrations')}. "
+        "Use a rich cozy woodland environment, cottagecore details, warm natural lighting, "
+        "soft watercolor rendering, and a full beautiful composition. "
+        f"Palette: {palette}. "
+        "The background must remain part of the artwork. No transparency. "
+        "Fill the canvas with a complete illustration while keeping every character fully visible. "
+        "Entire body visible. Head visible. Ears visible. Feet visible. Tail visible when present. "
+        "Accessories visible. Leave at least 10 percent padding around important subjects. "
+        "Do not crop, clip, cut off, zoom in too close, or let any character touch the edge. "
+        "No isolated clipart, no transparent background, no cutout elements, no grid, no border, "
+        "no product cover, no mockup, no product label, no typography. "
+        "No text, no words, no letters, no numbers, no logo, no watermark."
+    )
+
+
+def _product_family_negative_prompt(product_family: str) -> str:
+    common = "no text, no letters, no numbers, no logo, no watermark"
+    if product_family == STORYBOOK_SCENE:
+        return (
+            f"{common}, no transparent background, no isolated cutout, no clipart grid, "
+            "no border, no frame, no product title, no typography, no cropped characters"
+        )
+    return (
+        f"{common}, no background, no paper texture, no watercolor paper, "
+        "no beige background, no grid, no border, no frame, no shadow, "
+        "no poster layout, no mockup, no product title, no typography, "
+        "no promotional cover, no black background"
     )
 
 

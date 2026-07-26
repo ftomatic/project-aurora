@@ -19,6 +19,10 @@ from project_aurora.image_generation.commercial_image_exporter import (  # noqa:
     validate_commercial_png,
 )
 from project_aurora.image_generation.image_inspector import inspect_png  # noqa: E402
+from project_aurora.production.product_image_family import (  # noqa: E402
+    STORYBOOK_SCENE,
+    resolve_product_image_family,
+)
 
 
 def write_png(
@@ -132,6 +136,48 @@ class CommercialImageExporterTest(unittest.TestCase):
 
         self.assertEqual(result.status, "FAILED")
         self.assertIn("found 1", result.errors[0])
+
+    def test_storybook_scene_exports_opaque_full_background(self) -> None:
+        for index in range(1, 5):
+            write_png(
+                self.source_dir / f"scene_{index:02d}.png",
+                (80, 120, 160, 255),
+                size=(1024, 1024),
+            )
+
+        result = CommercialImageExporter(
+            source_dir=self.source_dir,
+            output_dir=self.output_dir,
+            product_family=STORYBOOK_SCENE,
+        ).export()
+
+        self.assertEqual(result.status, "SUCCESS")
+        inspection = inspect_png(Path(result.exported_files[0]))
+        self.assertEqual(inspection.dimensions, COMMERCIAL_IMAGE_SIZE)
+        self.assertEqual(inspection.alpha_minimum, 255)
+        self.assertEqual(inspection.alpha_maximum, 255)
+        self.assertEqual(
+            validate_commercial_png(
+                Path(result.exported_files[0]),
+                product_family=STORYBOOK_SCENE,
+            ),
+            (),
+        )
+
+    def test_product_family_resolves_clipart_and_storybook_scene(self) -> None:
+        clipart = resolve_product_image_family(
+            "Woodland Animal Clipart",
+            "clipart collection",
+        )
+        scene = resolve_product_image_family(
+            "Woodland Tea Party",
+            "storybook scene collection",
+        )
+
+        self.assertTrue(clipart.transparent_background)
+        self.assertEqual(clipart.openai_background, "transparent")
+        self.assertFalse(scene.transparent_background)
+        self.assertEqual(scene.openai_background, "opaque")
 
 
 if __name__ == "__main__":

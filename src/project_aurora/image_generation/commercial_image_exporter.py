@@ -11,6 +11,7 @@ from project_aurora.image_generation.image_inspector import (
     GeneratedImageInspection,
     inspect_png,
 )
+from project_aurora.production.product_image_family import CLIPART, STORYBOOK_SCENE
 
 
 COMMERCIAL_IMAGE_COUNT = 4
@@ -48,11 +49,13 @@ class CommercialImageExporter:
         output_dir: Path,
         required_count: int = COMMERCIAL_IMAGE_COUNT,
         output_prefix: str = COMMERCIAL_FILENAME_PREFIX,
+        product_family: str = CLIPART,
     ) -> None:
         self._source_dir = source_dir
         self._output_dir = output_dir
         self._required_count = required_count
         self._output_prefix = output_prefix
+        self._product_family = product_family
 
     def export(self) -> CommercialImageExportResult:
         """Export exactly four valid source images to commercial PNG files."""
@@ -73,8 +76,11 @@ class CommercialImageExporter:
         errors: list[str] = []
         for index, source_path in enumerate(source_files, start=1):
             output_path = self._output_path(index)
-            self._export_one(source_path, output_path)
-            validation_errors = validate_commercial_png(output_path)
+            self._export_one(source_path, output_path, self._product_family)
+            validation_errors = validate_commercial_png(
+                output_path,
+                product_family=self._product_family,
+            )
             if validation_errors:
                 errors.extend(
                     f"{output_path.name}: {error}" for error in validation_errors
@@ -102,9 +108,17 @@ class CommercialImageExporter:
         return self._output_dir / f"{self._output_prefix}_{index:02d}.png"
 
     @staticmethod
-    def _export_one(source_path: Path, output_path: Path) -> None:
+    def _export_one(source_path: Path, output_path: Path, product_family: str) -> None:
         with Image.open(source_path) as image:
-            working = _trim_transparent_bounds(image.convert("RGBA"))
+            working = image.convert("RGBA")
+            if product_family == STORYBOOK_SCENE:
+                working = working.resize(COMMERCIAL_IMAGE_SIZE, Image.Resampling.LANCZOS)
+                opaque = Image.new("RGBA", COMMERCIAL_IMAGE_SIZE, (255, 255, 255, 255))
+                opaque.alpha_composite(working, dest=(0, 0))
+                _save_optimized_png(opaque, output_path)
+                return
+
+            working = _trim_transparent_bounds(working)
             max_artwork = int(COMMERCIAL_IMAGE_SIZE[0] * COMMERCIAL_ARTWORK_RATIO)
             scale = min(max_artwork / working.width, max_artwork / working.height)
             resized_size = (
@@ -119,7 +133,11 @@ class CommercialImageExporter:
             _save_optimized_png(canvas, output_path)
 
 
-def validate_commercial_png(path: Path) -> tuple[str, ...]:
+def validate_commercial_png(
+    path: Path,
+    *,
+    product_family: str = "",
+) -> tuple[str, ...]:
     """Return validation errors for one final commercial PNG."""
     errors: list[str] = []
     inspection = inspect_png(path)
@@ -141,6 +159,12 @@ def validate_commercial_png(path: Path) -> tuple[str, ...]:
         dpi = None
     if not _dpi_is_acceptable(dpi):
         errors.append("Image must include 300-DPI metadata.")
+    if product_family == CLIPART:
+        if inspection.alpha_minimum is None or inspection.alpha_minimum >= 255:
+            errors.append("Clipart must have a transparent background with alpha.")
+    elif product_family == STORYBOOK_SCENE:
+        if inspection.alpha_minimum is not None and inspection.alpha_minimum < 255:
+            errors.append("Storybook scene must keep an opaque full background.")
     return tuple(errors)
 
 
