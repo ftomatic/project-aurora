@@ -154,6 +154,7 @@ class BatchProductionFactory:
                 and any(
                     "Unsupported recovery product type" in error
                     or "outside the approved watercolor" in error
+                    or "Rejected because brand score" in error
                     for error in report.errors
                 )
             ):

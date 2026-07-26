@@ -57,6 +57,7 @@ class OpportunityProvider:
 def opportunity(
     index: int,
     *,
+    product_name: str | None = None,
     niche: str | None = None,
     audience: str | None = None,
     season: str | None = None,
@@ -85,7 +86,7 @@ def opportunity(
         "Minimalist",
     )
     return MarketOpportunity(
-        keyword=f"{niche or niches[index % len(niches)]} Product {index}",
+        keyword=product_name or f"{niche or niches[index % len(niches)]} Product {index}",
         primary_niche=niche or niches[index % len(niches)],
         subcategory="Test Subcategory",
         target_audience=audience or audiences[index % len(audiences)],
@@ -247,6 +248,7 @@ class ResearchPlannerTest(unittest.TestCase):
             opportunity(
                 0,
                 niche="Woodland",
+                product_name="Fox Woodland Watercolor Clipart",
                 audience="parents",
                 season="Evergreen",
                 product_type="watercolor_woodland_collection",
@@ -255,6 +257,7 @@ class ResearchPlannerTest(unittest.TestCase):
             opportunity(
                 1,
                 niche="Botanical",
+                product_name="Cottage Mushroom Botanical Clipart",
                 audience="crafters",
                 season="Spring",
                 product_type="watercolor_botanical_collection",
@@ -263,6 +266,7 @@ class ResearchPlannerTest(unittest.TestCase):
             opportunity(
                 2,
                 niche="Animals",
+                product_name="Rabbit Tea Party Watercolor Clipart",
                 audience="nursery buyers",
                 season="Summer",
                 product_type="watercolor_animal_collection",
@@ -271,6 +275,7 @@ class ResearchPlannerTest(unittest.TestCase):
             opportunity(
                 3,
                 niche="Mushrooms",
+                product_name="Mouse Bakery Watercolor Clipart",
                 audience="cottagecore buyers",
                 season="Fall",
                 product_type="watercolor_clipart_bundle",
@@ -279,6 +284,7 @@ class ResearchPlannerTest(unittest.TestCase):
             opportunity(
                 4,
                 niche="Holiday",
+                product_name="Bear Christmas Watercolor Clipart",
                 audience="gift buyers",
                 season="Winter",
                 product_type="watercolor_seasonal_collection",

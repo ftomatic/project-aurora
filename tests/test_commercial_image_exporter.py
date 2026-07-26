@@ -87,6 +87,27 @@ class CommercialImageExporterTest(unittest.TestCase):
         self.assertEqual(inspection.alpha_minimum, 0)
         self.assertEqual(inspection.alpha_maximum, 255)
 
+    def test_source_artwork_is_upscaled_inside_4000_canvas(self) -> None:
+        for index in range(1, 5):
+            path = self.source_dir / f"small_{index:02d}.png"
+            image = Image.new("RGBA", (1024, 1024), (255, 0, 0, 0))
+            for x in range(400, 624):
+                for y in range(400, 624):
+                    image.putpixel((x, y), (255, 0, 0, 255))
+            image.save(path, format="PNG")
+
+        result = CommercialImageExporter(
+            source_dir=self.source_dir,
+            output_dir=self.output_dir,
+        ).export()
+
+        self.assertEqual(result.status, "SUCCESS")
+        with Image.open(result.exported_files[0]) as image:
+            bbox = image.convert("RGBA").getchannel("A").getbbox()
+        self.assertIsNotNone(bbox)
+        assert bbox is not None
+        self.assertGreaterEqual(bbox[2] - bbox[0], 3300)
+
     def test_rejects_fewer_or_more_than_four_valid_sources(self) -> None:
         write_png(self.source_dir / "one.png", (255, 0, 0, 255))
 

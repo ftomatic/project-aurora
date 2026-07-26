@@ -53,8 +53,8 @@ class EtsyImageUploadService:
             errors.append("Latest Etsy draft does not include etsy_listing_id.")
         if not image_files:
             errors.append("No non-empty PNG image files found.")
-        if self._images_dir.name != "final_product_images":
-            errors.append("Etsy image upload must use final_product_images only.")
+        if self._images_dir.name not in {"final_product_images", "listing_images"}:
+            errors.append("Etsy image upload must use final_product_images or listing_images only.")
         if image_files and len(image_files) != self._required_image_count:
             errors.append(
                 f"Exactly {self._required_image_count} final commercial PNG "

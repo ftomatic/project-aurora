@@ -16,6 +16,7 @@ from project_aurora.image_generation.image_cost_estimator import (  # noqa: E402
     ImageCostEstimate,
     ImageCostEstimator,
 )
+from project_aurora.brand_profile import score_brand_fit  # noqa: E402
 from project_aurora.image_generation.provider_registry import (  # noqa: E402
     ImageProviderConfig,
 )
@@ -271,6 +272,13 @@ def handoff_to_forge(
             opportunity.recommended_artistic_style,
         )
         if not decision.supported:
+            continue
+        brand_score = score_brand_fit(
+            opportunity.keyword,
+            opportunity.product_type,
+            opportunity.recommended_artistic_style,
+        )
+        if not brand_score.accepted:
             continue
         enqueue_attempted += 1
         try:

@@ -17,6 +17,8 @@ COMMERCIAL_IMAGE_COUNT = 4
 COMMERCIAL_IMAGE_SIZE = (4000, 4000)
 COMMERCIAL_IMAGE_DPI = 300
 COMMERCIAL_FILENAME_PREFIX = "aurora_watercolor_clipart"
+COMMERCIAL_ARTWORK_RATIO = 0.85
+MAX_SINGLE_PNG_SIZE_BYTES = 4_500_000
 
 
 @dataclass(frozen=True, slots=True)
@@ -102,17 +104,19 @@ class CommercialImageExporter:
     @staticmethod
     def _export_one(source_path: Path, output_path: Path) -> None:
         with Image.open(source_path) as image:
-            working = image.convert("RGBA")
-            working.thumbnail(COMMERCIAL_IMAGE_SIZE, Image.Resampling.LANCZOS)
+            working = _trim_transparent_bounds(image.convert("RGBA"))
+            max_artwork = int(COMMERCIAL_IMAGE_SIZE[0] * COMMERCIAL_ARTWORK_RATIO)
+            scale = min(max_artwork / working.width, max_artwork / working.height)
+            resized_size = (
+                max(1, int(round(working.width * scale))),
+                max(1, int(round(working.height * scale))),
+            )
+            working = working.resize(resized_size, Image.Resampling.LANCZOS)
             canvas = Image.new("RGBA", COMMERCIAL_IMAGE_SIZE, (255, 255, 255, 0))
             left = (COMMERCIAL_IMAGE_SIZE[0] - working.width) // 2
             top = (COMMERCIAL_IMAGE_SIZE[1] - working.height) // 2
             canvas.alpha_composite(working, dest=(left, top))
-            canvas.save(
-                output_path,
-                format="PNG",
-                dpi=(COMMERCIAL_IMAGE_DPI, COMMERCIAL_IMAGE_DPI),
-            )
+            _save_optimized_png(canvas, output_path)
 
 
 def validate_commercial_png(path: Path) -> tuple[str, ...]:
@@ -151,4 +155,31 @@ def _dpi_is_acceptable(dpi: object, tolerance: float = 1.0) -> bool:
     return (
         abs(horizontal - COMMERCIAL_IMAGE_DPI) <= tolerance
         and abs(vertical - COMMERCIAL_IMAGE_DPI) <= tolerance
+    )
+
+
+def _trim_transparent_bounds(image: Image.Image) -> Image.Image:
+    alpha = image.getchannel("A")
+    bbox = alpha.getbbox()
+    if bbox is None:
+        return image
+    return image.crop(bbox)
+
+
+def _save_optimized_png(image: Image.Image, output_path: Path) -> None:
+    image.save(
+        output_path,
+        format="PNG",
+        dpi=(COMMERCIAL_IMAGE_DPI, COMMERCIAL_IMAGE_DPI),
+        optimize=True,
+        compress_level=9,
+    )
+    if output_path.stat().st_size <= MAX_SINGLE_PNG_SIZE_BYTES:
+        return
+    image.quantize(colors=192, method=Image.Quantize.FASTOCTREE).save(
+        output_path,
+        format="PNG",
+        dpi=(COMMERCIAL_IMAGE_DPI, COMMERCIAL_IMAGE_DPI),
+        optimize=True,
+        compress_level=9,
     )
