@@ -33,8 +33,7 @@ from project_aurora.production.merchant_preflight import MerchantPreflight  # no
 from project_aurora.production.merchant_specification import MerchantSpecification  # noqa: E402
 from project_aurora.production.product_capability_resolver import (  # noqa: E402
     IMAGE_ONLY,
-    IMAGE_WITH_SHORT_TEXT,
-    TEMPLATE_REQUIRED,
+    UNSUPPORTED,
     ProductCapabilityResolver,
 )
 from project_aurora.seo.seo_engine import SEOEngine  # noqa: E402
@@ -190,11 +189,12 @@ class ProductionHardeningTest(unittest.TestCase):
         clipart = resolver.resolve("Autumn Mushroom Clipart", "clipart", "clipart")
         short = resolver.resolve("Hello Label", "gift tags", "gift tags")
 
-        self.assertEqual(bridal.mode, TEMPLATE_REQUIRED)
+        self.assertEqual(bridal.mode, UNSUPPORTED)
         self.assertFalse(bridal.supported)
-        self.assertEqual(wall.mode, IMAGE_ONLY)
+        self.assertEqual(wall.mode, UNSUPPORTED)
+        self.assertFalse(wall.supported)
         self.assertTrue(clipart.supported)
-        self.assertIn(short.mode, {IMAGE_ONLY, IMAGE_WITH_SHORT_TEXT})
+        self.assertFalse(short.supported)
 
     def test_digital_paper_capability_requires_complete_assets(self) -> None:
         resolver = ProductCapabilityResolver()
@@ -214,10 +214,10 @@ class ProductionHardeningTest(unittest.TestCase):
         )
 
         self.assertFalse(missing.supported)
-        self.assertTrue(missing.requires_zip_package)
-        self.assertEqual(missing.required_deliverable_count, 12)
+        self.assertFalse(missing.requires_zip_package)
+        self.assertEqual(missing.required_deliverable_count, 0)
         self.assertFalse(complete.supported)
-        self.assertTrue(complete.requires_zip_package)
+        self.assertFalse(complete.requires_zip_package)
 
     def test_transformed_digital_illustration_queue_job_is_not_blocked_by_research_origin(self) -> None:
         queue = ProductionQueueManager(queue_path=self.base_path / "queue.json")
@@ -244,10 +244,10 @@ class ProductionHardeningTest(unittest.TestCase):
 
     def test_capability_allows_supported_categories_when_requirements_fit(self) -> None:
         for product_name, category in (
-            ("Teacher Clipart", "clipart"),
-            ("Simple Digital Paper", "digital paper"),
-            ("Weekly Planner Pages", "planner"),
-            ("Victorian Botanical Journal Kit", "junk journal"),
+            ("Autumn Mushroom Clipart", "clipart"),
+            ("Woodland Animal Clipart", "clipart"),
+            ("Botanical Clipart", "clipart"),
+            ("Garden Sticker Illustration Set", "sticker illustration set"),
         ):
             with self.subTest(product_name=product_name):
                 resolver = ProductCapabilityResolver(
@@ -261,19 +261,18 @@ class ProductionHardeningTest(unittest.TestCase):
                 self.assertEqual(result.required_deliverable_count, 20)
                 self.assertFalse(result.requires_zip_package)
 
-    def test_capability_skips_zip_required_product_before_paid_generation(self) -> None:
+    def test_capability_allows_zip_required_supported_product(self) -> None:
         resolver = ProductCapabilityResolver(
             specification_library=FakeSpecificationLibrary(
                 spec("Clipart", bundle_size=12, packaging="ZIP")
             )
         )
 
-        result = resolver.resolve("Teacher Clipart", "clipart", "clipart")
+        result = resolver.resolve("Autumn Mushroom Clipart", "clipart", "clipart")
 
-        self.assertFalse(result.supported)
+        self.assertTrue(result.supported)
         self.assertTrue(result.requires_zip_package)
         self.assertEqual(result.required_deliverable_count, 12)
-        self.assertIn("ZIP package", result.reason)
 
     def test_capability_skips_product_with_more_than_twenty_deliverables(self) -> None:
         resolver = ProductCapabilityResolver(
@@ -302,9 +301,9 @@ class ProductionHardeningTest(unittest.TestCase):
         )
 
         result = resolver.resolve(
-            "Spring Garden Sticker Sheet",
-            "sticker sheet",
-            "sticker sheet",
+            "Spring Garden Sticker Illustration Set",
+            "sticker illustration set",
+            "sticker illustration set",
         )
 
         self.assertFalse(result.supported)
@@ -328,9 +327,9 @@ class ProductionHardeningTest(unittest.TestCase):
         (assets_dir / "sticker_sheet_template.json").write_text("{}", encoding="utf-8")
 
         result = resolver.resolve(
-            "Planner School Icons",
-            "sticker sheet",
-            "sticker sheet",
+            "Garden Sticker Illustration Set",
+            "sticker illustration set",
+            "sticker illustration set",
             assets_dir=assets_dir,
         )
 

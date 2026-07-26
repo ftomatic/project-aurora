@@ -102,13 +102,13 @@ class ProductTransformationEngine:
         eligible = (
             capability.supported
             and taxonomy.resolved
-            and not capability.requires_zip_package
             and not capability.requires_layout_engine
             and self._required_image_count == TRANSFORMED_IMAGE_COUNT
         )
         reason = (
             "Transformed broad research opportunity into an honest four-illustration "
-            "digital product with no ZIP, template, layout, or large-pack dependency."
+            "watercolor illustration product with a ZIP customer download and no "
+            "template, layout, or large-pack dependency."
         )
         if not eligible:
             reason = "; ".join(
@@ -116,7 +116,6 @@ class ProductTransformationEngine:
                 for value in (
                     capability.reason if not capability.supported else "",
                     taxonomy.resolution_reason if not taxonomy.resolved else "",
-                    "ZIP package is not allowed." if capability.requires_zip_package else "",
                     "Layout engine is not allowed." if capability.requires_layout_engine else "",
                 )
                 if value
@@ -129,7 +128,7 @@ class ProductTransformationEngine:
             production_style=style,
             etsy_taxonomy_category=taxonomy.validated_product_type,
             required_image_count=self._required_image_count,
-            requires_zip_package=False,
+            requires_zip_package=capability.requires_zip_package,
             requires_template_engine=False,
             requires_layout_engine=False,
             eligible=eligible,
@@ -160,12 +159,6 @@ def _production_name(opportunity: MarketOpportunity) -> str:
     lowered = f"{opportunity.keyword} {opportunity.product_type}".casefold()
     if "sticker" in lowered:
         suffix = "Sticker Illustration Set"
-    elif "planner" in lowered:
-        suffix = "Planner Illustration Collection"
-    elif "journal" in lowered or "ephemera" in lowered:
-        suffix = "Junk Journal Illustration Collection"
-    elif "paper" in lowered or "scrapbook" in lowered:
-        suffix = "Digital Illustration Collection"
     elif "clipart" in lowered or "clip art" in lowered:
         suffix = "Clipart Illustration Set"
     else:
@@ -177,7 +170,7 @@ def _production_name(opportunity: MarketOpportunity) -> str:
 
 def _clean_theme(value: str) -> str:
     cleaned = re.sub(
-        r"\b(12|20|24|pack|bundle|kit|set|sheet|sheets|sticker|stickers|pages|page|template|templates)\b",
+        r"\b(12|20|24|pack|bundle|kit|set|sheet|sheets|sticker|stickers|pages|page|template|templates|planner|planners|journal|journals|junk|scrapbook|digital|paper|papers)\b",
         " ",
         value,
         flags=re.IGNORECASE,

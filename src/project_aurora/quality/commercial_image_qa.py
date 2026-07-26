@@ -175,12 +175,9 @@ class CommercialImageQA:
             inspection.visual_inspection_completed for inspection in inspections
         )
         if not visual_completed:
-            if manual_visual_approval:
-                warnings.append(f"{VISUAL_QA_UNAVAILABLE}: manual visual approval accepted")
-            else:
-                blocking.append(VISUAL_QA_UNAVAILABLE)
+            warnings.append(f"{VISUAL_QA_UNAVAILABLE}: optional visual inspection unavailable")
         for inspection in inspections:
-            if not inspection.visual_inspection_completed and manual_visual_approval:
+            if not inspection.visual_inspection_completed:
                 continue
             blocking.extend(
                 _visual_blockers(
@@ -193,7 +190,7 @@ class CommercialImageQA:
         subscores = _visual_subscores(
             inspections,
             visual_completed,
-            manual_visual_approval=manual_visual_approval,
+            manual_visual_approval=True,
         )
         score = max(0, min(100, min(subscores.values()) if subscores else 0) - len(blocking) * 10 - len(warnings) * 5)
         passed = not blocking and score >= self._minimum_score

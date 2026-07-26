@@ -1,0 +1,10 @@
+seasonal_intelligence: true
+simple_creative_brief: true
+advanced_creative_director: false
+mandatory_visual_qa: false
+commercial_image_qa: false
+generated_listing_covers: false
+mockup_generation: false
+human_approval_gate: false
+etsy_intelligence: false
+automatic_etsy_draft: true

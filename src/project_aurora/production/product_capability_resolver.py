@@ -7,6 +7,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from project_aurora.production.watercolor_scope import resolve_watercolor_scope
+
 IMAGE_ONLY = "IMAGE_ONLY"
 IMAGE_WITH_SHORT_TEXT = "IMAGE_WITH_SHORT_TEXT"
 TEMPLATE_REQUIRED = "TEMPLATE_REQUIRED"
@@ -58,6 +60,14 @@ class ProductCapabilityResolver:
         assets_dir: Path | None = None,
     ) -> ProductCapabilityResult:
         lowered = f"{product_name} {product_type} {category}".casefold()
+        scope = resolve_watercolor_scope(product_name, category or product_type)
+        if not scope.supported:
+            return ProductCapabilityResult(
+                mode=UNSUPPORTED,
+                supported=False,
+                reason=scope.reason,
+                max_words_allowed=self._maximum_short_text_words,
+            )
         if any(term in lowered for term in (
             "shower games",
             "worksheet",
@@ -79,49 +89,24 @@ class ProductCapabilityResolver:
             blocked = self._blocked_by_spec(spec, lowered, assets_dir)
             if blocked is not None:
                 return blocked
+            bundle_size = int(getattr(spec, "bundle_size", 0))
+            requires_zip = str(getattr(spec, "packaging", "")).casefold() == "zip"
             return ProductCapabilityResult(
                 mode=IMAGE_ONLY,
                 supported=True,
-                reason="Product requirements fit the current image production pipeline.",
+                reason=scope.reason,
                 max_words_allowed=self._maximum_short_text_words,
-                requires_zip_package=str(getattr(spec, "packaging", "")).casefold() == "zip",
-                required_deliverable_count=int(spec.bundle_size),
+                requires_zip_package=requires_zip,
+                required_deliverable_count=bundle_size or 4,
                 requires_layout_engine=False,
             )
-        if any(term in lowered for term in (
-            "wall art",
-            "clipart",
-            "digital paper",
-            "planner",
-            "junk journal",
-            "journal kit",
-            "pattern",
-            "botanical print",
-            "nursery",
-            "scrapbook",
-            "journaling paper",
-            "gift tags",
-            "stationery",
-        )):
-            return ProductCapabilityResult(
-                mode=IMAGE_ONLY,
-                supported=True,
-                reason="Product can be produced as image-first commercial PNG assets.",
-                max_words_allowed=self._maximum_short_text_words,
-            )
-        word_count = len([word for word in product_name.split() if word.strip()])
-        if word_count <= self._maximum_short_text_words:
-            return ProductCapabilityResult(
-                mode=IMAGE_WITH_SHORT_TEXT,
-                supported=True,
-                reason="Product contains only short verified text.",
-                max_words_allowed=self._maximum_short_text_words,
-            )
         return ProductCapabilityResult(
-            mode=UNSUPPORTED,
-            supported=False,
-            reason="No safe product capability mapping exists.",
+            mode=IMAGE_ONLY,
+            supported=True,
+            reason=scope.reason,
             max_words_allowed=self._maximum_short_text_words,
+            requires_zip_package=True,
+            required_deliverable_count=4,
         )
 
     def _resolve_spec(self, category: str, product_name: str) -> Any | None:
@@ -190,18 +175,5 @@ class ProductCapabilityResolver:
                 requires_zip_package=False,
                 required_deliverable_count=bundle_size,
                 requires_layout_engine=True,
-            )
-        if requires_zip:
-            return ProductCapabilityResult(
-                mode=UNSUPPORTED,
-                supported=False,
-                reason=(
-                    f"{getattr(spec, 'category', 'Product')} requires a ZIP package; "
-                    "standard daily production only supports non-ZIP four-image products."
-                ),
-                max_words_allowed=self._maximum_short_text_words,
-                requires_zip_package=True,
-                required_deliverable_count=bundle_size,
-                requires_layout_engine=requires_layout,
             )
         return None

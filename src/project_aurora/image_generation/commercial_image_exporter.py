@@ -133,11 +133,13 @@ class CommercialImageExporter:
     @staticmethod
     def _export_one(source_path: Path, output_path: Path) -> None:
         with Image.open(source_path) as image:
-            resized = image.convert("RGBA").resize(
-                COMMERCIAL_IMAGE_SIZE,
-                Image.Resampling.LANCZOS,
-            )
-            resized.save(
+            converted = image.convert("RGBA")
+            converted.thumbnail(COMMERCIAL_IMAGE_SIZE, Image.Resampling.LANCZOS)
+            canvas = Image.new("RGBA", COMMERCIAL_IMAGE_SIZE, (255, 255, 255, 0))
+            x = (COMMERCIAL_IMAGE_SIZE[0] - converted.width) // 2
+            y = (COMMERCIAL_IMAGE_SIZE[1] - converted.height) // 2
+            canvas.paste(converted, (x, y), converted)
+            canvas.save(
                 output_path,
                 format="PNG",
                 dpi=(COMMERCIAL_IMAGE_DPI, COMMERCIAL_IMAGE_DPI),

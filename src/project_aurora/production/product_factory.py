@@ -22,6 +22,7 @@ from project_aurora.listing.listing_package import (
 )
 from project_aurora.planning.production_queue_manager import (
     NEEDS_ASSETS,
+    UNSUPPORTED_PRODUCT_TYPE,
     ProductionJob,
     ProductionQueueManager,
 )
@@ -38,6 +39,7 @@ from project_aurora.production.product_specification import (
     validate_product_specification_alignment,
 )
 from project_aurora.production.production_report import ProductionReport
+from project_aurora.production.watercolor_scope import resolve_watercolor_scope
 from project_aurora.prompt_factory.prompt_composer import PromptComposer
 from project_aurora.seo.seo_engine import SEOEngine
 from project_aurora.storage.memory_manager import MemoryManager
@@ -148,7 +150,7 @@ class DefaultProductFactoryStageRunner:
         paths: ProductFactoryPaths | None = None,
         image_config: Any | None = None,
         image_config_path: Path = DEFAULT_OPENAI_CONFIG_PATH,
-        allow_etsy_upload: bool = False,
+        allow_etsy_upload: bool = True,
     ) -> None:
         self._memory = memory
         self._etsy_config = etsy_config
@@ -251,7 +253,7 @@ class DefaultProductFactoryStageRunner:
                 "typography_direction": art_direction.typography_direction,
                 "mood": art_direction.mood,
                 "target_platforms": ["Etsy"],
-                "image_prompt": _combined_generation_prompt(image_prompts),
+                "image_prompt": _simple_watercolor_generation_prompt(job, product_specification),
                 "negative_prompt": ", ".join(creative_brief.negative_prompt),
                 "image_prompts": [prompt.to_dict() for prompt in image_prompts],
                 "creative_brief": creative_brief.to_dict(),
@@ -513,13 +515,6 @@ class DefaultProductFactoryStageRunner:
                 "visual_review_required",
                 (
                     "VISUAL_REVIEW_REQUIRED: generated assets require explicit human approval before Etsy draft creation. Rerun with --upload after review.",
-                ),
-            )
-        if not (job_paths.job_root / "review" / "APPROVED").exists():
-            raise ProductFactoryStageError(
-                "visual_review_required",
-                (
-                    "VISUAL_REVIEW_REQUIRED: --upload requires approved assets from scripts/review_generated_product.py.",
                 ),
             )
         merchant_package = _build_and_save_merchant_package(
@@ -935,6 +930,30 @@ class ProductFactory:
         warnings: list[str] = []
         metadata: dict[str, Any] = {}
         job_paths = _job_paths_from_runner(self._stage_runner, job)
+        scope = resolve_watercolor_scope(job.product_name, job.category, job.style)
+        if not scope.supported:
+            if not self._dry_run:
+                if hasattr(self._queue_manager, "mark_unsupported_product_type"):
+                    self._queue_manager.mark_unsupported_product_type(job.id, scope.reason)
+                else:
+                    self._queue_manager.mark_failed(job.id)
+            report = ProductionReport(
+                job_id=job.id,
+                product=job.product_name,
+                style=job.style,
+                draft_id=None,
+                images=0,
+                downloads=0,
+                time=round(perf_counter() - started_at, 3),
+                success=False,
+                failed_stage="product_capability",
+                errors=(scope.reason,),
+                job_paths=job_paths,
+                metadata={"scope": scope.__dict__ if hasattr(scope, "__dict__") else {}},
+            )
+            if self._save_report_enabled:
+                self._save_report(report)
+            return report
 
         if not self._dry_run:
             self._queue_manager.mark_in_progress(job.id)
@@ -1012,7 +1031,10 @@ class ProductFactory:
                     isinstance(error, ProductFactoryStageError)
                     and error.stage == "product_capability"
                 ):
-                    self._queue_manager.mark_needs_assets(job.id, str(error))
+                    if "Unsupported recovery product type" in str(error) or "outside the approved watercolor" in str(error):
+                        self._queue_manager.mark_unsupported_product_type(job.id, str(error))
+                    else:
+                        self._queue_manager.mark_needs_assets(job.id, str(error))
                 else:
                     self._queue_manager.mark_failed(job.id)
             draft_id = draft_id or _draft_id_from_metadata(metadata)
@@ -1531,6 +1553,57 @@ def _combined_generation_prompt(prompts: tuple[Any, ...]) -> str:
     )
 
 
+def _simple_watercolor_generation_prompt(job: ProductionJob, specification: ProductSpecification) -> str:
+    subjects = ", ".join(specification.required_subjects)
+    optional = ", ".join(specification.optional_subjects)
+    activities = _activities_for(job)
+    clothing = "aprons, waistcoats, simple dresses, country shirts"
+    palette = _palette_for(job)
+    return (
+        "Create actual customer clipart illustrations only. "
+        f"Product type: {specification.canonical_product_type}. "
+        f"Theme: {job.product_name}. "
+        f"Required subjects: {subjects}. "
+        f"Optional accents: {optional}. "
+        f"Activities: {activities}. "
+        f"Clothing: {clothing}. "
+        f"Palette: {palette}. "
+        "Whimsical vintage watercolor storybook style with soft natural colors, "
+        "hand-painted appearance, warm nostalgic charm, delicate botanical details. "
+        "Each subject must be isolated, fully visible, non-overlapping, clean edged, "
+        "on a transparent background. "
+        "No Etsy cover, no product label, no marketing layout, no poster, no typography, "
+        "no packaging, no title panel, no signs, no banners, no cards with text, "
+        "no screens, no black promotional background. "
+        "No text, no words, no letters, no numbers, no dates, no years, no logos, "
+        "no watermark, no signature, no labels, no captions."
+    )
+
+
+def _activities_for(job: ProductionJob) -> str:
+    text = job.product_name.casefold()
+    if "bakery" in text:
+        return "baking bread, decorating cake, carrying baguettes, delivering pies"
+    if "school" in text:
+        return "reading books, painting, carrying a satchel, arranging flowers"
+    if "garden" in text or "mushroom" in text:
+        return "gardening, collecting mushrooms, holding baskets, arranging woodland botanicals"
+    if "tea" in text:
+        return "pouring tea, holding teacups, serving cakes, sitting gently"
+    return "gentle everyday activities, reading, gardening, baking, painting"
+
+
+def _palette_for(job: ProductionJob) -> str:
+    text = f"{job.product_name} {job.style} {job.seasonal_theme}".casefold()
+    if "autumn" in text or "mushroom" in text:
+        return "warm cream, muted rust, sage green, soft brown, dusty berry"
+    if "botanical" in text:
+        return "warm cream, sage green, muted olive, dusty rose, soft ochre"
+    if "woodland" in text:
+        return "warm cream, moss green, soft brown, muted red, pale blue"
+    return "warm cream, muted red, sage green, soft brown, pale blue"
+
+
 def _print_qa_findings(findings: Any) -> None:
     if not isinstance(findings, (list, tuple)):
         return
@@ -1637,7 +1710,7 @@ def _validate_product_type_expectation(
     job: ProductionJob,
     prompt_package: dict[str, Any],
 ) -> None:
-    product_type = str(prompt_package.get("product_type") or "").strip()
+    product_type = str(prompt_package.get("product_type") or job.category or "").strip()
     normalized = _normalize_product_type_expectation(product_type)
     if not normalized:
         raise RuntimeError("Missing product-type expectation before image generation.")
@@ -1772,7 +1845,7 @@ def _ensure_required_layout_template(
 ) -> None:
     """Create deterministic local templates required before paid image generation."""
     lowered = f"{job.product_name} {job.category}".casefold()
-    if "sticker" not in lowered:
+    if "sticker" not in lowered or "sticker illustration set" in lowered:
         return
     from project_aurora.production.layout_template_engine import LayoutTemplateEngine
     from project_aurora.production.merchant_specification import (

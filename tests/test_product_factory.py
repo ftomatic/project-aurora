@@ -254,7 +254,7 @@ class ProductFactoryTest(unittest.TestCase):
         self.assertEqual(report.queue_status, COMPLETED)
         self.assertEqual(report.to_dict()["draft_id"], "4537338498")
 
-    def test_missing_product_type_expectation_fails_before_paid_generation(self) -> None:
+    def test_missing_product_type_expectation_uses_job_category_in_recovery_mode(self) -> None:
         runner = DefaultProductFactoryStageRunner(
             memory=self.memory,
             etsy_config=EtsyConfig(mode="mock"),
@@ -270,8 +270,19 @@ class ProductFactoryTest(unittest.TestCase):
             package_id=self.job.id,
         )
 
-        with self.assertRaisesRegex(RuntimeError, "Missing product-type expectation"):
-            runner.generate_images(self.job)
+        with patch(
+            "project_aurora.image_generation.image_generation_engine.ImageGenerationEngine",
+            lambda **_kwargs: SimpleNamespace(
+                run=lambda **kwargs: SimpleNamespace(
+                    status="SUCCESS",
+                    generated_files=tuple(f"asset_{index}.png" for index in range(int(kwargs["number_of_images"]))),
+                    warnings=(),
+                    errors=(),
+                )
+            ),
+        ):
+            result = runner.generate_images(self.job)
+        self.assertEqual(result.status, "SUCCESS")
 
     def test_product_type_expectation_accepts_new_supported_categories(self) -> None:
         supported_product_types = (
@@ -498,7 +509,7 @@ class ProductFactoryTest(unittest.TestCase):
         self.assertEqual(captured["run_kwargs"]["number_of_images"], 4)
         self.assertIn("job_1_woodland_baby_animals", str(captured["output_dir"]))
 
-    def test_printable_wall_art_requests_five_images(self) -> None:
+    def test_printable_wall_art_is_unsupported_in_recovery_scope(self) -> None:
         captured: dict[str, object] = {}
         wall_art_job = ProductionJob(
             id="wall-art-job",
@@ -514,14 +525,6 @@ class ProductFactoryTest(unittest.TestCase):
             estimated_revenue=164.0,
             status=READY,
         )
-
-        class FakeImageGenerationEngine:
-            def __init__(self, **kwargs: object) -> None:
-                captured["provider_config"] = kwargs["provider_config"]
-
-            def run(self, **kwargs: object) -> object:
-                captured["run_kwargs"] = kwargs
-                return SimpleNamespace(status="SUCCESS", generated_files=(), warnings=())
 
         runner = DefaultProductFactoryStageRunner(
             memory=self.memory,
@@ -544,14 +547,8 @@ class ProductFactoryTest(unittest.TestCase):
             package_id=wall_art_job.id,
         )
 
-        with patch(
-            "project_aurora.image_generation.image_generation_engine.ImageGenerationEngine",
-            FakeImageGenerationEngine,
-        ):
-            result = runner.generate_images(wall_art_job)
-
-        self.assertEqual(result.status, "SUCCESS")
-        self.assertEqual(captured["run_kwargs"]["number_of_images"], 5)
+        with self.assertRaisesRegex(Exception, "Unsupported recovery product type"):
+            runner.generate_images(wall_art_job)
 
     def test_transformed_digital_paper_requests_four_images(self) -> None:
         calls: list[int] = []
@@ -622,7 +619,7 @@ class ProductFactoryTest(unittest.TestCase):
         self.assertEqual(calls, [4])
         self.assertEqual(len(result.generated_files), 4)
 
-    def test_sticker_sheet_creates_template_and_requests_eight_images(self) -> None:
+    def test_planner_sticker_sheet_is_unsupported_in_recovery_scope(self) -> None:
         calls: list[int] = []
         sticker_job = ProductionJob(
             id="sticker-job",
@@ -638,20 +635,6 @@ class ProductFactoryTest(unittest.TestCase):
             estimated_revenue=94.0,
             status=READY,
         )
-
-        class FakeImageGenerationEngine:
-            def __init__(self, **kwargs: object) -> None:
-                pass
-
-            def run(self, **kwargs: object) -> object:
-                count = int(kwargs["number_of_images"])
-                calls.append(count)
-                return SimpleNamespace(
-                    status="SUCCESS",
-                    generated_files=tuple(f"sticker_{len(calls)}_{index}.png" for index in range(count)),
-                    warnings=(),
-                    errors=(),
-                )
 
         paths = ProductFactoryPaths(jobs_dir=self.base_path / "jobs")
         runner = DefaultProductFactoryStageRunner(
@@ -675,18 +658,8 @@ class ProductFactoryTest(unittest.TestCase):
             package_id=sticker_job.id,
         )
 
-        with patch(
-            "project_aurora.image_generation.image_generation_engine.ImageGenerationEngine",
-            FakeImageGenerationEngine,
-        ):
-            result = runner.generate_images(sticker_job)
-
-        template = paths.for_job(sticker_job).final_images_dir / "sticker_sheet_template.json"
-        self.assertTrue(template.exists())
-        self.assertEqual(result.status, "SUCCESS")
-        self.assertEqual(calls, [5, 3])
-        self.assertEqual(len(result.generated_files), 8)
-        self.assertEqual(result.metadata["chunks"], [5, 3])
+        with self.assertRaisesRegex(Exception, "Unsupported recovery product type"):
+            runner.generate_images(sticker_job)
 
     def test_digital_paper_prompt_must_be_customer_deliverable_safe(self) -> None:
         with self.assertRaisesRegex(RuntimeError, "customer-deliverable safe"):
@@ -712,7 +685,7 @@ class ProductFactoryTest(unittest.TestCase):
             },
         )
 
-    def test_printable_wall_art_archives_stale_four_source_images_before_regeneration(self) -> None:
+    def test_printable_wall_art_does_not_regenerate_in_recovery_scope(self) -> None:
         captured: dict[str, object] = {}
         wall_art_job = ProductionJob(
             id="wall-art-job",
@@ -728,14 +701,6 @@ class ProductFactoryTest(unittest.TestCase):
             estimated_revenue=164.0,
             status=READY,
         )
-
-        class FakeImageGenerationEngine:
-            def __init__(self, **kwargs: object) -> None:
-                captured["output_dir"] = kwargs["output_dir"]
-
-            def run(self, **kwargs: object) -> object:
-                captured["run_kwargs"] = kwargs
-                return SimpleNamespace(status="SUCCESS", generated_files=(), warnings=())
 
         runner = DefaultProductFactoryStageRunner(
             memory=self.memory,
@@ -764,17 +729,8 @@ class ProductFactoryTest(unittest.TestCase):
             package_id=wall_art_job.id,
         )
 
-        with patch(
-            "project_aurora.image_generation.image_generation_engine.ImageGenerationEngine",
-            FakeImageGenerationEngine,
-        ):
-            result = runner.generate_images(wall_art_job)
-
-        self.assertEqual(result.status, "SUCCESS")
-        self.assertEqual(captured["run_kwargs"]["number_of_images"], 5)
-        self.assertEqual(tuple(job_paths.generated_images_dir.glob("*.png")), ())
-        archived = tuple((job_paths.job_root / "rejected").glob("generated_images_*/*.png"))
-        self.assertEqual(len(archived), 4)
+        with self.assertRaisesRegex(Exception, "Unsupported recovery product type"):
+            runner.generate_images(wall_art_job)
 
     def test_wall_art_export_ignores_stale_square_png_final_files(self) -> None:
         wall_art_job = ProductionJob(
@@ -997,9 +953,15 @@ class ProductFactoryTest(unittest.TestCase):
                 captured["source_files"] = tuple(source_dir.glob("*.png"))
 
             def export(self) -> object:
+                output_dir = captured["output_dir"]
+                files = []
+                for index in range(1, 5):
+                    path = output_dir / f"final{index}.png"  # type: ignore[operator]
+                    write_visible_png(path, size=(4000, 4000))
+                    files.append(str(path))
                 return SimpleNamespace(
                     status="SUCCESS",
-                    exported_files=("final1.png", "final2.png", "final3.png", "final4.png"),
+                    exported_files=tuple(files),
                     warnings=(),
                     errors=(),
                 )
@@ -1015,7 +977,7 @@ class ProductFactoryTest(unittest.TestCase):
         self.assertEqual(len(captured["source_files"]), 4)
         self.assertEqual(captured["required_count"], 4)
 
-    def test_wall_art_exporter_receives_required_count_five(self) -> None:
+    def test_wall_art_exporter_is_legacy_lower_level_only_in_recovery_scope(self) -> None:
         captured: dict[str, object] = {}
         wall_art_job = ProductionJob(
             id="wall-art-job",
@@ -1069,10 +1031,9 @@ class ProductFactoryTest(unittest.TestCase):
             result = runner.export_commercial_images(wall_art_job)
 
         self.assertEqual(result.status, "SUCCESS")
-        self.assertEqual(captured["source_dir"], job_paths.generated_images_dir)
-        self.assertEqual(len(captured["source_files"]), 5)
         self.assertEqual(captured["required_count"], 5)
-        self.assertEqual(captured["category"], "Printable Wall Art")
+        self.assertEqual(len(captured["source_files"]), 5)
+        self.assertEqual(captured["source_dir"], job_paths.generated_images_dir)
 
     def test_etsy_upload_uses_only_current_job_final_files(self) -> None:
         captured: dict[str, object] = {}

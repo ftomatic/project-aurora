@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from project_aurora.planning.production_queue_manager import ProductionJob
+from project_aurora.production.watercolor_scope import resolve_watercolor_scope
 
 
 PRODUCT_SPECIFICATION_CONFLICT = "PRODUCT_SPECIFICATION_CONFLICT"
@@ -19,16 +20,38 @@ class ProductSpecification:
     product_name: str
     canonical_product_type: str
     customer_deliverable: str
-    required_asset_count: int
-    required_subjects: tuple[str, ...]
-    prohibited_subjects: tuple[str, ...]
-    intended_file_format: str
-    transparent_background_required: bool
-    seamless_pattern_required: bool
-    printable_page_required: bool
-    mockup_required: bool
-    listing_image_plan: tuple[str, ...]
-    customer_download_plan: tuple[str, ...]
+    target_customer: str = "digital printable buyers"
+    intended_use: str = "commercial digital craft and printable projects"
+    required_asset_count: int = 0
+    required_subjects: tuple[str, ...] = field(default_factory=tuple)
+    optional_subjects: tuple[str, ...] = field(default_factory=tuple)
+    prohibited_subjects: tuple[str, ...] = field(default_factory=tuple)
+    intended_file_format: str = ""
+    intended_file_formats: tuple[str, ...] = field(default_factory=tuple)
+    customer_asset_count: int = 0
+    transparent_background_required: bool = False
+    seamless_pattern_required: bool = False
+    printable_page_required: bool = False
+    mockup_required: bool = False
+    listing_mockup_required: bool = False
+    listing_image_plan: tuple[str, ...] = field(default_factory=tuple)
+    customer_download_plan: tuple[str, ...] = field(default_factory=tuple)
+    text_policy: tuple[str, ...] = field(default_factory=lambda: (
+        "no text",
+        "no words",
+        "no letters",
+        "no numbers",
+        "no dates",
+        "no years",
+        "no logos",
+        "no watermark",
+        "no signature",
+        "no typography",
+        "no labels",
+        "no captions",
+    ))
+    price: float = 2.49
+    currency: str = "USD"
 
     def to_dict(self) -> dict[str, Any]:
         """Return a JSON-safe specification."""
@@ -37,16 +60,25 @@ class ProductSpecification:
             "product_name": self.product_name,
             "canonical_product_type": self.canonical_product_type,
             "customer_deliverable": self.customer_deliverable,
+            "target_customer": self.target_customer,
+            "intended_use": self.intended_use,
             "required_asset_count": self.required_asset_count,
             "required_subjects": list(self.required_subjects),
+            "optional_subjects": list(self.optional_subjects),
             "prohibited_subjects": list(self.prohibited_subjects),
             "intended_file_format": self.intended_file_format,
+            "intended_file_formats": list(self.intended_file_formats or (self.intended_file_format,)),
+            "customer_asset_count": self.customer_asset_count or self.required_asset_count,
             "transparent_background_required": self.transparent_background_required,
             "seamless_pattern_required": self.seamless_pattern_required,
             "printable_page_required": self.printable_page_required,
             "mockup_required": self.mockup_required,
+            "listing_mockup_required": self.listing_mockup_required or self.mockup_required,
             "listing_image_plan": list(self.listing_image_plan),
             "customer_download_plan": list(self.customer_download_plan),
+            "text_policy": list(self.text_policy),
+            "price": self.price,
+            "currency": self.currency,
         }
 
     @classmethod
@@ -57,101 +89,70 @@ class ProductSpecification:
             product_name=str(data.get("product_name", "")),
             canonical_product_type=str(data.get("canonical_product_type", "")),
             customer_deliverable=str(data.get("customer_deliverable", "")),
+            target_customer=str(data.get("target_customer", "digital printable buyers")),
+            intended_use=str(data.get("intended_use", "commercial digital craft and printable projects")),
             required_asset_count=int(data.get("required_asset_count", 0)),
             required_subjects=tuple(str(item) for item in data.get("required_subjects", ())),
+            optional_subjects=tuple(str(item) for item in data.get("optional_subjects", ())),
             prohibited_subjects=tuple(str(item) for item in data.get("prohibited_subjects", ())),
             intended_file_format=str(data.get("intended_file_format", "")),
+            intended_file_formats=tuple(
+                str(item) for item in data.get("intended_file_formats", ())
+            ),
+            customer_asset_count=int(data.get("customer_asset_count") or data.get("required_asset_count", 0)),
             transparent_background_required=bool(data.get("transparent_background_required", False)),
             seamless_pattern_required=bool(data.get("seamless_pattern_required", False)),
             printable_page_required=bool(data.get("printable_page_required", False)),
             mockup_required=bool(data.get("mockup_required", False)),
+            listing_mockup_required=bool(data.get("listing_mockup_required", data.get("mockup_required", False))),
             listing_image_plan=tuple(str(item) for item in data.get("listing_image_plan", ())),
             customer_download_plan=tuple(str(item) for item in data.get("customer_download_plan", ())),
+            text_policy=tuple(str(item) for item in data.get("text_policy", ())) or cls.__dataclass_fields__["text_policy"].default_factory(),
+            price=float(data.get("price", 2.49)),
+            currency=str(data.get("currency", "USD")),
         )
 
 
 def build_product_specification(job: ProductionJob) -> ProductSpecification:
     """Create the canonical product definition for one production job."""
-    lowered = f"{job.product_name} {job.category}".casefold()
-    if "clipart" in lowered or "illustration collection" in lowered:
-        return ProductSpecification(
-            job_id=job.id,
-            product_name=job.product_name,
-            canonical_product_type="clipart_bundle",
-            customer_deliverable=_clipart_deliverable(job.product_name),
-            required_asset_count=max(4, job.required_image_count or 4),
-            required_subjects=_required_subjects(job),
-            prohibited_subjects=(
-                "visible text",
-                "labels",
-                "title cards",
-                "product covers",
-                "black promotional background",
-                "packaging",
-                "posters",
-            ),
-            intended_file_format="PNG",
-            transparent_background_required=True,
-            seamless_pattern_required=False,
-            printable_page_required=False,
-            mockup_required=False,
-            listing_image_plan=(
-                "hero collage from approved customer assets",
-                "complete collection overview from approved customer assets",
-                "detail preview from approved customer assets",
-                "truthful use-case mockup composed locally",
-            ),
-            customer_download_plan=("individual transparent PNG customer assets",),
-        )
-    if "digital paper" in lowered:
-        return ProductSpecification(
-            job_id=job.id,
-            product_name=job.product_name,
-            canonical_product_type="digital_paper",
-            customer_deliverable="seamless printable scrapbook paper JPG files",
-            required_asset_count=max(12, job.required_image_count or 12),
-            required_subjects=_required_subjects(job),
-            prohibited_subjects=("visible text", "labels", "mockup covers", "paper stacks"),
-            intended_file_format="JPG",
-            transparent_background_required=False,
-            seamless_pattern_required=True,
-            printable_page_required=False,
-            mockup_required=False,
-            listing_image_plan=("collage preview composed locally",),
-            customer_download_plan=("twelve seamless JPG papers", "ZIP package"),
-        )
-    if "wall art" in lowered or "poster" in lowered:
-        return ProductSpecification(
-            job_id=job.id,
-            product_name=job.product_name,
-            canonical_product_type="printable_wall_art",
-            customer_deliverable="printable wall art files in multiple ratios",
-            required_asset_count=max(5, job.required_image_count or 5),
-            required_subjects=_required_subjects(job),
-            prohibited_subjects=("visible text", "labels", "cropped artwork"),
-            intended_file_format="JPG",
-            transparent_background_required=False,
-            seamless_pattern_required=False,
-            printable_page_required=True,
-            mockup_required=True,
-            listing_image_plan=("lifestyle mockup composed from approved art",),
-            customer_download_plan=("ratio JPG files",),
-        )
+    scope = resolve_watercolor_scope(job.product_name, job.category, job.style)
+    if not scope.supported:
+        raise RuntimeError(f"{PRODUCT_SPECIFICATION_CONFLICT}: {scope.reason}")
+    count = max(4, min(10, job.required_image_count or 4))
     return ProductSpecification(
         job_id=job.id,
         product_name=job.product_name,
-        canonical_product_type="digital_product",
-        customer_deliverable="customer-ready digital artwork files",
-        required_asset_count=max(4, job.required_image_count or 4),
+        canonical_product_type=scope.canonical_product_type,
+        customer_deliverable="watercolor PNG clipart illustrations on transparent backgrounds",
+        target_customer=job.target_customer or "digital printable buyers and small creative businesses",
+        intended_use="commercial crafts, sublimation, stickers, stationery, scrapbooking, and printable projects",
+        required_asset_count=count,
         required_subjects=_required_subjects(job),
-        prohibited_subjects=("visible text", "labels", "product covers"),
+        optional_subjects=("botanical accents", "soft country clothing", "gentle everyday props"),
+        prohibited_subjects=(
+            "visible text",
+            "letters",
+            "numbers",
+            "labels",
+            "title cards",
+            "product covers",
+            "marketing layouts",
+            "posters",
+            "mockups",
+            "black promotional background",
+            "packaging",
+            "screens with text",
+        ),
         intended_file_format="PNG",
-        transparent_background_required=False,
+        intended_file_formats=("PNG",),
+        customer_asset_count=count,
+        transparent_background_required=True,
         seamless_pattern_required=False,
         printable_page_required=False,
         mockup_required=False,
-        listing_image_plan=("marketing images composed after customer asset approval",),
-        customer_download_plan=("customer digital artwork files",),
+        listing_mockup_required=False,
+        listing_image_plan=("use approved customer PNG illustrations directly as listing images",),
+        customer_download_plan=("ZIP containing all final 4000x4000 PNG customer illustrations",),
     )
 
 
@@ -164,10 +165,12 @@ def validate_product_specification_alignment(
     expected = specification.canonical_product_type.casefold()
     observed = observed_product_type.casefold()
     compatible = {
-        "clipart_bundle": ("clipart", "digital illustration", "illustration collection", "sticker illustration set"),
-        "digital_paper": ("digital paper",),
-        "printable_wall_art": ("wall art", "poster", "printable wall art"),
-        "digital_product": (observed,),
+        "watercolor_clipart_bundle": ("clipart", "digital illustration", "illustration collection"),
+        "watercolor_sticker_set": ("sticker illustration set", "sticker"),
+        "watercolor_animal_collection": ("animal", "woodland", "digital illustration", "illustration collection", "clipart"),
+        "watercolor_botanical_collection": ("botanical", "mushroom", "floral", "clipart", "digital illustration", "illustration collection"),
+        "watercolor_woodland_collection": ("woodland", "clipart", "digital illustration", "illustration collection"),
+        "signature_storybook_animal_collection": ("storybook", "animal", "digital illustration", "illustration collection", "clipart"),
     }
     if specification.job_id != job.id or specification.product_name != job.product_name:
         raise RuntimeError(f"{PRODUCT_SPECIFICATION_CONFLICT}: specification does not match current job")

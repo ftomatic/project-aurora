@@ -165,18 +165,25 @@ class MerchantSpecificationTest(unittest.TestCase):
         self.assertLessEqual(journal.bundle_size, 20)
         self.assertLessEqual(planner.bundle_size, 20)
 
-    def test_current_clipart_spec_accepts_four_resized_pngs_without_zip(self) -> None:
+    def test_current_clipart_spec_accepts_four_resized_pngs_with_zip(self) -> None:
         directory = self.base_path / "clipart_current"
         directory.mkdir()
+        files = []
         for index in range(1, 5):
-            _save_png(directory / f"clipart_{index:02d}.png", (4000, 4000), transparent=True)
+            path = directory / f"clipart_{index:02d}.png"
+            _save_png(path, (4000, 4000), transparent=True)
+            files.append(path)
+        with zipfile.ZipFile(directory / "clipart_current.zip", "w") as archive:
+            for path in files:
+                archive.write(path, arcname=path.name)
 
         result = MerchantSpecificationQA().validate("clipart", directory)
 
         self.assertEqual(result.status, "PASS")
         self.assertEqual(result.manifest.bundle_size, 4)
-        self.assertEqual(result.manifest.packaging, "NONE")
+        self.assertEqual(result.manifest.packaging, "ZIP")
         self.assertEqual(len(result.manifest.files), 4)
+        self.assertEqual(len(result.manifest.package_files), 1)
 
     def test_current_clipart_spec_rejects_source_sized_pngs(self) -> None:
         directory = self.base_path / "clipart_source_sized"

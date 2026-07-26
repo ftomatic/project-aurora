@@ -16,6 +16,7 @@ COMPLETED = "COMPLETED"
 FAILED = "FAILED"
 SKIPPED = "SKIPPED"
 NEEDS_ASSETS = "NEEDS_ASSETS"
+UNSUPPORTED_PRODUCT_TYPE = "UNSUPPORTED_PRODUCT_TYPE"
 DIGITAL_PAPER_ASSET_BLOCKING_REASON = (
     "Digital Paper requires 12 JPG files, 1 collage preview, and 1 ZIP package. "
     "Asset generation for this product type is not implemented yet."
@@ -28,6 +29,7 @@ SUPPORTED_JOB_STATUSES = {
     FAILED,
     SKIPPED,
     NEEDS_ASSETS,
+    UNSUPPORTED_PRODUCT_TYPE,
 }
 
 
@@ -288,6 +290,26 @@ class ProductionQueueManager:
                 changed_job = replace(
                     job,
                     status=NEEDS_ASSETS,
+                    blocking_reason=blocking_reason,
+                )
+                updated.append(changed_job)
+            else:
+                updated.append(job)
+        if changed_job is None:
+            raise ValueError(f"Production job not found: {job_id}.")
+        self._jobs = self._sorted_jobs(tuple(updated))
+        self._save()
+        return changed_job
+
+    def mark_unsupported_product_type(self, job_id: str, blocking_reason: str) -> ProductionJob:
+        """Mark a job outside the supported production scope."""
+        updated: list[ProductionJob] = []
+        changed_job: ProductionJob | None = None
+        for job in self._jobs:
+            if job.id == job_id:
+                changed_job = replace(
+                    job,
+                    status=UNSUPPORTED_PRODUCT_TYPE,
                     blocking_reason=blocking_reason,
                 )
                 updated.append(changed_job)

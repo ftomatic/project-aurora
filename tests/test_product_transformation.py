@@ -97,7 +97,7 @@ class ProductTransformationTest(unittest.TestCase):
 
         self.assertEqual(result.production_product_type, TRANSFORMED_PRODUCT_TYPE)
         self.assertEqual(result.required_image_count, TRANSFORMED_IMAGE_COUNT)
-        self.assertFalse(result.requires_zip_package)
+        self.assertTrue(result.requires_zip_package)
         self.assertFalse(result.requires_template_engine)
         self.assertFalse(result.requires_layout_engine)
         self.assertTrue(result.eligible)
@@ -110,8 +110,9 @@ class ProductTransformationTest(unittest.TestCase):
         )
 
         self.assertEqual(result.production_product_type, TRANSFORMED_PRODUCT_TYPE)
-        self.assertIn("Junk Journal Illustration Collection", result.production_product_name)
-        self.assertFalse(result.requires_zip_package)
+        self.assertIn("Digital Illustration Collection", result.production_product_name)
+        self.assertNotIn("Junk Journal", result.production_product_name)
+        self.assertTrue(result.requires_zip_package)
         self.assertTrue(result.eligible)
 
     def test_sticker_sheet_transforms_to_individual_illustrations(self) -> None:
@@ -162,7 +163,7 @@ class ProductTransformationTest(unittest.TestCase):
 
         self.assertTrue(capability.supported)
         self.assertEqual(capability.required_deliverable_count, 4)
-        self.assertFalse(capability.requires_zip_package)
+        self.assertTrue(capability.requires_zip_package)
         self.assertFalse(capability.requires_layout_engine)
         self.assertTrue(taxonomy.resolved)
         self.assertEqual(taxonomy.validated_product_type, "digital illustration collection")
@@ -186,7 +187,7 @@ class ProductTransformationTest(unittest.TestCase):
         self.assertTrue(all(job.status == READY for job in jobs))
         self.assertTrue(all(job.category == TRANSFORMED_PRODUCT_TYPE for job in jobs))
         self.assertTrue(all(job.required_image_count == 4 for job in jobs))
-        self.assertTrue(all(not job.requires_zip_package for job in jobs))
+        self.assertTrue(all(job.requires_zip_package for job in jobs))
         self.assertTrue(all(not job.requires_template_engine for job in jobs))
         self.assertTrue(all(not job.requires_layout_engine for job in jobs))
         self.assertGreaterEqual(sum(job.whimsical_batch_designation for job in jobs), 2)
