@@ -14,6 +14,14 @@ FORBIDDEN_TEXT_PROMPT_TERMS = (
     "with text",
     "include text",
     "add text",
+    "display the word",
+    "title card",
+    "collection cover",
+    "digital product cover",
+    "etsy thumbnail text",
+    "clipart label",
+    "illustration collection title",
+    "product name inside the image",
     "typography that says",
     "words that say",
     "class of",
@@ -82,7 +90,7 @@ class StructuredImagePromptBuilder:
             f"Background: {'; '.join(brief.background_rules)}.\n"
             f"Lighting: {'; '.join(brief.lighting_rules)}.\n"
             f"Texture: {'; '.join(brief.texture_rules)}.\n"
-            f"Etsy commercial requirements: high-quality commercial digital PNG artwork, 300 DPI production intent, clear thumbnail, cohesive product set.\n"
+            f"Etsy commercial requirements: high-quality customer-download digital artwork, 300 DPI production intent, cohesive product set, no marketing cover layout.\n"
             f"Blueprint role: Image {blueprint.image_number} - {blueprint.role}; {blueprint.purpose}.\n"
             f"Must show: {', '.join(blueprint.must_show)}.\n"
             f"Must not imply: {', '.join(blueprint.must_not_imply)}.\n"

@@ -31,6 +31,12 @@ from project_aurora.production.asset_manifest import (
     validate_asset_ownership,
     write_asset_manifest,
 )
+from project_aurora.production.product_specification import (
+    PRODUCT_SPECIFICATION_CONFLICT,
+    ProductSpecification,
+    build_product_specification,
+    validate_product_specification_alignment,
+)
 from project_aurora.production.production_report import ProductionReport
 from project_aurora.prompt_factory.prompt_composer import PromptComposer
 from project_aurora.seo.seo_engine import SEOEngine
@@ -142,6 +148,7 @@ class DefaultProductFactoryStageRunner:
         paths: ProductFactoryPaths | None = None,
         image_config: Any | None = None,
         image_config_path: Path = DEFAULT_OPENAI_CONFIG_PATH,
+        allow_etsy_upload: bool = False,
     ) -> None:
         self._memory = memory
         self._etsy_config = etsy_config
@@ -153,6 +160,7 @@ class DefaultProductFactoryStageRunner:
 
             image_config = ImageProviderConfig.from_file(image_config_path)
         self._image_config = image_config
+        self._allow_etsy_upload = allow_etsy_upload
 
     def job_paths(self, job: ProductionJob) -> ProductFactoryJobPaths:
         """Return isolated runtime paths for the current production job."""
@@ -177,6 +185,8 @@ class DefaultProductFactoryStageRunner:
         _print_seasonal_review(seasonal_review)
         if seasonal_review.production_decision in {"HOLD", "REJECT_OUT_OF_SEASON"}:
             raise ProductFactoryStageError("seasonal_review", (seasonal_review.reason,))
+        product_specification = build_product_specification(job)
+        _print_product_specification(product_specification)
         art_direction = MuseEngine(memory=self._memory).select_style(
             product=job.product_name,
             audience=job.target_customer,
@@ -252,6 +262,7 @@ class DefaultProductFactoryStageRunner:
                     job,
                     configured_count=self._image_config.number_of_images,
                 ),
+                "product_specification": product_specification.to_dict(),
                 "keywords": job.keywords,
                 "art_direction": {
                     "recommended_style": art_direction.recommended_style,
@@ -300,6 +311,7 @@ class DefaultProductFactoryStageRunner:
             prompt_package = self._memory.load_prompt_package(job.id)
         except FileNotFoundError:
             prompt_package = {}
+        _validate_prompt_specification_alignment(job, prompt_package)
         _validate_product_type_expectation(job, prompt_package)
         _print_art_direction_diagnostics(prompt_package, job)
         engine = ImageGenerationEngine(
@@ -396,6 +408,7 @@ class DefaultProductFactoryStageRunner:
             prompt_package = self._memory.load_prompt_package(job.id)
         except FileNotFoundError:
             prompt_package = {}
+        product_specification = _product_specification_from_prompt(job, prompt_package)
         seasonal_review = (
             prompt_package.get("seasonal_review")
             if isinstance(prompt_package.get("seasonal_review"), dict)
@@ -417,6 +430,8 @@ class DefaultProductFactoryStageRunner:
             seasonal_review=seasonal_review,
             asset_manifest_path=manifest_path_for(job_paths.job_root),
             workspace=job_paths.job_root,
+            product_specification=product_specification,
+            manual_visual_approval=(job_paths.job_root / "review" / "APPROVED").exists(),
         )
         self._memory.save_record("commercial_image_qa", job.id, result.to_dict())
         self._memory.save_record("commercial_image_qa", "latest", result.to_dict())
@@ -493,6 +508,20 @@ class DefaultProductFactoryStageRunner:
             previous_title=_previous_product_title(self._memory, job.id),
         )
         final_files = tuple(str(path) for path in _final_asset_files(job, job_paths.final_images_dir))
+        if not self._allow_etsy_upload:
+            raise ProductFactoryStageError(
+                "visual_review_required",
+                (
+                    "VISUAL_REVIEW_REQUIRED: generated assets require explicit human approval before Etsy draft creation. Rerun with --upload after review.",
+                ),
+            )
+        if not (job_paths.job_root / "review" / "APPROVED").exists():
+            raise ProductFactoryStageError(
+                "visual_review_required",
+                (
+                    "VISUAL_REVIEW_REQUIRED: --upload requires approved assets from scripts/review_generated_product.py.",
+                ),
+            )
         merchant_package = _build_and_save_merchant_package(
             job=job,
             seo_package=seo_package,
@@ -1622,6 +1651,53 @@ def _validate_product_type_expectation(
         )
     if _product_type_expectation_matches("digital paper", normalized):
         _validate_digital_paper_prompt_package(prompt_package)
+
+
+def _product_specification_from_prompt(
+    job: ProductionJob,
+    prompt_package: dict[str, Any],
+) -> ProductSpecification:
+    data = prompt_package.get("product_specification")
+    if isinstance(data, dict):
+        specification = ProductSpecification.from_dict(data)
+    else:
+        specification = build_product_specification(job)
+    validate_product_specification_alignment(
+        job,
+        specification,
+        str(prompt_package.get("product_type") or job.category),
+    )
+    return specification
+
+
+def _validate_prompt_specification_alignment(
+    job: ProductionJob,
+    prompt_package: dict[str, Any],
+) -> None:
+    try:
+        _product_specification_from_prompt(job, prompt_package)
+    except RuntimeError as error:
+        if PRODUCT_SPECIFICATION_CONFLICT in str(error):
+            raise
+        raise
+
+
+def _print_product_specification(specification: ProductSpecification) -> None:
+    print("CANONICAL PRODUCT SPECIFICATION")
+    print("Product Type")
+    print(specification.canonical_product_type)
+    print("Customer Deliverable")
+    print(specification.customer_deliverable)
+    print("Required Subjects")
+    for subject in specification.required_subjects:
+        print(subject)
+    print("Required Format")
+    print(specification.intended_file_format)
+    print("Transparency Required")
+    print("YES" if specification.transparent_background_required else "NO")
+    print("Listing Image Strategy")
+    for item in specification.listing_image_plan:
+        print(item)
 
 
 def _validate_digital_paper_prompt_package(prompt_package: dict[str, Any]) -> None:

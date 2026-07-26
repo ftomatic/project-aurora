@@ -200,6 +200,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         action="store_true",
         help="Consume the real queue and call configured live services.",
     )
+    parser.add_argument(
+        "--upload",
+        action="store_true",
+        help="Allow Etsy draft creation after explicit visual review approval.",
+    )
     return parser.parse_args(argv)
 
 
@@ -211,7 +216,7 @@ def main(argv: list[str] | None = None) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             report = _run_dry_batch(count=args.count, temp_dir=Path(temp_dir))
     else:
-        report = _run_live_batch(count=args.count)
+        report = _run_live_batch(count=args.count, allow_upload=args.upload)
     print_batch_report(report)
 
 
@@ -229,7 +234,7 @@ def _run_dry_batch(count: int, temp_dir: Path) -> BatchFactoryReport:
     ).run(count)
 
 
-def _run_live_batch(count: int) -> BatchFactoryReport:
+def _run_live_batch(count: int, allow_upload: bool = False) -> BatchFactoryReport:
     runtime_config = load_batch_runtime_config(DAILY_FACTORY_CONFIG_PATH)
     queue_manager = ProductionQueueManager(queue_path=REAL_QUEUE_PATH)
     memory = MemoryManager(
@@ -265,6 +270,7 @@ def _run_live_batch(count: int) -> BatchFactoryReport:
             memory=memory,
             etsy_config=etsy_config,
             image_config=image_config,
+            allow_etsy_upload=allow_upload,
         ),
         save_report=True,
         image_delay_seconds=runtime_config.openai_image_delay_seconds,

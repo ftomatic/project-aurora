@@ -47,7 +47,12 @@ def _digital_illustration_collection() -> tuple[ImageBlueprint, ...]:
 
 
 def _clipart() -> tuple[ImageBlueprint, ...]:
-    return _digital_illustration_collection()
+    return (
+        ImageBlueprint(1, "CUSTOMER_ASSET", "Generate buyer-download artwork, not a cover.", "multiple isolated subject elements, separate non-overlapping clipart, transparent or clean removable background", ("main product subject", "isolated elements"), ("text", "title card", "product cover", "mockup framing", "black background")),
+        ImageBlueprint(2, "CUSTOMER_ASSET", "Generate coordinated supporting download artwork.", "isolated subject clusters and small accents, separate non-overlapping clipart elements", ("supporting subject elements",), ("labels", "packaging", "poster layout", "cover design")),
+        ImageBlueprint(3, "CUSTOMER_ASSET", "Generate small coordinating accent artwork.", "individual accents with clean edges and generous spacing", ("accent elements",), ("typography", "signs", "cards", "panels")),
+        ImageBlueprint(4, "CUSTOMER_ASSET", "Generate additional buyer-download artwork.", "cohesive isolated customer assets, no promotional layout", ("additional coordinated elements",), ("Etsy thumbnail text", "collection title", "digital product cover")),
+    )
 
 
 def _digital_paper() -> tuple[ImageBlueprint, ...]:

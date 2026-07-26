@@ -83,11 +83,13 @@ class ProductFactoryResumeService:
         queue_manager: ProductionQueueManager,
         config: EtsyConfig,
         client: EtsyClient | None = None,
+        allow_upload: bool = False,
     ) -> None:
         self._memory = memory
         self._queue_manager = queue_manager
         self._config = config
         self._client = client or EtsyClient(config)
+        self._allow_upload = allow_upload
 
     def resume(self, job_id: str) -> ResumeResult:
         """Resume a failed Product Factory job from its failed stage."""
@@ -310,6 +312,7 @@ class ProductFactoryResumeService:
             existing_draft_id=listing_id,
             image_config=ImageProviderConfig.from_file(OPENAI_CONFIG_PATH),
             failed_stage=failed_stage,
+            allow_upload=self._allow_upload,
         )
         report = ProductFactory(
             queue_manager=self._queue_manager,
@@ -389,11 +392,13 @@ class StageAwareResumeRunner(DefaultProductFactoryStageRunner):
         existing_draft_id: str | None,
         image_config: ImageProviderConfig,
         failed_stage: str = "",
+        allow_upload: bool = False,
     ) -> None:
         super().__init__(
             memory=memory,
             etsy_config=etsy_config,
             image_config=image_config,
+            allow_etsy_upload=allow_upload,
         )
         self._resume_client = client
         self._existing_draft_id = existing_draft_id
@@ -526,6 +531,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         action="store_true",
         help="Accepted for consistency with production factory commands.",
     )
+    parser.add_argument(
+        "--upload",
+        action="store_true",
+        help="Allow Etsy upload after human visual approval marker exists.",
+    )
     return parser.parse_args(argv)
 
 
@@ -543,6 +553,7 @@ def main(argv: list[str] | None = None) -> None:
             memory=memory,
             queue_manager=queue_manager,
             config=config,
+            allow_upload=args.upload,
         ).resume(args.job_id)
     except RuntimeError as error:
         print_resume_error(args.job_id, error)

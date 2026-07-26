@@ -176,6 +176,7 @@ class Sprint34CreativeQualityTest(unittest.TestCase):
                 job=job(),
                 final_files=tuple(files),
                 prompt_package=prompt_package,
+                manual_visual_approval=True,
             )
 
         self.assertEqual(result.pass_fail, PASS)

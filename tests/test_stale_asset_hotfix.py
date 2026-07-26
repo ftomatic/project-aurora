@@ -90,6 +90,7 @@ class StaleAssetHotfixTest(unittest.TestCase):
                 prompt_package={"expected_image_count": 4},
                 asset_manifest_path=manifest_path_for(final_dir.parent),
                 workspace=final_dir.parent,
+                manual_visual_approval=True,
             )
 
             self.assertEqual(result.status, "FAIL")
@@ -122,6 +123,7 @@ class StaleAssetHotfixTest(unittest.TestCase):
                 prompt_package={"expected_image_count": 4},
                 asset_manifest_path=manifest_path_for(final_dir.parent),
                 workspace=final_dir.parent,
+                manual_visual_approval=True,
             )
 
             self.assertEqual(result.status, "PASS")
@@ -317,6 +319,7 @@ class StaleAssetHotfixTest(unittest.TestCase):
                 prompt_package={"expected_image_count": 4},
                 asset_manifest_path=manifest_path_for(job_paths.job_root),
                 workspace=job_paths.job_root,
+                manual_visual_approval=True,
             )
             self.assertEqual(result.status, "PASS")
 
