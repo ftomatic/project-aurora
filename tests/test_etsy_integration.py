@@ -129,7 +129,7 @@ class EtsyIntegrationTest(unittest.TestCase):
         paths: list[str] = []
         for index in range(1, 5):
             path = image_dir / f"strawberry_birthday_party_printable_{index:02d}.png"
-            Image.new("RGBA", (3600, 3600), (255, index * 20, 0, 255)).save(
+            Image.new("RGBA", (4000, 4000), (255, index * 20, 0, 255)).save(
                 path,
                 format="PNG",
                 dpi=(300, 300),

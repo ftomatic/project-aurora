@@ -19,7 +19,7 @@ from project_aurora.merchandising.market_pricing import (  # noqa: E402
     comparable_from_etsy_record,
 )
 from project_aurora.merchandising.pricing_engine import (  # noqa: E402
-    CONFIGURED_FALLBACK,
+    FIXED_DEFAULT,
     PricingEngine,
 )
 from project_aurora.storage.csv_storage import CSVStorage  # noqa: E402
@@ -64,7 +64,7 @@ class LiveMarketPricingTest(unittest.TestCase):
     def tearDown(self) -> None:
         self.temp_dir.cleanup()
 
-    def test_successful_live_pricing_uses_etsy_market_evidence(self) -> None:
+    def test_pricing_engine_uses_fixed_default_even_when_etsy_market_available(self) -> None:
         client = FakeEtsyClient(
             {
                 "results": [
@@ -92,15 +92,13 @@ class LiveMarketPricingTest(unittest.TestCase):
             artistic_category="watercolor woodland",
         )
 
-        self.assertEqual(result.source, LIVE_ETSY_MARKET)
-        self.assertEqual(result.listings_compared, 5)
-        self.assertEqual(result.market_low, 3.99)
-        self.assertEqual(result.market_high, 6.49)
-        self.assertEqual(result.market_median, 4.99)
-        self.assertNotEqual(result.launch_price, 1.99)
-        self.assertIn("comparable Etsy", result.reason)
+        self.assertEqual(result.source, FIXED_DEFAULT)
+        self.assertEqual(result.listings_compared, 0)
+        self.assertEqual(result.launch_price, 2.49)
+        self.assertEqual(result.recommended_price, 2.49)
+        self.assertEqual(client.calls, [])
 
-    def test_fallback_pricing_when_etsy_research_fails(self) -> None:
+    def test_fixed_pricing_when_etsy_research_fails(self) -> None:
         class BrokenProvider:
             def research_pricing(self, **_kwargs):  # type: ignore[no-untyped-def]
                 raise RuntimeError("Etsy unavailable")
@@ -117,9 +115,9 @@ class LiveMarketPricingTest(unittest.TestCase):
             confidence_score=0.8,
         )
 
-        self.assertEqual(result.source, CONFIGURED_FALLBACK)
+        self.assertEqual(result.source, FIXED_DEFAULT)
         self.assertEqual(result.listings_compared, 0)
-        self.assertNotEqual(result.launch_price, 1.99)
+        self.assertEqual(result.launch_price, 2.49)
 
     def test_cached_pricing_avoids_repeated_etsy_requests(self) -> None:
         client = FakeEtsyClient(

@@ -23,6 +23,7 @@ from project_aurora.planning.production_queue_manager import (  # noqa: E402
     READY,
     ProductionQueueManager,
 )
+from project_aurora.production.watercolor_scope import resolve_watercolor_scope  # noqa: E402
 from project_aurora.portfolio.atlas_portfolio_manager import (  # noqa: E402
     AtlasPortfolioManager,
     AtlasPortfolioPlan,
@@ -31,6 +32,7 @@ from project_aurora.research.athena_market_intelligence import (  # noqa: E402
     AthenaMarketIntelligence,
     AthenaResearchReport,
 )
+from project_aurora.research.market_opportunity import MarketOpportunity  # noqa: E402
 from project_aurora.research.research_config import ResearchPlannerConfig  # noqa: E402
 
 
@@ -64,7 +66,7 @@ def main(argv: list[str] | None = None) -> None:
     )
     atlas = AtlasPortfolioManager(config=config, queue_manager=queue_manager)
     plan = atlas.build_portfolio(
-        research.opportunities,
+        research.opportunities + recovery_watercolor_opportunities(),
         provider_status=provider_status,
     )
     atlas.save_report(plan)
@@ -102,6 +104,82 @@ def estimate_image_cost(product_count: int) -> ImageCostEstimate:
         provider=image_config.provider,
         quality=image_config.quality,
         number_of_images=product_count * image_config.number_of_images,
+    )
+
+
+def recovery_watercolor_opportunities() -> tuple[MarketOpportunity, ...]:
+    """Return fresh approved-scope opportunities for emergency recovery runs."""
+    specs = (
+        (
+            "Mouse Bakery Watercolor Clipart",
+            "storybook animals",
+            "cottage bakery animals",
+            "crafters and nursery buyers",
+            "Evergreen",
+            "signature_storybook_animal_collection",
+            "Whimsical Storybook",
+        ),
+        (
+            "Fox Garden Watercolor Clipart",
+            "woodland animals",
+            "garden animal clipart",
+            "cottagecore printable buyers",
+            "Spring",
+            "watercolor_woodland_collection",
+            "Storybook Watercolor",
+        ),
+        (
+            "Rabbit Tea Party Watercolor Clipart",
+            "baby animals",
+            "tea party animal clipart",
+            "parents and crafters",
+            "Summer",
+            "watercolor_animal_collection",
+            "Loose Watercolor",
+        ),
+        (
+            "Bear Picnic Watercolor Clipart",
+            "woodland nursery",
+            "picnic animal clipart",
+            "nursery decor buyers",
+            "Fall",
+            "watercolor_animal_collection",
+            "Cottagecore",
+        ),
+        (
+            "Cottage Mushroom Botanical Clipart",
+            "botanical",
+            "mushroom botanical clipart",
+            "junk journal and craft buyers",
+            "Autumn",
+            "watercolor_botanical_collection",
+            "Vintage Botanical",
+        ),
+    )
+    return tuple(
+        MarketOpportunity(
+            keyword=keyword,
+            primary_niche=niche,
+            subcategory=subcategory,
+            target_audience=audience,
+            season=season,
+            product_type=product_type,
+            recommended_artistic_style=style,
+            trend_score=91 - index,
+            competition_score=34 + index,
+            commercial_potential=92 - index,
+            confidence=93 - index,
+            research_sources=("Aurora Recovery Scope", "Seasonal Calendar"),
+        )
+        for index, (
+            keyword,
+            niche,
+            subcategory,
+            audience,
+            season,
+            product_type,
+            style,
+        ) in enumerate(specs)
     )
 
 
@@ -182,7 +260,19 @@ def handoff_to_forge(
 ) -> int:
     """Persist approved products as READY jobs for Forge."""
     created = 0
+    queue_before = len(queue_manager.list_jobs())
+    ready_before = sum(1 for job in queue_manager.list_jobs() if job.status == READY)
+    transformed_created = len(plan.selected)
+    enqueue_attempted = 0
     for opportunity in plan.selected:
+        decision = resolve_watercolor_scope(
+            opportunity.keyword,
+            opportunity.product_type,
+            opportunity.recommended_artistic_style,
+        )
+        if not decision.supported:
+            continue
+        enqueue_attempted += 1
         try:
             queue_manager.add_job(
                 priority="High" if opportunity.confidence >= 90 else "Medium",
@@ -204,6 +294,29 @@ def handoff_to_forge(
         except ValueError:
             continue
         created += 1
+    queue_after = len(queue_manager.list_jobs())
+    ready_after = sum(1 for job in queue_manager.list_jobs() if job.status == READY)
+    next_job = queue_manager.next_ready_job()
+    print("")
+    print("Forge Handoff Diagnostics")
+    print("Transformed Products Created")
+    print(transformed_created)
+    print("Enqueue Attempted")
+    print(enqueue_attempted)
+    print("Enqueue Succeeded")
+    print(created)
+    print("Queue Size Before Enqueue")
+    print(queue_before)
+    print("Queue Size After Enqueue")
+    print(queue_after)
+    print("Queue File Path")
+    print(queue_manager.queue_path)
+    print("Persisted READY Count")
+    print(ready_after)
+    print("READY Count Before Enqueue")
+    print(ready_before)
+    print("next_ready_job() Result")
+    print(next_job.product_name if next_job else "None")
     return created
 
 

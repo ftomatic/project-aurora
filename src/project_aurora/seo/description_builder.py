@@ -11,7 +11,8 @@ FREE COMMERCIAL LICENSE
 EACH IMAGE SIZE:
 12" × 12"
 300 DPI
-3600 × 3600 pixels"""
+4000 × 4000 pixels
+Transparent backgrounds"""
 
 DOWNLOAD_DISCLAIMER_SECTION = """After purchase, access your files by visiting:
 Etsy Profile > Purchases and Reviews

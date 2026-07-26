@@ -20,7 +20,7 @@ from project_aurora.production.digital_download_builder import (  # noqa: E402
 )
 
 
-def write_final_png(path: Path, size: tuple[int, int] = (3600, 3600)) -> None:
+def write_final_png(path: Path, size: tuple[int, int] = (4000, 4000)) -> None:
     Image.new("RGBA", size, (255, 0, 0, 255)).save(
         path,
         format="PNG",
@@ -89,7 +89,7 @@ class DigitalDownloadBuilderTest(unittest.TestCase):
         ).build()
 
         self.assertEqual(result.status, "FAILED")
-        self.assertTrue(any("3600x3600" in error for error in result.errors))
+        self.assertTrue(any("4000x4000" in error for error in result.errors))
 
 
 if __name__ == "__main__":

@@ -20,6 +20,6 @@ def load_local_env(path: Path) -> tuple[str, ...]:
         value = value.strip().strip("\"'")
         if not key:
             continue
-        os.environ.setdefault(key, value)
+        os.environ[key] = value
         loaded.append(key)
     return tuple(loaded)

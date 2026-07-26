@@ -55,7 +55,7 @@ def job(product_name: str, category: str) -> ProductionJob:
 
 def write_commercial_png(path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    Image.new("RGBA", (3600, 3600), (255, 0, 0, 255)).save(
+    Image.new("RGBA", (4000, 4000), (255, 0, 0, 255)).save(
         path,
         format="PNG",
         dpi=(300, 300),
@@ -95,7 +95,7 @@ class ProductionHardeningTest(unittest.TestCase):
         self.assertFalse(result.resolved)
         self.assertIn("No verified taxonomy", result.resolution_reason)
 
-    def test_pricing_varies_and_is_not_global_199(self) -> None:
+    def test_pricing_uses_fixed_default(self) -> None:
         engine = PricingEngine()
 
         clipart = engine.resolve_price(
@@ -121,9 +121,10 @@ class ProductionHardeningTest(unittest.TestCase):
             confidence_score=0.8,
         )
 
-        self.assertNotEqual(clipart.launch_price, wall.launch_price)
-        self.assertNotEqual(clipart.launch_price, 1.99)
-        self.assertEqual(clipart.source, "CONFIGURED_FALLBACK")
+        self.assertEqual(clipart.launch_price, 2.49)
+        self.assertEqual(wall.launch_price, 2.49)
+        self.assertEqual(clipart.source, "FIXED_DEFAULT")
+        self.assertEqual(wall.source, "FIXED_DEFAULT")
 
     def test_capability_blocks_long_text_games_and_allows_visual_products(self) -> None:
         resolver = ProductCapabilityResolver()
@@ -133,11 +134,13 @@ class ProductionHardeningTest(unittest.TestCase):
         clipart = resolver.resolve("Autumn Mushroom Clipart", "clipart", "clipart")
         short = resolver.resolve("Hello Label", "gift tags", "gift tags")
 
-        self.assertEqual(bridal.mode, TEMPLATE_REQUIRED)
+        self.assertEqual(bridal.mode, "UNSUPPORTED")
         self.assertFalse(bridal.supported)
-        self.assertEqual(wall.mode, IMAGE_ONLY)
+        self.assertFalse(wall.supported)
+        self.assertEqual(wall.mode, "UNSUPPORTED")
         self.assertTrue(clipart.supported)
-        self.assertIn(short.mode, {IMAGE_ONLY, IMAGE_WITH_SHORT_TEXT})
+        self.assertFalse(short.supported)
+        self.assertEqual(short.mode, "UNSUPPORTED")
 
     def test_upload_manager_retries_remote_disconnect_then_success(self) -> None:
         path = self.base_path / "file.png"

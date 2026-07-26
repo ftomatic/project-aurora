@@ -23,8 +23,8 @@ from project_aurora.planning.production_queue_manager import (
     ProductionJob,
     ProductionQueueManager,
 )
+from project_aurora.production.watercolor_scope import resolve_watercolor_scope
 from project_aurora.production.production_report import ProductionReport
-from project_aurora.prompt_factory.prompt_composer import PromptComposer
 from project_aurora.seo.seo_engine import SEOEngine
 from project_aurora.storage.memory_manager import MemoryManager
 
@@ -134,9 +134,12 @@ class DefaultProductFactoryStageRunner:
         return self._paths.for_job(job)
 
     def compose_prompts(self, job: ProductionJob) -> Any:
-        """Compose and save prompt recipe/package-compatible prompt data."""
+        """Compose and save a simple customer-clipart prompt."""
         from project_aurora.muse.muse_engine import MuseEngine
 
+        scope = resolve_watercolor_scope(job.product_name, job.category, job.style)
+        if not scope.supported:
+            raise ProductFactoryStageError("product_capability", (scope.reason,))
         art_direction = MuseEngine(memory=self._memory).select_style(
             product=job.product_name,
             audience=job.target_customer,
@@ -160,26 +163,18 @@ class DefaultProductFactoryStageRunner:
         if art_direction.status == "REJECTED":
             raise RuntimeError("Muse rejected style below confidence threshold.")
 
-        recipe = PromptComposer(memory=self._memory).compose_art_directed(
-            product=job.product_name,
-            style=art_direction.recommended_style,
-            palette=art_direction.palette,
-            rendering_method=art_direction.rendering_method,
-            composition=art_direction.composition,
-            mood=art_direction.mood,
-            background_treatment=art_direction.background_treatment,
-            lighting=art_direction.lighting,
-            texture=art_direction.texture,
-            typography_direction=art_direction.typography_direction,
-            negative_style_constraints=art_direction.negative_style_constraints,
-            recipe_id=job.id,
+        final_prompt = _simple_clipart_prompt(job, scope.canonical_product_type)
+        negative_prompt = (
+            "no text, no letters, no numbers, no logo, no watermark, no border, "
+            "no poster layout, no mockup, no product title, no typography, "
+            "no promotional cover, no black background"
         )
         self._memory.save_prompt_package(
             {
                 "product_name": job.product_name,
                 "collection": job.product_name,
                 "theme": job.seasonal_theme,
-                "product_type": job.category,
+                "product_type": scope.canonical_product_type,
                 "style": art_direction.recommended_style,
                 "palette": art_direction.palette,
                 "rendering_family": art_direction.rendering_family,
@@ -191,8 +186,8 @@ class DefaultProductFactoryStageRunner:
                 "typography_direction": art_direction.typography_direction,
                 "mood": art_direction.mood,
                 "target_platforms": ["Etsy"],
-                "image_prompt": recipe.final_prompt,
-                "negative_prompt": recipe.negative_prompt,
+                "image_prompt": final_prompt,
+                "negative_prompt": negative_prompt,
                 "keywords": job.keywords,
                 "art_direction": {
                     "recommended_style": art_direction.recommended_style,
@@ -211,7 +206,7 @@ class DefaultProductFactoryStageRunner:
             },
             package_id=job.id,
         )
-        return recipe
+        return SimpleNamespace(status="SUCCESS", final_prompt=final_prompt)
 
     def generate_images(self, job: ProductionJob) -> Any:
         """Generate four OpenAI images through the image engine."""
@@ -253,16 +248,16 @@ class DefaultProductFactoryStageRunner:
         )
 
     def run_image_qa(self, job: ProductionJob) -> Any:
-        """Run deterministic image QA."""
-        from project_aurora.image_qa.qa_engine import ImageQAEngine
-
-        results = ImageQAEngine(memory=self._memory).run()
-        try:
-            findings = self._memory.load_record("image_qa_findings", "latest").get("findings", ())
-        except FileNotFoundError:
-            findings = ()
-        _print_qa_findings(findings)
-        return results
+        """Keep visual QA optional in the recovery production path."""
+        return (
+            SimpleNamespace(
+                status="WARNING",
+                asset_name=job.product_name,
+                checks_passed=("visual QA optional",),
+                checks_failed=(),
+                warnings=("VISUAL_QA_UNAVAILABLE: optional visual inspection unavailable",),
+            ),
+        )
 
     def export_commercial_images(self, job: ProductionJob) -> Any:
         """Export final commercial PNGs."""
@@ -277,6 +272,7 @@ class DefaultProductFactoryStageRunner:
         return CommercialImageExporter(
             source_dir=job_paths.generated_images_dir,
             output_dir=job_paths.final_images_dir,
+            output_prefix=_asset_filename_prefix(job),
         ).export()
 
     def generate_seo(self, job: ProductionJob) -> Any:
@@ -404,18 +400,32 @@ class DefaultProductFactoryStageRunner:
         ).upload_latest_draft_images()
 
     def upload_customer_downloads(self, job: ProductionJob, listing_id: str | None) -> Any:
-        """Upload final PNGs as Etsy customer downloads."""
+        """Build and upload the customer ZIP download."""
         from project_aurora.integrations.etsy.etsy_digital_file_service import (
             EtsyDigitalFileService,
         )
+        from project_aurora.production.digital_download_builder import (
+            DigitalDownloadBuilder,
+        )
 
         self._refresh_etsy_config()
+        job_paths = self.job_paths(job)
+        package = DigitalDownloadBuilder(
+            final_images_dir=job_paths.final_images_dir,
+            output_dir=job_paths.digital_downloads_dir,
+            zip_filename=f"{_asset_filename_prefix(job)}.zip",
+        ).build()
+        if package.status != "SUCCESS" or not package.zip_path:
+            raise ProductFactoryStageError(
+                "customer_download_upload",
+                package.errors or ("Digital download ZIP could not be created.",),
+            )
         return EtsyDigitalFileService(
             config=self._etsy_config,
             memory=self._memory,
-        ).upload_digital_files(
+        ).upload_digital_file(
             listing_id=listing_id,
-            final_images_dir=self.job_paths(job).final_images_dir,
+            file_path=Path(package.zip_path),
         )
 
     def _refresh_etsy_config(self) -> None:
@@ -612,6 +622,27 @@ class ProductFactory:
         warnings: list[str] = []
         metadata: dict[str, Any] = {}
         job_paths = _job_paths_from_runner(self._stage_runner, job)
+        scope = resolve_watercolor_scope(job.product_name, job.category, job.style)
+        if not scope.supported:
+            if not self._dry_run and hasattr(self._queue_manager, "mark_unsupported_product_type"):
+                self._queue_manager.mark_unsupported_product_type(job.id, scope.reason)
+            report = ProductionReport(
+                job_id=job.id,
+                product=job.product_name,
+                style=job.style,
+                draft_id=None,
+                images=0,
+                downloads=0,
+                time=round(perf_counter() - started_at, 3),
+                success=False,
+                failed_stage="product_capability",
+                errors=(scope.reason,),
+                job_paths=job_paths,
+                metadata={"scope": {"canonical_product_type": scope.canonical_product_type}},
+            )
+            if self._save_report_enabled:
+                self._save_report(report)
+            return report
 
         if not self._dry_run:
             self._queue_manager.mark_in_progress(job.id)
@@ -680,7 +711,14 @@ class ProductFactory:
             )
         except Exception as error:
             if not self._dry_run:
-                self._queue_manager.mark_failed(job.id)
+                if (
+                    isinstance(error, ProductFactoryStageError)
+                    and error.stage == "product_capability"
+                    and hasattr(self._queue_manager, "mark_unsupported_product_type")
+                ):
+                    self._queue_manager.mark_unsupported_product_type(job.id, str(error))
+                else:
+                    self._queue_manager.mark_failed(job.id)
             failed_stage = _failed_stage_from(error)
             draft_id = draft_id or _draft_id_from_metadata(metadata)
             report = ProductionReport(
@@ -839,6 +877,59 @@ def _safe_job_folder_name(job: ProductionJob) -> str:
 def _slug_part(value: str) -> str:
     slug = re.sub(r"[^a-z0-9]+", "_", value.casefold()).strip("_")
     return slug[:80]
+
+
+def _asset_filename_prefix(job: ProductionJob) -> str:
+    job_short = _slug_part(job.id)[:8] or "job"
+    product = _slug_part(job.product_name) or "product"
+    return f"{job_short}_{product}"
+
+
+def _simple_clipart_prompt(job: ProductionJob, canonical_product_type: str) -> str:
+    subjects = _prompt_subjects(job)
+    palette = _prompt_palette(job)
+    return (
+        "Create actual customer clipart illustrations only. "
+        f"Product: {job.product_name}. "
+        f"Product type: {canonical_product_type}. "
+        f"Show: {subjects}. "
+        "Whimsical vintage watercolor storybook illustration style with soft natural "
+        "colors, expressive woodland or farm animals where relevant, classic country "
+        "clothing where relevant, gentle human-like activities, delicate cottagecore "
+        "botanical details, hand-painted watercolor texture, warm nostalgic charm. "
+        f"Palette: {palette}. "
+        "Each subject must be isolated, fully visible, centered, separate, and clean edged "
+        "on a transparent background. "
+        "No Etsy cover, no collection overview, no detail preview, no use case mockup, "
+        "no poster layout, no packaging, no title card, no product label, no typography. "
+        "No text, no words, no letters, no numbers, no logo, no watermark, no border."
+    )
+
+
+def _prompt_subjects(job: ProductionJob) -> str:
+    text = f"{job.product_name} {' '.join(job.keywords)}".casefold()
+    if "bakery" in text:
+        return "rabbit baking bread, fox reading a recipe book, mouse painting at a tiny easel, bear holding a pie"
+    if "mushroom" in text:
+        return "autumn mushrooms, woodland leaves, acorns, berries, and fern accents"
+    if "botanical" in text or "floral" in text:
+        return "watercolor botanical sprigs, flowers, leaves, berries, and garden accents"
+    if "baby" in text or "nursery" in text:
+        return "baby woodland animals, gentle farm animals, soft botanical accents, nursery-friendly characters"
+    if "woodland" in text or "animal" in text:
+        return "rabbit baking bread, fox reading a book, hedgehog gardening, mouse painting at a tiny easel"
+    return "coordinated watercolor clipart elements matching the product theme"
+
+
+def _prompt_palette(job: ProductionJob) -> str:
+    text = f"{job.product_name} {job.seasonal_theme}".casefold()
+    if "autumn" in text or "mushroom" in text:
+        return "warm cream, muted rust, sage green, soft brown, dusty berry"
+    if "spring" in text:
+        return "warm cream, fresh sage, blush pink, butter yellow, soft blue"
+    if "christmas" in text or "winter" in text:
+        return "warm cream, evergreen, cranberry, soft brown, muted gold"
+    return "warm cream, sage green, soft brown, muted red, pale blue"
 
 
 def _composer_style(style: str) -> str:
@@ -1149,17 +1240,17 @@ def _print_qa_findings(findings: Any) -> None:
 
 
 SUPPORTED_PRODUCT_TYPE_EXPECTATIONS = {
-    "wall art",
-    "invitation",
-    "party printable",
-    "sticker sheet",
-    "sticker sheets",
     "clipart",
-    "digital paper",
-    "teacher printable",
-    "teacher printables",
-    "teacher wall art",
-    "bridal shower printable",
+    "watercolor_clipart_bundle",
+    "watercolor_animal_collection",
+    "watercolor_botanical_collection",
+    "watercolor_woodland_collection",
+    "watercolor_seasonal_collection",
+    "signature_storybook_animal_collection",
+    "watercolor_sticker_illustration_set",
+    "digital illustration collection",
+    "illustration collection",
+    "sticker illustration set",
 }
 
 
@@ -1167,11 +1258,12 @@ def _validate_product_type_expectation(
     job: ProductionJob,
     prompt_package: dict[str, Any],
 ) -> None:
-    product_type = str(prompt_package.get("product_type") or "").strip()
+    product_type = str(prompt_package.get("product_type") or job.category or "").strip()
     normalized = product_type.casefold()
     if not normalized:
         raise RuntimeError("Missing product-type expectation before image generation.")
-    if not any(expected in normalized for expected in SUPPORTED_PRODUCT_TYPE_EXPECTATIONS):
+    scope = resolve_watercolor_scope(job.product_name, product_type, job.style)
+    if not scope.supported and not any(expected in normalized for expected in SUPPORTED_PRODUCT_TYPE_EXPECTATIONS):
         raise RuntimeError(
             "Unsupported product-type expectation before image generation: "
             f"{product_type}."

@@ -116,7 +116,7 @@ class FakeCompleteEtsyClient(EtsyClient):
 
 
 def write_final_png(path: Path, color: tuple[int, int, int, int]) -> None:
-    Image.new("RGBA", (3600, 3600), color).save(
+    Image.new("RGBA", (4000, 4000), color).save(
         path,
         format="PNG",
         dpi=(300, 300),
@@ -146,7 +146,7 @@ class CompleteEtsyDraftTest(unittest.TestCase):
             shared_secret="fake_shared_secret",
             access_token="fake_token",
             taxonomy_id=1250,
-            default_price=1.99,
+            default_price=2.49,
         )
 
     def tearDown(self) -> None:
@@ -171,10 +171,11 @@ class CompleteEtsyDraftTest(unittest.TestCase):
         self.assertTrue(result.digital_file_uploaded)
         self.assertEqual(client.draft_calls, 1)
         self.assertEqual([upload[2] for upload in client.image_uploads], [1, 2, 3, 4])
-        self.assertEqual(len(client.digital_uploads), 4)
+        self.assertEqual(len(client.digital_uploads), 1)
+        self.assertTrue(client.digital_uploads[0][1].endswith(".zip"))
         payload = client.payloads[0].to_dict()
         self.assertEqual(payload["type"], "download")
-        self.assertEqual(payload["price"], 1.99)
+        self.assertEqual(payload["price"], 2.49)
         self.assertEqual(payload["quantity"], 999)
         self.assertEqual(payload["taxonomy_id"], 1250)
         self.assertNotEqual(payload["description"], RAINBOW_MILK_STUDIO_DESCRIPTION)
@@ -187,8 +188,8 @@ class CompleteEtsyDraftTest(unittest.TestCase):
         self.assertEqual(payload["when_made"], "made_to_order")
         self.assertNotIn("shipping_profile_id", payload)
         self.assertNotIn("processing_profile_id", payload)
-        self.assertEqual(result.digital_file_path, str(self.final_images_dir))
-        self.assertEqual(len(client.digital_uploads), 4)
+        self.assertTrue(str(result.digital_file_path).endswith(".zip"))
+        self.assertEqual(len(client.digital_uploads), 1)
         saved = self.memory.load_etsy_complete_draft_result()
         self.assertEqual(saved["status"], "SUCCESS")
         self.assertEqual(saved["etsy_listing_id"], "123456789")

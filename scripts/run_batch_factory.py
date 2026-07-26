@@ -39,6 +39,7 @@ from project_aurora.storage.memory_manager import MemoryManager  # noqa: E402
 from scripts.run_product_factory import (  # noqa: E402
     print_etsy_config_diagnostics,
 )
+from project_aurora.config.local_env import load_local_env  # noqa: E402
 
 
 REAL_QUEUE_PATH = (
@@ -49,6 +50,7 @@ REAL_QUEUE_PATH = (
     / "queue.json"
 )
 DAILY_FACTORY_CONFIG_PATH = PROJECT_ROOT / "config" / "daily_factory.yaml"
+LOCAL_ENV_PATH = PROJECT_ROOT / "config" / "aurora.local.env"
 
 
 @dataclass(frozen=True, slots=True)
@@ -127,7 +129,7 @@ class BatchProductionFactory:
         downloads_uploaded = 0
         elapsed_time = 0.0
         previous_generated_images = False
-        for _ in range(count):
+        while completed + failed < count:
             job = self._queue_manager.next_ready_job()
             if job is None:
                 break
@@ -146,6 +148,16 @@ class BatchProductionFactory:
                     "ProductFactory.execute() did not return a ProductionReport."
                 )
             print_report_diagnostics(report)
+            if (
+                not report.success
+                and report.failed_stage == "product_capability"
+                and any(
+                    "Unsupported recovery product type" in error
+                    or "outside the approved watercolor" in error
+                    for error in report.errors
+                )
+            ):
+                continue
             reports.append(report)
             if report.success:
                 completed += 1
@@ -229,6 +241,13 @@ def _run_dry_batch(count: int, temp_dir: Path) -> BatchFactoryReport:
 
 
 def _run_live_batch(count: int) -> BatchFactoryReport:
+    loaded_env = load_local_env(LOCAL_ENV_PATH)
+    print("OpenAI API Key Loaded")
+    print("YES" if "OPENAI_API_KEY" in loaded_env else "NO")
+    print("")
+    if "OPENAI_API_KEY" not in loaded_env:
+        raise RuntimeError("OPENAI_API_KEY is required in config/aurora.local.env.")
+
     runtime_config = load_batch_runtime_config(DAILY_FACTORY_CONFIG_PATH)
     queue_manager = ProductionQueueManager(queue_path=REAL_QUEUE_PATH)
     memory = MemoryManager(

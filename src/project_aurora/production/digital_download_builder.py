@@ -11,7 +11,8 @@ from project_aurora.image_generation.commercial_image_exporter import (
 )
 
 
-DIGITAL_DOWNLOAD_FILENAME = "Summer_Strawberry_Birthday_Collection.zip"
+DEFAULT_DIGITAL_DOWNLOAD_FILENAME = "Aurora_Digital_Download.zip"
+DIGITAL_DOWNLOAD_FILENAME = DEFAULT_DIGITAL_DOWNLOAD_FILENAME
 
 
 @dataclass(frozen=True, slots=True)
@@ -36,10 +37,12 @@ class DigitalDownloadBuilder:
         final_images_dir: Path,
         output_dir: Path,
         required_count: int = 4,
+        zip_filename: str = DEFAULT_DIGITAL_DOWNLOAD_FILENAME,
     ) -> None:
         self._final_images_dir = final_images_dir
         self._output_dir = output_dir
         self._required_count = required_count
+        self._zip_filename = zip_filename
 
     def build(self) -> DigitalDownloadPackageResult:
         """Build and validate the customer download ZIP."""
@@ -54,7 +57,7 @@ class DigitalDownloadBuilder:
             )
 
         self._output_dir.mkdir(parents=True, exist_ok=True)
-        zip_path = self._output_dir / DIGITAL_DOWNLOAD_FILENAME
+        zip_path = self._output_dir / self._zip_filename
         with ZipFile(zip_path, "w", compression=ZIP_DEFLATED) as archive:
             for image_path in image_files:
                 archive.write(image_path, arcname=image_path.name)
@@ -93,7 +96,7 @@ class DigitalDownloadBuilder:
         return tuple(errors)
 
     def validate_zip(self, zip_path: Path) -> tuple[str, ...]:
-        """Validate the ZIP contains only the four final PNG files."""
+        """Validate the ZIP contains only the expected final PNG files."""
         errors: list[str] = []
         if not zip_path.exists():
             return (f"ZIP does not exist: {zip_path}",)
@@ -106,7 +109,9 @@ class DigitalDownloadBuilder:
             return (f"ZIP is invalid: {error}",)
         png_entries = [entry for entry in entries if entry.endswith(".png")]
         if len(entries) != self._required_count or len(png_entries) != self._required_count:
-            errors.append("ZIP must contain exactly 4 PNG entries.")
+            errors.append(
+                f"ZIP must contain exactly {self._required_count} PNG entries."
+            )
         for entry in entries:
             if "/" in entry or "\\" in entry:
                 errors.append(f"ZIP entry must not include directories: {entry}.")

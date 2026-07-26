@@ -176,19 +176,22 @@ def _reconstruct_job_seo_if_possible(report: dict[str, Any]) -> None:
     if seo_path.exists() and not existing:
         return
 
-    package = SEOEngine().build_package(
-        {
-            "job_id": job_id,
-            "etsy_listing_id": listing_id,
-            "product_name": product_name,
-            "product_type": _infer_product_type(product_name),
-            "category": _infer_product_type(product_name),
-            "target_buyer": "digital printable buyers",
-            "audience": "digital printable buyers",
-            "style": str(report.get("style") or ""),
-            "source": RECONSTRUCTED_SEO_SOURCE,
-        }
-    )
+    try:
+        package = SEOEngine().build_package(
+            {
+                "job_id": job_id,
+                "etsy_listing_id": listing_id,
+                "product_name": product_name,
+                "product_type": _infer_product_type(product_name),
+                "category": _infer_product_type(product_name),
+                "target_buyer": "digital printable buyers",
+                "audience": "digital printable buyers",
+                "style": str(report.get("style") or ""),
+                "source": RECONSTRUCTED_SEO_SOURCE,
+            }
+        )
+    except (RuntimeError, ValueError):
+        return
     record = {
         "job_id": package.job_id,
         "product_name": package.product_name,

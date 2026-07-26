@@ -14,9 +14,9 @@ from project_aurora.image_generation.image_inspector import (
 
 
 COMMERCIAL_IMAGE_COUNT = 4
-COMMERCIAL_IMAGE_SIZE = (3600, 3600)
+COMMERCIAL_IMAGE_SIZE = (4000, 4000)
 COMMERCIAL_IMAGE_DPI = 300
-COMMERCIAL_FILENAME_PREFIX = "strawberry_birthday_party_printable"
+COMMERCIAL_FILENAME_PREFIX = "aurora_watercolor_clipart"
 
 
 @dataclass(frozen=True, slots=True)
@@ -45,10 +45,12 @@ class CommercialImageExporter:
         source_dir: Path,
         output_dir: Path,
         required_count: int = COMMERCIAL_IMAGE_COUNT,
+        output_prefix: str = COMMERCIAL_FILENAME_PREFIX,
     ) -> None:
         self._source_dir = source_dir
         self._output_dir = output_dir
         self._required_count = required_count
+        self._output_prefix = output_prefix
 
     def export(self) -> CommercialImageExportResult:
         """Export exactly four valid source images to commercial PNG files."""
@@ -95,16 +97,18 @@ class CommercialImageExporter:
         return valid_files
 
     def _output_path(self, index: int) -> Path:
-        return self._output_dir / f"{COMMERCIAL_FILENAME_PREFIX}_{index:02d}.png"
+        return self._output_dir / f"{self._output_prefix}_{index:02d}.png"
 
     @staticmethod
     def _export_one(source_path: Path, output_path: Path) -> None:
         with Image.open(source_path) as image:
-            resized = image.convert("RGBA").resize(
-                COMMERCIAL_IMAGE_SIZE,
-                Image.Resampling.LANCZOS,
-            )
-            resized.save(
+            working = image.convert("RGBA")
+            working.thumbnail(COMMERCIAL_IMAGE_SIZE, Image.Resampling.LANCZOS)
+            canvas = Image.new("RGBA", COMMERCIAL_IMAGE_SIZE, (255, 255, 255, 0))
+            left = (COMMERCIAL_IMAGE_SIZE[0] - working.width) // 2
+            top = (COMMERCIAL_IMAGE_SIZE[1] - working.height) // 2
+            canvas.alpha_composite(working, dest=(left, top))
+            canvas.save(
                 output_path,
                 format="PNG",
                 dpi=(COMMERCIAL_IMAGE_DPI, COMMERCIAL_IMAGE_DPI),

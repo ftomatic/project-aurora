@@ -108,7 +108,7 @@ class ProductSpecificSEOTest(unittest.TestCase):
         paths: list[str] = []
         for index in range(1, 5):
             path = final_dir / f"{job.id}_{index:02d}.png"
-            Image.new("RGBA", (3600, 3600), (255, index, 0, 255)).save(
+            Image.new("RGBA", (4000, 4000), (255, index, 0, 255)).save(
                 path,
                 format="PNG",
                 dpi=(300, 300),
@@ -241,7 +241,7 @@ class ProductSpecificSEOTest(unittest.TestCase):
             approved_mockup_files=files,
             approved_generated_image_files=files,
             is_digital_download=True,
-            price=1.99,
+            price=2.49,
         )
 
         payload = EtsyListingMapper().map_to_draft(

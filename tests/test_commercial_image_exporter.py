@@ -47,7 +47,7 @@ class CommercialImageExporterTest(unittest.TestCase):
                 (255, index * 20, 0, 255),
             )
 
-    def test_exports_exactly_four_3600_pngs_with_300_dpi(self) -> None:
+    def test_exports_exactly_four_4000_pngs_with_300_dpi(self) -> None:
         self.write_valid_sources()
 
         result = CommercialImageExporter(
@@ -59,7 +59,7 @@ class CommercialImageExporterTest(unittest.TestCase):
         self.assertEqual(len(result.exported_files), 4)
         self.assertEqual(
             Path(result.exported_files[0]).name,
-            "strawberry_birthday_party_printable_01.png",
+            "aurora_watercolor_clipart_01.png",
         )
         for exported_file in result.exported_files:
             path = Path(exported_file)

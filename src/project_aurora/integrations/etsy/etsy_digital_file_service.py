@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from zipfile import ZipFile
 
 from project_aurora.image_generation.commercial_image_exporter import (
     validate_commercial_png,
@@ -87,9 +88,43 @@ class EtsyDigitalFileService:
         listing_id: str | None,
         file_path: Path,
     ) -> EtsyDigitalFileUploadResult:
-        """Backward-compatible wrapper for a single file upload."""
-        directory = file_path.parent
-        return self.upload_digital_files(listing_id=listing_id, final_images_dir=directory)
+        """Upload one customer ZIP file to an existing draft listing."""
+        errors = list(self._single_file_preflight_errors(listing_id, file_path))
+        if errors:
+            result = EtsyDigitalFileUploadResult(
+                status="CONFIGURATION_REQUIRED",
+                etsy_listing_id=listing_id,
+                digital_file_path=str(file_path),
+                uploaded=False,
+                files_found=1 if file_path.exists() else 0,
+                files_uploaded=0,
+                failed=0,
+                errors=tuple(errors),
+                metadata={"api_called": False},
+            )
+            self._save_result(result)
+            return result
+
+        attempt = self._upload_one(
+            listing_id=str(listing_id),
+            file_path=file_path,
+            rank=1,
+            manager=EtsyUploadManager(memory=self._memory),
+        )
+        failed = 0 if attempt.status == "SUCCESS" else 1
+        result = EtsyDigitalFileUploadResult(
+            status="SUCCESS" if failed == 0 else "PARTIAL_FAILURE",
+            etsy_listing_id=listing_id,
+            digital_file_path=str(file_path),
+            uploaded=failed == 0,
+            files_found=1,
+            files_uploaded=0 if failed else 1,
+            failed=failed,
+            attempts=(attempt,),
+            metadata={"api_called": True, "package_type": "zip"},
+        )
+        self._save_result(result)
+        return result
 
     def retry_failed_digital_files(
         self,
@@ -384,6 +419,41 @@ class EtsyDigitalFileService:
                 f"{file_path.name}: {error}"
                 for error in validate_commercial_png(file_path)
             )
+        return tuple(errors)
+
+    def _single_file_preflight_errors(
+        self,
+        listing_id: str | None,
+        file_path: Path,
+    ) -> tuple[str, ...]:
+        errors: list[str] = []
+        missing = self._missing_config()
+        if missing:
+            errors.append(
+                "Missing Etsy configuration: " + ", ".join(missing) + "."
+            )
+        if not listing_id:
+            errors.append("etsy_listing_id is required.")
+        if file_path.suffix.casefold() != ".zip":
+            errors.append("Customer download must be a ZIP file.")
+        if not file_path.exists() or not file_path.is_file():
+            errors.append(f"Digital file does not exist: {file_path}")
+            return tuple(errors)
+        if file_path.stat().st_size <= 0:
+            errors.append("ZIP file is empty.")
+        if file_path.stat().st_size >= MAX_DIGITAL_FILE_SIZE_BYTES:
+            errors.append(f"{file_path.name} exceeds Etsy's 20 MB digital file limit.")
+        try:
+            with ZipFile(file_path, "r") as archive:
+                entries = archive.namelist()
+        except OSError as error:
+            errors.append(f"ZIP is invalid: {error}")
+        else:
+            png_entries = [entry for entry in entries if entry.endswith(".png")]
+            if len(entries) != self._required_count or len(png_entries) != self._required_count:
+                errors.append(
+                    f"ZIP must contain exactly {self._required_count} PNG entries."
+                )
         return tuple(errors)
 
     @staticmethod

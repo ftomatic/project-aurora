@@ -243,9 +243,50 @@ class ResearchPlannerTest(unittest.TestCase):
         self.assertFalse(rejected)
 
     def test_handoff_to_forge_uses_approved_plan_without_research_regeneration(self) -> None:
-        opportunities = tuple(opportunity(index) for index in range(8))
+        opportunities = (
+            opportunity(
+                0,
+                niche="Woodland",
+                audience="parents",
+                season="Evergreen",
+                product_type="watercolor_woodland_collection",
+                style="Storybook Watercolor",
+            ),
+            opportunity(
+                1,
+                niche="Botanical",
+                audience="crafters",
+                season="Spring",
+                product_type="watercolor_botanical_collection",
+                style="Vintage Botanical",
+            ),
+            opportunity(
+                2,
+                niche="Animals",
+                audience="nursery buyers",
+                season="Summer",
+                product_type="watercolor_animal_collection",
+                style="Soft Nursery",
+            ),
+            opportunity(
+                3,
+                niche="Mushrooms",
+                audience="cottagecore buyers",
+                season="Fall",
+                product_type="watercolor_clipart_bundle",
+                style="Cottagecore",
+            ),
+            opportunity(
+                4,
+                niche="Holiday",
+                audience="gift buyers",
+                season="Winter",
+                product_type="watercolor_seasonal_collection",
+                style="Whimsical Storybook",
+            ),
+        )
         plan = AtlasPortfolioManager(
-            config=self.config(),
+            config=self.config(max_per_product_type=5),
             queue_manager=self.queue,
             memory=self.memory,
         ).build_portfolio(opportunities)

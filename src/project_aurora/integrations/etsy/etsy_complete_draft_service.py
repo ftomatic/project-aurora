@@ -18,6 +18,7 @@ from project_aurora.listing.listing_package import (
     READY_FOR_ETSY_DRAFT,
     ListingPackage,
 )
+from project_aurora.production.digital_download_builder import DigitalDownloadBuilder
 from project_aurora.seo.seo_engine import SEOEngine
 from project_aurora.storage.memory_manager import MemoryManager
 
@@ -68,7 +69,7 @@ class EtsyCompleteDraftService:
             approved_mockup_files=tuple(str(path) for path in image_files),
             approved_generated_image_files=tuple(str(path) for path in image_files),
             is_digital_download=True,
-            price=1.99,
+            price=2.49,
         )
 
         draft_result = EtsyDraftService(
@@ -116,13 +117,33 @@ class EtsyCompleteDraftService:
             return result
         completed.append("images_uploaded")
 
+        package_result = DigitalDownloadBuilder(
+            final_images_dir=self._final_images_dir,
+            output_dir=self._digital_downloads_dir,
+        ).build()
+        if package_result.status != "SUCCESS" or not package_result.zip_path:
+            result = self._result(
+                status="PARTIAL_FAILURE",
+                etsy_listing_id=listing_id,
+                draft_url=draft_result.draft_url,
+                draft_created=True,
+                images_uploaded=image_result.images_uploaded,
+                image_count=image_result.images_found,
+                digital_file_path=str(self._digital_downloads_dir),
+                completed_stages=tuple(completed),
+                failed_stage="digital_file_package",
+                errors=package_result.errors,
+            )
+            self._save(result)
+            return result
+
         digital_result = EtsyDigitalFileService(
             config=self._config,
             memory=self._memory,
             client=self._client,
-        ).upload_digital_files(
+        ).upload_digital_file(
             listing_id=listing_id,
-            final_images_dir=self._final_images_dir,
+            file_path=Path(package_result.zip_path),
         )
         if digital_result.status != "SUCCESS":
             result = self._result(
@@ -132,7 +153,7 @@ class EtsyCompleteDraftService:
                 draft_created=True,
                 images_uploaded=image_result.images_uploaded,
                 image_count=image_result.images_found,
-                digital_file_path=str(self._final_images_dir),
+                digital_file_path=str(package_result.zip_path),
                 completed_stages=tuple(completed),
                 failed_stage="digital_file_upload",
                 errors=digital_result.errors,
@@ -184,7 +205,7 @@ class EtsyCompleteDraftService:
             image_count=image_count,
             digital_file_uploaded=digital_file_uploaded,
             digital_file_path=digital_file_path,
-            price=1.99,
+            price=2.49,
             status=status,
             completed_stages=completed_stages,
             failed_stage=failed_stage,

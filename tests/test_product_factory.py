@@ -242,7 +242,21 @@ class ProductFactoryTest(unittest.TestCase):
         self.assertEqual(report.queue_status, COMPLETED)
         self.assertEqual(report.to_dict()["draft_id"], "4537338498")
 
-    def test_missing_product_type_expectation_fails_before_paid_generation(self) -> None:
+    def test_unsupported_product_type_fails_before_paid_generation(self) -> None:
+        unsupported_job = ProductionJob(
+            id="unsupported-1",
+            priority="High",
+            product_name="Wedding Planner Stickers",
+            category="planner stickers",
+            style="Flat Vector",
+            seasonal_theme="Wedding",
+            keywords=("planner", "stickers"),
+            confidence_score=0.9,
+            estimated_competition="Low",
+            estimated_demand="High",
+            estimated_revenue=100.0,
+            status=READY,
+        )
         runner = DefaultProductFactoryStageRunner(
             memory=self.memory,
             etsy_config=EtsyConfig(mode="mock"),
@@ -251,15 +265,15 @@ class ProductFactoryTest(unittest.TestCase):
         )
         self.memory.save_prompt_package(
             {
-                "product_name": self.job.product_name,
+                "product_name": unsupported_job.product_name,
                 "style": "Storybook Watercolor",
                 "image_prompt": "prompt",
             },
-            package_id=self.job.id,
+            package_id=unsupported_job.id,
         )
 
-        with self.assertRaisesRegex(RuntimeError, "Missing product-type expectation"):
-            runner.generate_images(self.job)
+        with self.assertRaisesRegex(RuntimeError, "Unsupported recovery product type"):
+            runner.generate_images(unsupported_job)
 
     def test_factory_success_marks_queue_complete_and_saves_report(self) -> None:
         paths = ProductFactoryPaths(jobs_dir=self.base_path / "jobs")
@@ -591,9 +605,15 @@ class ProductFactoryTest(unittest.TestCase):
             write_visible_png(job_paths.generated_images_dir / f"current_{index}.png")
 
         class FakeCommercialImageExporter:
-            def __init__(self, source_dir: Path, output_dir: Path) -> None:
+            def __init__(
+                self,
+                source_dir: Path,
+                output_dir: Path,
+                output_prefix: str = "",
+            ) -> None:
                 captured["source_dir"] = source_dir
                 captured["output_dir"] = output_dir
+                captured["output_prefix"] = output_prefix
                 captured["source_files"] = tuple(source_dir.glob("*.png"))
 
             def export(self) -> object:

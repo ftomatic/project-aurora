@@ -6,6 +6,8 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
 
+from project_aurora.production.watercolor_scope import resolve_watercolor_scope
+
 
 IMAGE_ONLY = "IMAGE_ONLY"
 IMAGE_WITH_SHORT_TEXT = "IMAGE_WITH_SHORT_TEXT"
@@ -21,6 +23,9 @@ class ProductCapabilityResult:
     supported: bool
     reason: str
     max_words_allowed: int = 5
+    requires_zip_package: bool = False
+    required_deliverable_count: int = 0
+    requires_layout_engine: bool = False
     generated_at: datetime = field(default_factory=datetime.now)
 
     def to_dict(self) -> dict[str, Any]:
@@ -29,6 +34,9 @@ class ProductCapabilityResult:
             "supported": self.supported,
             "reason": self.reason,
             "max_words_allowed": self.max_words_allowed,
+            "requires_zip_package": self.requires_zip_package,
+            "required_deliverable_count": self.required_deliverable_count,
+            "requires_layout_engine": self.requires_layout_engine,
             "generated_at": self.generated_at.isoformat(),
         }
 
@@ -41,6 +49,14 @@ class ProductCapabilityResolver:
 
     def resolve(self, product_name: str, product_type: str, category: str) -> ProductCapabilityResult:
         lowered = f"{product_name} {product_type} {category}".casefold()
+        scope = resolve_watercolor_scope(product_name, category or product_type)
+        if not scope.supported:
+            return ProductCapabilityResult(
+                mode=UNSUPPORTED,
+                supported=False,
+                reason=scope.reason,
+                max_words_allowed=self._maximum_short_text_words,
+            )
         if any(term in lowered for term in (
             "shower games",
             "worksheet",
@@ -57,36 +73,13 @@ class ProductCapabilityResolver:
                 supported=False,
                 reason="Product requires a template/text engine before paid image generation.",
                 max_words_allowed=self._maximum_short_text_words,
-            )
-        if any(term in lowered for term in (
-            "wall art",
-            "clipart",
-            "digital paper",
-            "pattern",
-            "botanical print",
-            "nursery",
-            "scrapbook",
-            "journaling paper",
-            "gift tags",
-            "stationery",
-        )):
-            return ProductCapabilityResult(
-                mode=IMAGE_ONLY,
-                supported=True,
-                reason="Product can be produced as image-first commercial PNG assets.",
-                max_words_allowed=self._maximum_short_text_words,
-            )
-        word_count = len([word for word in product_name.split() if word.strip()])
-        if word_count <= self._maximum_short_text_words:
-            return ProductCapabilityResult(
-                mode=IMAGE_WITH_SHORT_TEXT,
-                supported=True,
-                reason="Product contains only short verified text.",
-                max_words_allowed=self._maximum_short_text_words,
+                requires_layout_engine=True,
             )
         return ProductCapabilityResult(
-            mode=UNSUPPORTED,
-            supported=False,
-            reason="No safe product capability mapping exists.",
+            mode=IMAGE_ONLY,
+            supported=True,
+            reason=scope.reason,
             max_words_allowed=self._maximum_short_text_words,
+            requires_zip_package=True,
+            required_deliverable_count=4,
         )

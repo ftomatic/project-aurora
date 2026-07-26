@@ -14,6 +14,8 @@ from project_aurora.merchandising.market_pricing import (
 
 
 CONFIGURED_FALLBACK = "CONFIGURED_FALLBACK"
+FIXED_DEFAULT = "FIXED_DEFAULT"
+DEFAULT_FIXED_PRICE = 2.49
 
 
 @dataclass(frozen=True, slots=True)
@@ -113,53 +115,18 @@ class PricingEngine:
         keywords: tuple[str, ...] = (),
     ) -> PricingResult:
         """Return the launch price for a production job."""
-        live_result = self._resolve_live_market_price(
-            product_name=product_name,
-            product_type=product_type,
-            category=category,
-            bundle_size=bundle_size,
-            target_buyer=target_buyer,
-            artistic_category=artistic_category,
-            keywords=keywords,
-        )
-        if live_result is not None:
-            return live_result
-        key = _pricing_key(product_name, product_type, category)
-        if key not in self._ranges:
-            raise RuntimeError(f"No configured pricing range for product type: {product_type or category}.")
-        price_range = self._ranges[key]
-        score = max(0.0, min(1.0, (demand_score or confidence_score or 0.75)))
-        if "high" in competition_level.casefold():
-            score -= 0.12
-        elif "low" in competition_level.casefold():
-            score += 0.08
-        if bundle_size >= 8 or image_count >= 8:
-            score += 0.08
-        if commercial_license:
-            score += 0.04
-        score = max(0.0, min(1.0, score))
-        recommended = price_range.low + (price_range.high - price_range.low) * score
-        if commercial_license:
-            recommended += self._premium
-        floor = production_cost + self._minimum_margin
-        recommended = max(recommended, floor)
-        mature = min(price_range.high, recommended + 0.75)
-        launch = min(mature, max(price_range.low, recommended - 0.50))
         return PricingResult(
-            market_low=price_range.low,
-            market_median=price_range.median,
-            market_high=price_range.high,
-            recommended_price=_money(recommended),
-            launch_price=_money(launch),
-            mature_price=_money(mature),
-            pricing_strategy="value_based_launch",
-            reason=(
-                f"Configured fallback range for {key}; adjusted for demand, "
-                f"competition, bundle value, and commercial license."
-            ),
-            evidence=(f"pricing_range:{key}", "source:configured_fallback"),
-            confidence=86,
-            source=CONFIGURED_FALLBACK,
+            market_low=DEFAULT_FIXED_PRICE,
+            market_median=DEFAULT_FIXED_PRICE,
+            market_high=DEFAULT_FIXED_PRICE,
+            recommended_price=DEFAULT_FIXED_PRICE,
+            launch_price=DEFAULT_FIXED_PRICE,
+            mature_price=DEFAULT_FIXED_PRICE,
+            pricing_strategy="fixed_phase_1_price",
+            reason="Phase 1 fixed digital product price.",
+            evidence=("source:fixed_default",),
+            confidence=100,
+            source=FIXED_DEFAULT,
             listings_compared=0,
             top_seller_median=0.0,
             premium_seller_median=0.0,

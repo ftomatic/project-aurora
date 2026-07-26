@@ -15,6 +15,7 @@ IN_PROGRESS = "IN_PROGRESS"
 COMPLETED = "COMPLETED"
 FAILED = "FAILED"
 SKIPPED = "SKIPPED"
+UNSUPPORTED_PRODUCT_TYPE = "UNSUPPORTED_PRODUCT_TYPE"
 
 SUPPORTED_JOB_STATUSES = {
     READY,
@@ -22,6 +23,7 @@ SUPPORTED_JOB_STATUSES = {
     COMPLETED,
     FAILED,
     SKIPPED,
+    UNSUPPORTED_PRODUCT_TYPE,
 }
 
 
@@ -46,6 +48,7 @@ class ProductionJob:
     demand_score: float = 0.0
     competition_score: float = 0.0
     source_evidence: tuple[str, ...] = field(default_factory=tuple)
+    blocking_reason: str = ""
 
     def __post_init__(self) -> None:
         for field_name in (
@@ -76,6 +79,14 @@ class ProductionJob:
         """Return this job with an updated status."""
         return replace(self, status=status)
 
+    def with_status_and_reason(
+        self,
+        status: str,
+        blocking_reason: str,
+    ) -> "ProductionJob":
+        """Return this job with an updated status and blocking reason."""
+        return replace(self, status=status, blocking_reason=blocking_reason)
+
     def to_dict(self) -> dict[str, Any]:
         """Return JSON-safe job data."""
         return {
@@ -96,6 +107,7 @@ class ProductionJob:
             "demand_score": self.demand_score,
             "competition_score": self.competition_score,
             "source_evidence": list(self.source_evidence),
+            "blocking_reason": self.blocking_reason,
         }
 
     @classmethod
@@ -126,6 +138,7 @@ class ProductionJob:
             source_evidence=tuple(
                 str(value) for value in data.get("source_evidence", ())
             ),
+            blocking_reason=str(data.get("blocking_reason", "")),
         )
 
 
@@ -220,6 +233,29 @@ class ProductionQueueManager:
     def mark_failed(self, job_id: str) -> ProductionJob:
         """Mark a job failed."""
         return self._mark_status(job_id, FAILED)
+
+    def mark_unsupported_product_type(
+        self,
+        job_id: str,
+        blocking_reason: str = "",
+    ) -> ProductionJob:
+        """Preserve a job while excluding it from active production."""
+        updated: list[ProductionJob] = []
+        changed_job: ProductionJob | None = None
+        for job in self._jobs:
+            if job.id == job_id:
+                changed_job = job.with_status_and_reason(
+                    UNSUPPORTED_PRODUCT_TYPE,
+                    blocking_reason,
+                )
+                updated.append(changed_job)
+            else:
+                updated.append(job)
+        if changed_job is None:
+            raise ValueError(f"Production job not found: {job_id}.")
+        self._jobs = self._sorted_jobs(tuple(updated))
+        self._save()
+        return changed_job
 
     def next_ready_job(self) -> ProductionJob | None:
         """Return the highest-confidence ready job."""
