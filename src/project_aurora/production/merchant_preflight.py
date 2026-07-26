@@ -72,8 +72,9 @@ class MerchantPreflightResult:
                 f"Category\n{self.category}",
                 f"Etsy Taxonomy\n{self.etsy_taxonomy_path}",
                 f"Taxonomy ID\n{self.taxonomy_id or ''}",
-                f"Price\n{self.price or ''}",
                 f"Pricing Source\n{self.pricing_source}",
+                f"Listing Price\n{self.price or ''}",
+                f"Launch Price\n{self.price or ''}",
                 f"Style\n{self.style}",
                 f"Rendering Family\n{self.rendering_family}",
                 f"Listing Images\n{self.listing_images_ready} ready",
@@ -111,8 +112,6 @@ class MerchantPreflight:
             errors.append("Etsy taxonomy confidence is below threshold.")
         if merchant_package.launch_price <= 0:
             errors.append("Price was not resolved.")
-        if merchant_package.launch_price == 1.99 and merchant_package.pricing_source == "CONFIGURED_FALLBACK":
-            errors.append("Price appears to be stale global default 1.99.")
         if getattr(seo_package, "job_id", "") != job.id:
             errors.append("SEO package does not match current job.")
         if getattr(seo_package, "product_name", "") != job.product_name:

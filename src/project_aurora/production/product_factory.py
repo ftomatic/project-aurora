@@ -2066,12 +2066,8 @@ def _build_and_save_merchant_package(
     job_paths: ProductFactoryJobPaths,
     etsy_config: Any,
 ) -> Any:
-    from project_aurora.integrations.etsy.etsy_client import EtsyClient
     from project_aurora.integrations.etsy.etsy_taxonomy_resolver import (
         EtsyTaxonomyResolver,
-    )
-    from project_aurora.merchandising.market_pricing import (
-        EtsyMarketPricingProvider,
     )
     from project_aurora.merchandising.pricing_engine import PricingEngine
     from project_aurora.production.merchant_package import MerchantPackage
@@ -2092,13 +2088,7 @@ def _build_and_save_merchant_package(
             "taxonomy_resolution",
             (taxonomy.resolution_reason,),
         )
-    market_provider = None
-    if not getattr(etsy_config, "is_mock_mode", True):
-        market_provider = EtsyMarketPricingProvider(
-            client=EtsyClient(etsy_config),
-            memory=memory,
-        )
-    pricing = PricingEngine(market_provider=market_provider).resolve_price(
+    pricing = PricingEngine().resolve_price(
         product_name=job.product_name,
         product_type=job.category,
         category=job.category,

@@ -14,6 +14,9 @@ from project_aurora.merchandising.market_pricing import (
 
 
 CONFIGURED_FALLBACK = "CONFIGURED_FALLBACK"
+FIXED_DEFAULT = "FIXED_DEFAULT"
+DEFAULT_LISTING_PRICE = 2.49
+DEFAULT_CURRENCY = "USD"
 
 
 @dataclass(frozen=True, slots=True)
@@ -68,7 +71,7 @@ class PricingRange:
 
 
 class PricingEngine:
-    """Resolve product-specific launch pricing without live market claims."""
+    """Resolve Phase 1 fixed listing pricing for Aurora digital products."""
 
     def __init__(
         self,
@@ -85,6 +88,7 @@ class PricingEngine:
             self._ranges = ranges
             self._minimum_margin = minimum_margin
             self._premium = commercial_license_premium
+            self._fixed_price = DEFAULT_LISTING_PRICE
             return
         config = _load_pricing_config(
             config_path
@@ -93,6 +97,7 @@ class PricingEngine:
         self._ranges = config["ranges"]
         self._minimum_margin = float(config["minimum_margin"])
         self._premium = float(config["commercial_license_premium"])
+        self._fixed_price = float(config.get("fixed_default_price", DEFAULT_LISTING_PRICE))
         self._minimum_live_comparables = int(config.get("minimum_live_comparables", minimum_live_comparables))
 
     def resolve_price(
@@ -113,57 +118,31 @@ class PricingEngine:
         keywords: tuple[str, ...] = (),
     ) -> PricingResult:
         """Return the launch price for a production job."""
-        live_result = self._resolve_live_market_price(
-            product_name=product_name,
-            product_type=product_type,
-            category=category,
-            bundle_size=bundle_size,
-            target_buyer=target_buyer,
-            artistic_category=artistic_category,
-            keywords=keywords,
-        )
-        if live_result is not None:
-            return live_result
         key = _pricing_key(product_name, product_type, category)
+        warnings: tuple[str, ...] = ()
         if key not in self._ranges:
-            raise RuntimeError(f"No configured pricing range for product type: {product_type or category}.")
-        price_range = self._ranges[key]
-        score = max(0.0, min(1.0, (demand_score or confidence_score or 0.75)))
-        if "high" in competition_level.casefold():
-            score -= 0.12
-        elif "low" in competition_level.casefold():
-            score += 0.08
-        if bundle_size >= 8 or image_count >= 8:
-            score += 0.08
-        if commercial_license:
-            score += 0.04
-        score = max(0.0, min(1.0, score))
-        recommended = price_range.low + (price_range.high - price_range.low) * score
-        if commercial_license:
-            recommended += self._premium
-        floor = production_cost + self._minimum_margin
-        recommended = max(recommended, floor)
-        mature = min(price_range.high, recommended + 0.75)
-        launch = min(mature, max(price_range.low, recommended - 0.50))
+            warnings = (f"pricing configuration missing for {product_type or category}; using fixed default",)
         return PricingResult(
-            market_low=price_range.low,
-            market_median=price_range.median,
-            market_high=price_range.high,
-            recommended_price=_money(recommended),
-            launch_price=_money(launch),
-            mature_price=_money(mature),
-            pricing_strategy="value_based_launch",
-            reason=(
-                f"Configured fallback range for {key}; adjusted for demand, "
-                f"competition, bundle value, and commercial license."
+            market_low=_money(self._fixed_price),
+            market_median=_money(self._fixed_price),
+            market_high=_money(self._fixed_price),
+            recommended_price=_money(self._fixed_price),
+            launch_price=_money(self._fixed_price),
+            mature_price=_money(self._fixed_price),
+            pricing_strategy="fixed_phase_1_default",
+            reason="Phase 1 fixed digital product listing price.",
+            evidence=(
+                f"pricing_key:{key}",
+                f"currency:{DEFAULT_CURRENCY}",
+                "source:fixed_default",
+                *warnings,
             ),
-            evidence=(f"pricing_range:{key}", "source:configured_fallback"),
-            confidence=86,
-            source=CONFIGURED_FALLBACK,
+            confidence=100,
+            source=FIXED_DEFAULT,
             listings_compared=0,
             top_seller_median=0.0,
             premium_seller_median=0.0,
-            competition_level=competition_level,
+            competition_level="Not used for Phase 1 fixed pricing",
         )
 
     def _resolve_live_market_price(
@@ -245,9 +224,13 @@ def _load_pricing_config(path: Path) -> dict[str, Any]:
     values: dict[str, Any] = {
         "minimum_margin": 1.0,
         "commercial_license_premium": 0.5,
+        "fixed_default_price": DEFAULT_LISTING_PRICE,
+        "currency": DEFAULT_CURRENCY,
         "minimum_live_comparables": 3,
         "ranges": {},
     }
+    if not path.exists():
+        return values
     current_key = ""
     for line in path.read_text(encoding="utf-8").splitlines():
         if not line.strip() or line.strip().startswith("#"):
@@ -258,6 +241,10 @@ def _load_pricing_config(path: Path) -> dict[str, Any]:
             values["commercial_license_premium"] = float(line.split(":", 1)[1].strip())
         elif line.startswith("minimum_live_comparables:"):
             values["minimum_live_comparables"] = int(line.split(":", 1)[1].strip())
+        elif line.startswith("fixed_default_price:"):
+            values["fixed_default_price"] = float(line.split(":", 1)[1].strip())
+        elif line.startswith("currency:"):
+            values["currency"] = line.split(":", 1)[1].strip() or DEFAULT_CURRENCY
         elif line.startswith("  ") and not line.startswith("    ") and line.strip().endswith(":"):
             current_key = line.strip().removesuffix(":")
             values["ranges"][current_key] = {}

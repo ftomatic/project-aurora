@@ -20,6 +20,7 @@ from project_aurora.merchandising.market_pricing import (  # noqa: E402
 )
 from project_aurora.merchandising.pricing_engine import (  # noqa: E402
     CONFIGURED_FALLBACK,
+    FIXED_DEFAULT,
     PricingEngine,
 )
 from project_aurora.storage.csv_storage import CSVStorage  # noqa: E402
@@ -92,13 +93,13 @@ class LiveMarketPricingTest(unittest.TestCase):
             artistic_category="watercolor woodland",
         )
 
-        self.assertEqual(result.source, LIVE_ETSY_MARKET)
-        self.assertEqual(result.listings_compared, 5)
-        self.assertEqual(result.market_low, 3.99)
-        self.assertEqual(result.market_high, 6.49)
-        self.assertEqual(result.market_median, 4.99)
-        self.assertNotEqual(result.launch_price, 1.99)
-        self.assertIn("comparable Etsy", result.reason)
+        self.assertEqual(result.source, FIXED_DEFAULT)
+        self.assertEqual(result.listings_compared, 0)
+        self.assertEqual(result.market_low, 2.49)
+        self.assertEqual(result.market_high, 2.49)
+        self.assertEqual(result.market_median, 2.49)
+        self.assertEqual(result.launch_price, 2.49)
+        self.assertIn("fixed", result.reason.casefold())
 
     def test_fallback_pricing_when_etsy_research_fails(self) -> None:
         class BrokenProvider:
@@ -117,9 +118,46 @@ class LiveMarketPricingTest(unittest.TestCase):
             confidence_score=0.8,
         )
 
-        self.assertEqual(result.source, CONFIGURED_FALLBACK)
+        self.assertEqual(result.source, FIXED_DEFAULT)
         self.assertEqual(result.listings_compared, 0)
-        self.assertNotEqual(result.launch_price, 1.99)
+        self.assertEqual(result.launch_price, 2.49)
+
+    def test_unknown_product_type_uses_fixed_default(self) -> None:
+        result = PricingEngine().resolve_price(
+            product_name="Mystery Digital Download",
+            product_type="unknown digital product",
+            category="unknown digital product",
+            bundle_size=1,
+            image_count=1,
+            commercial_license=True,
+            competition_level="Unknown",
+            demand_score=0.0,
+            confidence_score=0.0,
+        )
+
+        self.assertEqual(result.source, FIXED_DEFAULT)
+        self.assertEqual(result.launch_price, 2.49)
+        self.assertTrue(any("pricing configuration missing" in item for item in result.evidence))
+
+    def test_missing_pricing_configuration_file_does_not_block_fixed_default(self) -> None:
+        missing_path = Path(tempfile.gettempdir()) / "aurora_missing_pricing.yaml"
+        if missing_path.exists():
+            missing_path.unlink()
+
+        result = PricingEngine(config_path=missing_path).resolve_price(
+            product_name="Teacher Alphabet Posters",
+            product_type="digital illustration collection",
+            category="digital illustration collection",
+            bundle_size=4,
+            image_count=4,
+            commercial_license=True,
+            competition_level="Medium",
+            demand_score=0.7,
+            confidence_score=0.8,
+        )
+
+        self.assertEqual(result.source, FIXED_DEFAULT)
+        self.assertEqual(result.launch_price, 2.49)
 
     def test_cached_pricing_avoids_repeated_etsy_requests(self) -> None:
         client = FakeEtsyClient(

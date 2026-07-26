@@ -22,7 +22,7 @@ from project_aurora.integrations.etsy.etsy_upload_manager import (  # noqa: E402
     EtsyUploadManager,
     EtsyUploadPolicy,
 )
-from project_aurora.merchandising.pricing_engine import PricingEngine  # noqa: E402
+from project_aurora.merchandising.pricing_engine import FIXED_DEFAULT, PricingEngine  # noqa: E402
 from project_aurora.planning.production_queue_manager import (  # noqa: E402
     READY,
     ProductionJob,
@@ -151,7 +151,7 @@ class ProductionHardeningTest(unittest.TestCase):
         self.assertFalse(result.resolved)
         self.assertIn("No verified taxonomy", result.resolution_reason)
 
-    def test_pricing_varies_and_is_not_global_199(self) -> None:
+    def test_pricing_uses_phase_one_fixed_default(self) -> None:
         engine = PricingEngine()
 
         clipart = engine.resolve_price(
@@ -177,9 +177,10 @@ class ProductionHardeningTest(unittest.TestCase):
             confidence_score=0.8,
         )
 
-        self.assertNotEqual(clipart.launch_price, wall.launch_price)
-        self.assertNotEqual(clipart.launch_price, 1.99)
-        self.assertEqual(clipart.source, "CONFIGURED_FALLBACK")
+        self.assertEqual(clipart.launch_price, 2.49)
+        self.assertEqual(wall.launch_price, 2.49)
+        self.assertEqual(clipart.recommended_price, 2.49)
+        self.assertEqual(clipart.source, FIXED_DEFAULT)
 
     def test_capability_blocks_long_text_games_and_allows_visual_products(self) -> None:
         resolver = ProductCapabilityResolver()
@@ -409,11 +410,11 @@ class ProductionHardeningTest(unittest.TestCase):
             etsy_taxonomy_id=5678,
             etsy_taxonomy_path="Craft Supplies & Tools > Paper > Digital Paper",
             taxonomy_confidence=92,
-            price_range=(3.99, 5.99, 8.99),
-            recommended_price=8.49,
-            launch_price=7.99,
-            pricing_reason="configured fallback",
-            pricing_source="CONFIGURED_FALLBACK",
+            price_range=(2.49, 2.49, 2.49),
+            recommended_price=2.49,
+            launch_price=2.49,
+            pricing_reason="fixed default",
+            pricing_source=FIXED_DEFAULT,
             selected_style="Storybook Watercolor",
             style_confidence=90,
             composition="isolated elements",
@@ -427,6 +428,13 @@ class ProductionHardeningTest(unittest.TestCase):
             seo_package=seo,
             final_images_dir=final_dir,
         )
+        self.assertEqual(passed.status, "READY_FOR_ETSY_DRAFT")
+        self.assertEqual(passed.price, 2.49)
+        self.assertEqual(passed.pricing_source, FIXED_DEFAULT)
+        rendered = passed.render()
+        self.assertIn("Pricing Source\nFIXED_DEFAULT", rendered)
+        self.assertIn("Listing Price\n2.49", rendered)
+        self.assertIn("Launch Price\n2.49", rendered)
         failed = MerchantPreflight().run(
             job=current_job,
             merchant_package=MerchantPackage(
