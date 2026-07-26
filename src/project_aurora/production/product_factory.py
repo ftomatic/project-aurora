@@ -25,6 +25,12 @@ from project_aurora.planning.production_queue_manager import (
     ProductionJob,
     ProductionQueueManager,
 )
+from project_aurora.production.asset_manifest import (
+    manifest_path_for,
+    product_slug,
+    validate_asset_ownership,
+    write_asset_manifest,
+)
 from project_aurora.production.production_report import ProductionReport
 from project_aurora.prompt_factory.prompt_composer import PromptComposer
 from project_aurora.seo.seo_engine import SEOEngine
@@ -122,6 +128,7 @@ class ProductFactoryJobPaths:
             "generated_images_dir": str(self.generated_images_dir),
             "final_product_images_dir": str(self.final_images_dir),
             "digital_downloads_dir": str(self.digital_downloads_dir),
+            "asset_manifest": str(manifest_path_for(self.job_root)),
         }
 
 
@@ -300,7 +307,7 @@ class DefaultProductFactoryStageRunner:
             output_dir=job_paths.generated_images_dir,
             provider_config=self._image_config,
         )
-        return _run_image_generation_chunks(
+        result = _run_image_generation_chunks(
             engine=engine,
             prompt_package_id=job.id,
             provider=self._image_config.provider,
@@ -310,14 +317,25 @@ class DefaultProductFactoryStageRunner:
             output_format=self._image_config.output_format,
             number_of_images=number_of_images,
         )
+        normalized = _normalize_asset_result_files(
+            job=job,
+            job_paths=job_paths,
+            result=result,
+            file_attribute="generated_files",
+            source_stage="image_generation",
+        )
+        if _result_files_exist(normalized, "generated_files"):
+            self._memory.save_image_result(normalized, result_id=job.id)
+            self._memory.save_image_result(normalized)
+        return normalized
 
     def run_image_qa(self, job: ProductionJob) -> Any:
         """Run deterministic image QA."""
         from project_aurora.image_qa.qa_engine import ImageQAEngine
 
-        results = ImageQAEngine(memory=self._memory).run()
+        results = ImageQAEngine(memory=self._memory).run(image_result_id=job.id)
         try:
-            findings = self._memory.load_record("image_qa_findings", "latest").get("findings", ())
+            findings = self._memory.load_record("image_qa_findings", job.id).get("findings", ())
         except FileNotFoundError:
             findings = ()
         _print_qa_findings(findings)
@@ -334,6 +352,7 @@ class DefaultProductFactoryStageRunner:
         reused = self._reuse_completed_final_images(job, job_paths, expected_count)
         if reused is not None:
             return reused
+        _archive_existing_final_assets(job_paths)
         from project_aurora.image_generation.commercial_image_exporter import (
             CommercialImageExporter,
         )
@@ -346,6 +365,13 @@ class DefaultProductFactoryStageRunner:
         ).export()
         if getattr(result, "status", "").upper() != "SUCCESS":
             return result
+        result = _normalize_asset_result_files(
+            job=job,
+            job_paths=job_paths,
+            result=result,
+            file_attribute="exported_files",
+            source_stage="commercial_export",
+        )
         package_result = _build_required_product_package(job, job_paths.final_images_dir)
         if package_result is not None and package_result.status != "SUCCESS":
             from project_aurora.image_generation.commercial_image_exporter import (
@@ -374,11 +400,22 @@ class DefaultProductFactoryStageRunner:
             if isinstance(prompt_package.get("seasonal_review"), dict)
             else None
         )
+        ownership = validate_asset_ownership(
+            manifest_path=manifest_path_for(job_paths.job_root),
+            job_id=job.id,
+            product_name=job.product_name,
+            workspace=job_paths.job_root,
+            files=final_files,
+            source_stage="commercial_export",
+        )
+        _print_asset_ownership_diagnostics(ownership.diagnostics)
         result = CommercialImageQA().evaluate(
             job=job,
             final_files=final_files,
             prompt_package=prompt_package,
             seasonal_review=seasonal_review,
+            asset_manifest_path=manifest_path_for(job_paths.job_root),
+            workspace=job_paths.job_root,
         )
         self._memory.save_record("commercial_image_qa", job.id, result.to_dict())
         self._memory.save_record("commercial_image_qa", "latest", result.to_dict())
@@ -518,6 +555,9 @@ class DefaultProductFactoryStageRunner:
                 job,
                 configured_count=self._image_config.number_of_images,
             ),
+            job_id=job.id,
+            product_name=job.product_name,
+            asset_manifest_path=manifest_path_for(self.job_paths(job).job_root),
         ).upload_latest_draft_images()
 
     def upload_customer_downloads(self, job: ProductionJob, listing_id: str | None) -> Any:
@@ -591,6 +631,17 @@ class DefaultProductFactoryStageRunner:
             return None
         valid_pngs = tuple(path for path in pngs if inspect_png(path).is_valid)
         if len(pngs) == expected_count and len(valid_pngs) == expected_count:
+            ownership = validate_asset_ownership(
+                manifest_path=manifest_path_for(job_paths.job_root),
+                job_id=job.id,
+                product_name=job.product_name,
+                workspace=job_paths.job_root,
+                files=valid_pngs,
+                source_stage="image_generation",
+            )
+            _print_asset_ownership_diagnostics(ownership.diagnostics)
+            if not ownership.passed:
+                return None
             result = ImageResult(
                 status="SUCCESS",
                 provider="OpenAI GPT Image",
@@ -606,7 +657,7 @@ class DefaultProductFactoryStageRunner:
                 image_paths=tuple(str(path) for path in valid_pngs),
                 prompt_version=self._image_config.prompt_version,
             )
-            self._memory.save_image_result(result)
+            self._memory.save_image_result(result, result_id=job.id)
             return result
         if len(pngs) != expected_count:
             return None
@@ -697,6 +748,17 @@ class DefaultProductFactoryStageRunner:
                         )
             if errors:
                 return None
+            ownership = validate_asset_ownership(
+                manifest_path=manifest_path_for(job_paths.job_root),
+                job_id=job.id,
+                product_name=job.product_name,
+                workspace=job_paths.job_root,
+                files=files,
+                source_stage="commercial_export",
+            )
+            _print_asset_ownership_diagnostics(ownership.diagnostics)
+            if not ownership.passed:
+                return None
             return CommercialImageExportResult(
                 status="SUCCESS",
                 exported_files=tuple(str(path) for path in files),
@@ -710,6 +772,17 @@ class DefaultProductFactoryStageRunner:
             return None
         valid_pngs = tuple(path for path in pngs if not validate_commercial_png(path))
         if len(pngs) == expected_count and len(valid_pngs) == expected_count:
+            ownership = validate_asset_ownership(
+                manifest_path=manifest_path_for(job_paths.job_root),
+                job_id=job.id,
+                product_name=job.product_name,
+                workspace=job_paths.job_root,
+                files=valid_pngs,
+                source_stage="commercial_export",
+            )
+            _print_asset_ownership_diagnostics(ownership.diagnostics)
+            if not ownership.passed:
+                return None
             return CommercialImageExportResult(
                 status="SUCCESS",
                 exported_files=tuple(str(path) for path in valid_pngs),
@@ -1730,6 +1803,132 @@ def _run_image_generation_chunks(
         errors=tuple(errors),
         metadata={"chunks": chunks, "requested_images": number_of_images},
     )
+
+
+def _normalize_asset_result_files(
+    *,
+    job: ProductionJob,
+    job_paths: ProductFactoryJobPaths,
+    result: Any,
+    file_attribute: str,
+    source_stage: str,
+) -> Any:
+    """Namespace files for one job and write ownership records."""
+    file_values = tuple(str(path) for path in getattr(result, file_attribute, ()) or ())
+    files = tuple(Path(value) for value in file_values)
+    if not files:
+        return result
+    if not all(file_path.exists() for file_path in files):
+        return result
+    normalized_files = _namespace_asset_files(
+        job=job,
+        files=files,
+        source_stage=source_stage,
+    )
+    write_asset_manifest(
+        manifest_path=manifest_path_for(job_paths.job_root),
+        job_id=job.id,
+        product_name=job.product_name,
+        files=normalized_files,
+        source_stage=source_stage,
+    )
+    updates = {file_attribute: tuple(str(path) for path in normalized_files)}
+    if hasattr(result, "image_paths"):
+        updates["image_paths"] = tuple(str(path) for path in normalized_files)
+    if hasattr(result, "metadata"):
+        updates["metadata"] = {
+            **dict(getattr(result, "metadata", {}) or {}),
+            "job_id": job.id,
+            "product_slug": product_slug(job.product_name),
+            "source_stage": source_stage,
+            "asset_manifest": str(manifest_path_for(job_paths.job_root)),
+        }
+    try:
+        return replace(result, **updates)
+    except TypeError:
+        values = dict(getattr(result, "__dict__", {}))
+        values.update(updates)
+        return SimpleNamespace(**values)
+
+
+def _result_files_exist(result: Any, file_attribute: str) -> bool:
+    """Return whether a result points to real files on disk."""
+    file_values = tuple(str(path) for path in getattr(result, file_attribute, ()) or ())
+    return bool(file_values) and all(Path(value).exists() for value in file_values)
+
+
+def _namespace_asset_files(
+    *,
+    job: ProductionJob,
+    files: tuple[Path, ...],
+    source_stage: str,
+) -> tuple[Path, ...]:
+    """Rename current job assets with a job/product prefix."""
+    prefix = f"{_slug_part(job.id)[:12]}_{product_slug(job.product_name)}"
+    normalized: list[Path] = []
+    for index, file_path in enumerate(files, start=1):
+        if file_path.name.casefold().startswith(prefix.casefold()):
+            normalized.append(file_path)
+            continue
+        stem = file_path.stem
+        if source_stage == "image_generation":
+            stem = f"{index:02d}"
+        target = file_path.with_name(f"{prefix}_{stem}{file_path.suffix.casefold()}")
+        counter = 2
+        while target.exists() and target != file_path:
+            target = file_path.with_name(
+                f"{prefix}_{stem}_{counter}{file_path.suffix.casefold()}"
+            )
+            counter += 1
+        if target != file_path:
+            file_path.rename(target)
+        normalized.append(target)
+    return tuple(normalized)
+
+
+def _archive_existing_final_assets(job_paths: ProductFactoryJobPaths) -> None:
+    """Move stale final assets aside before a fresh export."""
+    if not job_paths.final_images_dir.exists():
+        return
+    candidates = tuple(
+        path
+        for path in sorted(job_paths.final_images_dir.glob("*"), key=lambda item: item.name)
+        if path.is_file() and path.suffix.casefold() in {".png", ".jpg", ".jpeg", ".zip"}
+    )
+    if not candidates:
+        return
+    rejected_dir = (
+        job_paths.job_root
+        / "rejected"
+        / f"final_product_images_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+    )
+    rejected_dir.mkdir(parents=True, exist_ok=True)
+    for path in candidates:
+        shutil.move(str(path), str(rejected_dir / path.name))
+
+
+def _print_asset_ownership_diagnostics(
+    diagnostics: tuple[Any, ...],
+) -> None:
+    """Print safe manifest diagnostics for asset ownership checks."""
+    if not diagnostics:
+        return
+    print("ASSET OWNERSHIP")
+    for item in diagnostics:
+        print("Active Job ID")
+        print(getattr(item, "active_job_id", ""))
+        print("Active Product Slug")
+        print(getattr(item, "active_product_slug", ""))
+        print("Workspace")
+        print(getattr(item, "workspace", ""))
+        print("Asset Owner Job ID")
+        print(getattr(item, "asset_owner_job_id", ""))
+        print("Asset Owner Product Slug")
+        print(getattr(item, "asset_owner_product_slug", ""))
+        print("Filename")
+        print(getattr(item, "filename", ""))
+        print("Validation Result")
+        print(getattr(item, "validation_result", ""))
 
 
 def _resolve_export_category(job: ProductionJob) -> str:

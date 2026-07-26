@@ -9,6 +9,7 @@ import re
 from typing import Any
 
 from project_aurora.planning.production_queue_manager import ProductionJob
+from project_aurora.production.asset_manifest import validate_asset_ownership
 
 
 PASS = "PASS"
@@ -85,6 +86,8 @@ class CommercialImageQA:
         final_files: tuple[Path, ...],
         prompt_package: dict[str, Any],
         seasonal_review: dict[str, Any] | None = None,
+        asset_manifest_path: Path | None = None,
+        workspace: Path | None = None,
     ) -> CommercialImageQAResult:
         """Evaluate the final image set before Etsy draft creation."""
         blocking: list[str] = []
@@ -102,6 +105,16 @@ class CommercialImageQA:
                 blocking.append("seasonal relevance failed: product is out of season")
         for index, path in enumerate(final_files, start=1):
             blocking.extend(_file_alignment_issues(job, path, index))
+        if asset_manifest_path is not None and workspace is not None:
+            ownership = validate_asset_ownership(
+                manifest_path=asset_manifest_path,
+                job_id=job.id,
+                product_name=job.product_name,
+                workspace=workspace,
+                files=final_files,
+                source_stage="commercial_export",
+            )
+            blocking.extend(ownership.errors)
         consistency_key = str(prompt_package.get("consistency_key") or "")
         image_prompts = prompt_package.get("image_prompts")
         if isinstance(image_prompts, list):

@@ -43,6 +43,10 @@ from project_aurora.production.product_factory import (  # noqa: E402
     DefaultProductFactoryStageRunner,
     ProductFactory,
 )
+from project_aurora.production.asset_manifest import (  # noqa: E402
+    manifest_path_for,
+    validate_asset_ownership,
+)
 from project_aurora.production.production_report import ProductionReport  # noqa: E402
 from project_aurora.storage.csv_storage import CSVStorage  # noqa: E402
 from project_aurora.storage.memory_manager import MemoryManager  # noqa: E402
@@ -94,6 +98,7 @@ class ProductFactoryResumeService:
             "image_generation",
             "image_qa",
             "commercial_export",
+            "commercial_image_qa",
             "seo_generation",
             "etsy_draft",
             "listing_image_upload",
@@ -116,8 +121,10 @@ class ProductFactoryResumeService:
         listing_id: str,
         failed_stage: str,
     ) -> ResumeResult:
+        job = _job_by_id(self._queue_manager, job_id)
         final_images_dir = _final_images_dir_from_report(report_data)
         final_files = _valid_final_image_files(final_images_dir)
+        _validate_resume_asset_ownership(job, report_data, final_files)
         expected_count = len(final_files)
         existing_images = self._client.list_listing_images(listing_id)
         existing_by_rank = _existing_listing_images_by_rank(existing_images)
@@ -244,8 +251,10 @@ class ProductFactoryResumeService:
         report_data: dict[str, Any],
         listing_id: str,
     ) -> ResumeResult:
+        job = _job_by_id(self._queue_manager, job_id)
         final_images_dir = _final_images_dir_from_report(report_data)
         final_files = _valid_final_image_files(final_images_dir)
+        _validate_resume_asset_ownership(job, report_data, final_files)
         expected_count = len(final_files)
         digital_result = EtsyDigitalFileService(
             config=self._config,
@@ -442,6 +451,11 @@ class StageAwareResumeRunner(DefaultProductFactoryStageRunner):
         if not listing_id:
             raise RuntimeError("Existing Etsy draft ID is required for image sync.")
         final_files = _valid_final_image_files(self.job_paths(job).final_images_dir)
+        _validate_resume_asset_ownership(
+            job,
+            {"job_paths": self.job_paths(job).to_dict()},
+            final_files,
+        )
         expected_count = len(final_files)
         existing = self._resume_client.list_listing_images(listing_id)
         existing_by_rank = _existing_listing_images_by_rank(existing)
@@ -487,6 +501,11 @@ class StageAwareResumeRunner(DefaultProductFactoryStageRunner):
     def upload_customer_downloads(self, job: ProductionJob, listing_id: str | None) -> Any:
         resolved_listing_id = listing_id or self._existing_draft_id or _latest_draft_id(self._memory)
         final_files = _valid_final_image_files(self.job_paths(job).final_images_dir)
+        _validate_resume_asset_ownership(
+            job,
+            {"job_paths": self.job_paths(job).to_dict()},
+            final_files,
+        )
         return EtsyDigitalFileService(
             config=self._etsy_config,
             memory=self._memory,
@@ -645,6 +664,39 @@ def _valid_final_image_files(final_images_dir: Path) -> tuple[Path, ...]:
     if errors:
         raise RuntimeError("Invalid final image files: " + "; ".join(errors))
     return files
+
+
+def _validate_resume_asset_ownership(
+    job: ProductionJob,
+    report_data: dict[str, Any],
+    files: tuple[Path, ...],
+) -> None:
+    """Reject resume attempts that would attach another job's files."""
+    job_paths = report_data.get("job_paths")
+    if isinstance(job_paths, dict):
+        manifest_value = job_paths.get("asset_manifest")
+        root_value = job_paths.get("job_root")
+    else:
+        manifest_value = None
+        root_value = None
+    workspace = Path(str(root_value)) if root_value else files[0].parents[1]
+    manifest_path = (
+        Path(str(manifest_value))
+        if isinstance(manifest_value, str) and manifest_value.strip()
+        else manifest_path_for(workspace)
+    )
+    if not manifest_path.exists():
+        return
+    ownership = validate_asset_ownership(
+        manifest_path=manifest_path,
+        job_id=job.id,
+        product_name=job.product_name,
+        workspace=workspace,
+        files=files,
+        source_stage="commercial_export",
+    )
+    if not ownership.passed:
+        raise RuntimeError("; ".join(ownership.errors))
 
 
 def _validate_wall_art_jpg(file_path: Path) -> tuple[str, ...]:

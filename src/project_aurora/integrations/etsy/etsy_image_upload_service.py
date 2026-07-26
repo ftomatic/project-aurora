@@ -20,6 +20,7 @@ from project_aurora.image_generation.commercial_image_exporter import (
     validate_commercial_jpg,
 )
 from project_aurora.image_generation.image_inspector import inspect_png
+from project_aurora.production.asset_manifest import validate_asset_ownership
 from project_aurora.storage.memory_manager import MemoryManager
 
 
@@ -34,6 +35,9 @@ class EtsyImageUploadService:
         client: EtsyClient | None = None,
         max_images: int = 4,
         required_image_count: int = 4,
+        job_id: str = "",
+        product_name: str = "",
+        asset_manifest_path: Path | None = None,
     ) -> None:
         self._config = config
         self._memory = memory
@@ -41,6 +45,9 @@ class EtsyImageUploadService:
         self._client = client or EtsyClient(config)
         self._max_images = max_images
         self._required_image_count = required_image_count
+        self._job_id = job_id
+        self._product_name = product_name
+        self._asset_manifest_path = asset_manifest_path
 
     def upload_latest_draft_images(self) -> EtsyImageUploadResult:
         """Upload generated PNG images to the latest stored Etsy draft."""
@@ -69,6 +76,9 @@ class EtsyImageUploadService:
             )
         if invalid_images:
             errors.extend(invalid_images)
+        ownership_errors = self._asset_ownership_errors(image_files[: self._max_images])
+        if ownership_errors:
+            errors.extend(ownership_errors)
         if errors:
             result = EtsyImageUploadResult(
                 status="CONFIGURATION_REQUIRED",
@@ -233,6 +243,19 @@ class EtsyImageUploadService:
         if not self._config.access_token:
             missing.append("ETSY_ACCESS_TOKEN")
         return tuple(missing)
+
+    def _asset_ownership_errors(self, image_files: list[Path]) -> tuple[str, ...]:
+        if not self._job_id or not self._product_name or self._asset_manifest_path is None:
+            return ()
+        ownership = validate_asset_ownership(
+            manifest_path=self._asset_manifest_path,
+            job_id=self._job_id,
+            product_name=self._product_name,
+            workspace=self._images_dir.parent,
+            files=tuple(image_files),
+            source_stage="commercial_export",
+        )
+        return ownership.errors
 
     def _save_result(self, result: EtsyImageUploadResult) -> None:
         self._memory.save_etsy_image_upload_result(result)
