@@ -27,6 +27,7 @@ from project_aurora.production.product_factory import (  # noqa: E402
     ProductFactoryJobPaths,
     ProductFactoryPaths,
     _archive_existing_final_assets,
+    _sanitize_final_asset_names,
     _normalize_asset_result_files,
 )
 from project_aurora.quality.commercial_image_qa import CommercialImageQA  # noqa: E402
@@ -273,6 +274,51 @@ class StaleAssetHotfixTest(unittest.TestCase):
             )
 
             self.assertTrue(ownership.passed)
+
+    def test_active_job_prefix_with_legacy_strawberry_stem_is_sanitized(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            job = make_job(
+                "2c2babec-41e-teacher",
+                "Teacher Alphabet Posters Digital Illustration Collection",
+            )
+            job_paths = ProductFactoryJobPaths(
+                job_root=root / "2c2babec_41e_teacher",
+                generated_images_dir=root / "2c2babec_41e_teacher" / "generated_images",
+                final_images_dir=root / "2c2babec_41e_teacher" / "final_product_images",
+                digital_downloads_dir=root / "2c2babec_41e_teacher" / "digital_downloads",
+            )
+            stale_named = tuple(
+                job_paths.final_images_dir
+                / (
+                    "2c2babec_41e_teacher_alphabet_posters_digital_illustration_collection_"
+                    f"strawberry_birthday_party_printable_{index:02d}.png"
+                )
+                for index in range(1, 5)
+            )
+            for file_path in stale_named:
+                write_png(file_path)
+            write_asset_manifest(
+                manifest_path=manifest_path_for(job_paths.job_root),
+                job_id=job.id,
+                product_name=job.product_name,
+                files=stale_named,
+                source_stage="commercial_export",
+            )
+
+            _sanitize_final_asset_names(job, job_paths)
+
+            current_files = tuple(sorted(job_paths.final_images_dir.glob("*.png")))
+            self.assertEqual(len(current_files), 4)
+            self.assertTrue(all("strawberry_birthday_party_printable" not in path.name for path in current_files))
+            result = CommercialImageQA().evaluate(
+                job=job,
+                final_files=current_files,
+                prompt_package={"expected_image_count": 4},
+                asset_manifest_path=manifest_path_for(job_paths.job_root),
+                workspace=job_paths.job_root,
+            )
+            self.assertEqual(result.status, "PASS")
 
 
 if __name__ == "__main__":

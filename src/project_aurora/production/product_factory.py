@@ -390,6 +390,7 @@ class DefaultProductFactoryStageRunner:
         from project_aurora.quality.commercial_image_qa import CommercialImageQA
 
         job_paths = self.job_paths(job)
+        _sanitize_final_asset_names(job, job_paths)
         final_files = _final_asset_files(job, job_paths.final_images_dir)
         try:
             prompt_package = self._memory.load_prompt_package(job.id)
@@ -1867,23 +1868,67 @@ def _namespace_asset_files(
     prefix = f"{_slug_part(job.id)[:12]}_{product_slug(job.product_name)}"
     normalized: list[Path] = []
     for index, file_path in enumerate(files, start=1):
-        if file_path.name.casefold().startswith(prefix.casefold()):
+        clean_stem = _asset_stem_for_namespace(
+            file_path=file_path,
+            index=index,
+            source_stage=source_stage,
+        )
+        if (
+            file_path.name.casefold().startswith(prefix.casefold())
+            and not _contains_legacy_product_stem(file_path)
+        ):
             normalized.append(file_path)
             continue
-        stem = file_path.stem
-        if source_stage == "image_generation":
-            stem = f"{index:02d}"
-        target = file_path.with_name(f"{prefix}_{stem}{file_path.suffix.casefold()}")
+        target = file_path.with_name(f"{prefix}_{clean_stem}{file_path.suffix.casefold()}")
         counter = 2
         while target.exists() and target != file_path:
             target = file_path.with_name(
-                f"{prefix}_{stem}_{counter}{file_path.suffix.casefold()}"
+                f"{prefix}_{clean_stem}_{counter}{file_path.suffix.casefold()}"
             )
             counter += 1
         if target != file_path:
             file_path.rename(target)
         normalized.append(target)
     return tuple(normalized)
+
+
+def _asset_stem_for_namespace(
+    *,
+    file_path: Path,
+    index: int,
+    source_stage: str,
+) -> str:
+    """Return a clean current-job filename stem without legacy product text."""
+    if source_stage == "image_generation":
+        return f"{index:02d}"
+    if source_stage == "commercial_export" and file_path.suffix.casefold() == ".png":
+        return f"{index:02d}"
+    return file_path.stem
+
+
+def _contains_legacy_product_stem(path: Path) -> bool:
+    """Return whether a filename still carries a known previous product stem."""
+    name = path.name.casefold()
+    return "strawberry_birthday_party_printable" in name
+
+
+def _sanitize_final_asset_names(job: ProductionJob, job_paths: ProductFactoryJobPaths) -> None:
+    """Rename current-job final assets that still contain legacy product stems."""
+    files = _final_asset_files(job, job_paths.final_images_dir)
+    if not files or not any(_contains_legacy_product_stem(path) for path in files):
+        return
+    normalized = _namespace_asset_files(
+        job=job,
+        files=files,
+        source_stage="commercial_export",
+    )
+    write_asset_manifest(
+        manifest_path=manifest_path_for(job_paths.job_root),
+        job_id=job.id,
+        product_name=job.product_name,
+        files=normalized,
+        source_stage="commercial_export",
+    )
 
 
 def _archive_existing_final_assets(job_paths: ProductFactoryJobPaths) -> None:
