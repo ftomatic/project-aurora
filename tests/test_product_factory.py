@@ -703,8 +703,9 @@ class ProductFactoryTest(unittest.TestCase):
         job_paths = runner.job_paths(self.job)
         self.assertEqual(first.status, "SUCCESS")
         self.assertEqual(second.status, "SUCCESS")
-        self.assertEqual(len(fake_client.images.calls), 1)
+        self.assertEqual(len(fake_client.images.calls), 2)
         self.assertEqual(len(tuple(job_paths.generated_images_dir.glob("*.png"))), 4)
+        self.assertEqual(len(tuple(job_paths.storybook_scenes_dir.glob("*.png"))), 1)
 
 
 if __name__ == "__main__":

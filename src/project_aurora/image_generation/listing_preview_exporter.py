@@ -40,9 +40,11 @@ class ListingPreviewExporter:
         final_images_dir: Path,
         output_dir: Path,
         output_prefix: str,
+        storybook_scenes_dir: Path | None = None,
         required_count: int = 4,
     ) -> None:
         self._final_images_dir = final_images_dir
+        self._storybook_scenes_dir = storybook_scenes_dir
         self._output_dir = output_dir
         self._output_prefix = output_prefix
         self._required_count = required_count
@@ -55,7 +57,14 @@ class ListingPreviewExporter:
             return ListingPreviewExportResult(status="FAILED", errors=errors)
         self._output_dir.mkdir(parents=True, exist_ok=True)
         preview_files: list[str] = []
-        for index, source_path in enumerate(source_files, start=1):
+        scene_file = self._storybook_scene_file()
+        start_index = 1
+        if scene_file is not None:
+            output_path = self._output_dir / f"{self._output_prefix}_preview_01.png"
+            self._export_scene(scene_file, output_path)
+            preview_files.append(str(output_path))
+            start_index = 2
+        for index, source_path in enumerate(source_files, start=start_index):
             output_path = self._output_dir / f"{self._output_prefix}_preview_{index:02d}.png"
             self._export_one(source_path, output_path)
             preview_files.append(str(output_path))
@@ -65,6 +74,12 @@ class ListingPreviewExporter:
         if not self._final_images_dir.exists():
             return ()
         return tuple(sorted(self._final_images_dir.glob("*.png"), key=lambda item: item.name))
+
+    def _storybook_scene_file(self) -> Path | None:
+        if self._storybook_scenes_dir is None or not self._storybook_scenes_dir.exists():
+            return None
+        scenes = tuple(sorted(self._storybook_scenes_dir.glob("*.png"), key=lambda item: item.name))
+        return scenes[0] if scenes else None
 
     def _validate_sources(self, source_files: tuple[Path, ...]) -> tuple[str, ...]:
         errors: list[str] = []
@@ -89,6 +104,17 @@ class ListingPreviewExporter:
             left = (PREVIEW_SIZE[0] - artwork.width) // 2
             top = (PREVIEW_SIZE[1] - artwork.height) // 2
             canvas.alpha_composite(artwork, (left, top))
+            canvas.save(output_path, format="PNG", dpi=(PREVIEW_DPI, PREVIEW_DPI))
+
+    @staticmethod
+    def _export_scene(source_path: Path, output_path: Path) -> None:
+        with Image.open(source_path) as image:
+            scene = image.convert("RGBA")
+            scene.thumbnail(PREVIEW_SIZE, Image.Resampling.LANCZOS)
+            canvas = _paper_texture()
+            left = (PREVIEW_SIZE[0] - scene.width) // 2
+            top = (PREVIEW_SIZE[1] - scene.height) // 2
+            canvas.alpha_composite(scene, (left, top))
             canvas.save(output_path, format="PNG", dpi=(PREVIEW_DPI, PREVIEW_DPI))
 
 

@@ -25,6 +25,14 @@ def write_transparent_art(path: Path) -> None:
     image.save(path, format="PNG", dpi=(300, 300))
 
 
+def write_storybook_scene(path: Path) -> None:
+    image = Image.new("RGBA", (2000, 2000), (120, 160, 120, 255))
+    draw = ImageDraw.Draw(image)
+    draw.rectangle((0, 1200, 2000, 2000), fill=(90, 130, 85, 255))
+    draw.ellipse((700, 500, 1300, 1500), fill=(180, 100, 70, 255))
+    image.save(path, format="PNG", dpi=(300, 300))
+
+
 class ListingPreviewExporterTest(unittest.TestCase):
     def setUp(self) -> None:
         self.temp_dir = tempfile.TemporaryDirectory()
@@ -64,6 +72,23 @@ class ListingPreviewExporterTest(unittest.TestCase):
 
         self.assertEqual(result.status, "FAILED")
         self.assertIn("Expected exactly 4", result.errors[0])
+
+    def test_storybook_scene_becomes_primary_listing_preview(self) -> None:
+        scene_dir = self.base_path / "storybook_scenes"
+        scene_dir.mkdir()
+        write_storybook_scene(scene_dir / "fox_garden_scene.png")
+
+        result = ListingPreviewExporter(
+            final_images_dir=self.final_dir,
+            storybook_scenes_dir=scene_dir,
+            output_dir=self.preview_dir,
+            output_prefix="fox_garden",
+        ).export()
+
+        self.assertEqual(result.status, "SUCCESS")
+        self.assertEqual(len(result.preview_files), 5)
+        self.assertEqual(Path(result.preview_files[0]).name, "fox_garden_preview_01.png")
+        self.assertEqual(Path(result.preview_files[1]).name, "fox_garden_preview_02.png")
 
 
 if __name__ == "__main__":

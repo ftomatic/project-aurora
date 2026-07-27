@@ -78,6 +78,7 @@ class ProductFactoryPaths:
     jobs_dir: Path = DEFAULT_JOBS_DIR
     generated_images_dir: Path | None = None
     final_images_dir: Path | None = None
+    storybook_scenes_dir: Path | None = None
     listing_images_dir: Path | None = None
     digital_downloads_dir: Path | None = None
 
@@ -90,6 +91,8 @@ class ProductFactoryPaths:
             or job_root / "generated_images",
             final_images_dir=self.final_images_dir
             or job_root / "final_product_images",
+            storybook_scenes_dir=self.storybook_scenes_dir
+            or job_root / "storybook_scenes",
             listing_images_dir=self.listing_images_dir
             or job_root / "listing_images",
             digital_downloads_dir=self.digital_downloads_dir
@@ -104,6 +107,7 @@ class ProductFactoryJobPaths:
     job_root: Path
     generated_images_dir: Path
     final_images_dir: Path
+    storybook_scenes_dir: Path
     listing_images_dir: Path
     digital_downloads_dir: Path
 
@@ -113,6 +117,7 @@ class ProductFactoryJobPaths:
             "job_root": str(self.job_root),
             "generated_images_dir": str(self.generated_images_dir),
             "final_product_images_dir": str(self.final_images_dir),
+            "storybook_scenes_dir": str(self.storybook_scenes_dir),
             "listing_images_dir": str(self.listing_images_dir),
             "digital_downloads_dir": str(self.digital_downloads_dir),
         }
@@ -198,6 +203,17 @@ class DefaultProductFactoryStageRunner:
                 "transparent_background": image_family.transparent_background,
                 "openai_background": image_family.openai_background,
                 "product_family_requirements": image_family.prompt_requirements,
+                "storybook_scene_prompt": _storybook_scene_prompt(
+                    job,
+                    scope.canonical_product_type,
+                ),
+                "storybook_scene_requirements": (
+                    "complete whimsical watercolor storybook scene",
+                    "rich illustrated background",
+                    "foreground middle ground and background",
+                    "French cottage garden or woodland setting when relevant",
+                    "same characters costumes palette and theme as clipart",
+                ),
                 "style": art_direction.recommended_style,
                 "palette": art_direction.palette,
                 "rendering_family": art_direction.rendering_family,
@@ -259,7 +275,7 @@ class DefaultProductFactoryStageRunner:
             str(prompt_package.get("product_type") or job.category),
             job.category,
         )
-        return ImageGenerationEngine(
+        clipart_result = ImageGenerationEngine(
             memory=self._memory,
             output_dir=job_paths.generated_images_dir,
             provider_config=self._image_config,
@@ -276,6 +292,69 @@ class DefaultProductFactoryStageRunner:
             background=image_family.openai_background,
             output_format=self._image_config.output_format,
             number_of_images=self._image_config.number_of_images,
+        )
+        if image_family.family != CLIPART:
+            return clipart_result
+        scene_result = self._generate_storybook_scene(job, prompt_package, job_paths)
+        if getattr(clipart_result, "status", "").upper() != "SUCCESS":
+            return clipart_result
+        if getattr(scene_result, "status", "").upper() != "SUCCESS":
+            return scene_result
+        return SimpleNamespace(
+            status="SUCCESS",
+            provider=getattr(clipart_result, "provider", "OpenAI GPT Image"),
+            generated_files=tuple(getattr(clipart_result, "generated_files", ())),
+            storybook_scene_files=tuple(getattr(scene_result, "generated_files", ())),
+            warnings=tuple(getattr(clipart_result, "warnings", ()))
+            + tuple(getattr(scene_result, "warnings", ())),
+            errors=(),
+        )
+
+    def _generate_storybook_scene(
+        self,
+        job: ProductionJob,
+        prompt_package: dict[str, Any],
+        job_paths: ProductFactoryJobPaths,
+    ) -> Any:
+        from project_aurora.image_generation.image_generation_engine import (
+            ImageGenerationEngine,
+        )
+
+        existing = tuple(sorted(job_paths.storybook_scenes_dir.glob("*.png")))
+        if existing:
+            return SimpleNamespace(
+                status="SUCCESS",
+                generated_files=tuple(str(path) for path in existing),
+                warnings=("Reused existing storybook scene.",),
+                errors=(),
+            )
+        scene_package_id = f"{job.id}_storybook_scene"
+        scene_package = dict(prompt_package)
+        scene_package["image_prompt"] = str(
+            prompt_package.get("storybook_scene_prompt")
+            or _storybook_scene_prompt(job, job.category)
+        )
+        scene_package["product_family"] = STORYBOOK_SCENE
+        scene_package["transparent_background"] = False
+        scene_package["openai_background"] = "opaque"
+        self._memory.save_prompt_package(scene_package, package_id=scene_package_id)
+        return ImageGenerationEngine(
+            memory=self._memory,
+            output_dir=job_paths.storybook_scenes_dir,
+            provider_config=self._image_config,
+        ).run(
+            prompt_package_id=scene_package_id,
+            provider=self._image_config.provider,
+            image_type="storybook_scene",
+            width=1024,
+            height=1024,
+            dpi=300,
+            size=self._image_config.size,
+            quality=self._image_config.quality,
+            transparent_background=False,
+            background="opaque",
+            output_format=self._image_config.output_format,
+            number_of_images=1,
         )
 
     def run_image_qa(self, job: ProductionJob) -> Any:
@@ -440,6 +519,7 @@ class DefaultProductFactoryStageRunner:
         job_paths = self.job_paths(job)
         preview_result = ListingPreviewExporter(
             final_images_dir=job_paths.final_images_dir,
+            storybook_scenes_dir=job_paths.storybook_scenes_dir,
             output_dir=job_paths.listing_images_dir,
             output_prefix=_asset_filename_prefix(job),
         ).export()
