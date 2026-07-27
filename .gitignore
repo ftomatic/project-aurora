@@ -48,6 +48,12 @@ build/
 # Aurora runtime data
 # ===========================
 data/aurora/**/*.json
+data/aurora/**/*.{png,jpg,jpeg,zip}
+data/aurora/backups/*
+data/aurora/archived_runtime_memory/*
+data/aurora/*/*
+!data/aurora/*/.gitkeep
+data/aurora/*/.gitkeep
 data/aurora/generated_images/*
 !data/aurora/generated_images/.gitkeep
 data/aurora/mock_generated_images/*

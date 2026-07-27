@@ -637,7 +637,7 @@ class ProductFactoryTest(unittest.TestCase):
         self.assertEqual(len(captured["source_files"]), 4)
         self.assertEqual(captured["product_family"], "CLIPART")
 
-    def test_etsy_upload_uses_only_current_job_listing_previews(self) -> None:
+    def test_etsy_upload_uses_only_current_job_final_images(self) -> None:
         captured: dict[str, object] = {}
         runner = DefaultProductFactoryStageRunner(
             memory=self.memory,
@@ -670,9 +670,71 @@ class ProductFactoryTest(unittest.TestCase):
             result = runner.upload_listing_images(self.job)
 
         self.assertEqual(result.status, "SUCCESS")
-        self.assertEqual(captured["images_dir"], job_paths.listing_images_dir)
+        self.assertEqual(captured["images_dir"], job_paths.final_images_dir)
         self.assertEqual(len(captured["files"]), 4)
         self.assertEqual(len(tuple(job_paths.final_images_dir.glob("*.png"))), 4)
+
+    def test_customer_download_uploads_four_pngs_and_zip(self) -> None:
+        captured: dict[str, object] = {}
+        runner = DefaultProductFactoryStageRunner(
+            memory=self.memory,
+            etsy_config=SimpleNamespace(),
+            paths=ProductFactoryPaths(jobs_dir=self.base_path / "jobs"),
+        )
+        job_paths = runner.job_paths(self.job)
+        for index in range(1, 5):
+            path = job_paths.final_images_dir / f"current_{index}.png"
+            path.parent.mkdir(parents=True, exist_ok=True)
+            image = Image.new("RGBA", (4000, 4000), (255, 255, 255, 0))
+            image.paste((255, 0, 0, 255), (900, 900, 3100, 3100))
+            image.save(path, format="PNG", dpi=(300, 300))
+
+        class FakeEtsyDigitalFileService:
+            def __init__(self, **kwargs: object) -> None:
+                captured["service_kwargs"] = kwargs
+
+            def sync_digital_files(
+                self,
+                listing_id: str | None,
+                final_images_dir: Path,
+            ) -> object:
+                captured["sync_listing_id"] = listing_id
+                captured["sync_dir"] = final_images_dir
+                return SimpleNamespace(
+                    status="SUCCESS",
+                    files_uploaded=4,
+                    failed=0,
+                    errors=(),
+                    warnings=(),
+                )
+
+            def upload_digital_file(
+                self,
+                listing_id: str | None,
+                file_path: Path,
+            ) -> object:
+                captured["zip_listing_id"] = listing_id
+                captured["zip_path"] = file_path
+                return SimpleNamespace(
+                    status="SUCCESS",
+                    files_uploaded=1,
+                    failed=0,
+                    errors=(),
+                    warnings=(),
+                )
+
+        with patch(
+            "project_aurora.integrations.etsy.etsy_digital_file_service.EtsyDigitalFileService",
+            FakeEtsyDigitalFileService,
+        ):
+            result = runner.upload_customer_downloads(self.job, "listing-123")
+
+        self.assertEqual(result.status, "SUCCESS")
+        self.assertEqual(result.files_uploaded, 5)
+        self.assertEqual(captured["sync_listing_id"], "listing-123")
+        self.assertEqual(captured["sync_dir"], job_paths.final_images_dir)
+        self.assertEqual(captured["zip_listing_id"], "listing-123")
+        self.assertEqual(Path(captured["zip_path"]).parent, job_paths.digital_downloads_dir)
 
     def test_rerun_reuses_four_generated_images_without_accumulating(self) -> None:
         fake_client = FakeOpenAIClient()
@@ -703,9 +765,9 @@ class ProductFactoryTest(unittest.TestCase):
         job_paths = runner.job_paths(self.job)
         self.assertEqual(first.status, "SUCCESS")
         self.assertEqual(second.status, "SUCCESS")
-        self.assertEqual(len(fake_client.images.calls), 2)
+        self.assertEqual(len(fake_client.images.calls), 1)
         self.assertEqual(len(tuple(job_paths.generated_images_dir.glob("*.png"))), 4)
-        self.assertEqual(len(tuple(job_paths.storybook_scenes_dir.glob("*.png"))), 1)
+        self.assertEqual(len(tuple(job_paths.storybook_scenes_dir.glob("*.png"))), 0)
 
 
 if __name__ == "__main__":
