@@ -8,7 +8,12 @@ from datetime import datetime
 from difflib import SequenceMatcher
 from typing import Any, Iterable
 
-from project_aurora.planning.production_queue_manager import ProductionQueueManager
+from project_aurora.planning.production_queue_manager import (
+    COMPLETED,
+    IN_PROGRESS,
+    READY,
+    ProductionQueueManager,
+)
 from project_aurora.research.market_opportunity import MarketOpportunity
 from project_aurora.research.research_config import ResearchPlannerConfig
 from project_aurora.storage.memory_manager import MemoryManager
@@ -282,7 +287,12 @@ class AtlasPortfolioManager:
         return ""
 
     def _duplicate_names(self) -> tuple[str, ...]:
-        queue_names = tuple(job.product_name for job in self._queue_manager.list_jobs())
+        blocking_statuses = {READY, IN_PROGRESS, COMPLETED}
+        queue_names = tuple(
+            job.product_name
+            for job in self._queue_manager.list_jobs()
+            if job.status in blocking_statuses
+        )
         memory_names: list[str] = []
         for collection in (
             "daily_research_reports",

@@ -125,7 +125,9 @@ class ResumeProductFactoryJobTest(unittest.TestCase):
             / "job_woodland"
             / "final_product_images"
         )
+        self.listing_dir = self.final_dir.parent / "listing_images"
         self.write_final_images()
+        self.write_listing_images()
         self.save_failed_report()
         self.config = EtsyConfig(
             mode="live",
@@ -164,6 +166,15 @@ class ResumeProductFactoryJobTest(unittest.TestCase):
                 dpi=(300, 300),
             )
 
+    def write_listing_images(self) -> None:
+        self.listing_dir.mkdir(parents=True)
+        for index in range(1, 6):
+            Image.new("RGBA", (3000, 3000), (245, 235, index, 255)).save(
+                self.listing_dir / f"woodland_preview_{index:02d}.png",
+                format="PNG",
+                dpi=(300, 300),
+            )
+
     def save_failed_report(self) -> None:
         report = ProductionReport(
             job_id=JOB_ID,
@@ -180,6 +191,7 @@ class ResumeProductFactoryJobTest(unittest.TestCase):
                 "job_root": str(self.final_dir.parent),
                 "generated_images_dir": str(self.final_dir.parent / "generated_images"),
                 "final_product_images_dir": str(self.final_dir),
+                "listing_images_dir": str(self.listing_dir),
                 "digital_downloads_dir": str(self.final_dir.parent / "digital_downloads"),
             },
             metadata={
@@ -212,6 +224,7 @@ class ResumeProductFactoryJobTest(unittest.TestCase):
                 "job_root": str(self.final_dir.parent),
                 "generated_images_dir": str(self.final_dir.parent / "generated_images"),
                 "final_product_images_dir": str(self.final_dir),
+                "listing_images_dir": str(self.listing_dir),
                 "digital_downloads_dir": str(self.final_dir.parent / "digital_downloads"),
             },
             metadata={
@@ -231,14 +244,18 @@ class ResumeProductFactoryJobTest(unittest.TestCase):
             queue_manager=self.queue,
             config=self.config,
             client=client,
+            sleeper=lambda _seconds: None,
+            verification_timeout_seconds=0,
+            verification_poll_seconds=0,
         )
 
     def test_resume_uploads_only_missing_image_then_digital_files(self) -> None:
         client = FakeResumeEtsyClient(
             existing_images=(
-                {"rank": 1, "filename": "strawberry_birthday_party_printable_01.png"},
-                {"rank": 2, "filename": "strawberry_birthday_party_printable_02.png"},
-                {"rank": 3, "filename": "strawberry_birthday_party_printable_03.png"},
+                {"rank": 1, "filename": "woodland_preview_01.png"},
+                {"rank": 2, "filename": "woodland_preview_02.png"},
+                {"rank": 3, "filename": "woodland_preview_03.png"},
+                {"rank": 4, "filename": "woodland_preview_04.png"},
             )
         )
 
@@ -246,11 +263,11 @@ class ResumeProductFactoryJobTest(unittest.TestCase):
 
         self.assertEqual(result.etsy_listing_id, LISTING_ID)
         self.assertEqual(result.resumed_from_stage, "listing_image_upload")
-        self.assertEqual(result.images_already_present, 3)
-        self.assertEqual(result.images_present_after, 4)
+        self.assertEqual(result.images_already_present, 4)
+        self.assertEqual(result.images_present_after, 5)
         self.assertEqual(result.images_uploaded_now, 1)
-        self.assertEqual(result.downloads_uploaded, 4)
-        self.assertEqual(result.digital_files_present_after, 4)
+        self.assertEqual(result.downloads_uploaded, 5)
+        self.assertEqual(result.digital_files_present_after, 5)
         self.assertEqual(result.verification, "PASS")
         self.assertEqual(result.final_status, "COMPLETED")
         self.assertGreaterEqual(client.list_image_calls, 2)
@@ -260,17 +277,17 @@ class ResumeProductFactoryJobTest(unittest.TestCase):
             [
                 (
                     LISTING_ID,
-                    "strawberry_birthday_party_printable_04.png",
-                    4,
+                    "woodland_preview_05.png",
+                    5,
                 )
             ],
         )
-        self.assertEqual([item[2] for item in client.uploaded_files], [1, 2, 3, 4])
+        self.assertEqual([item[2] for item in client.uploaded_files], [1, 2, 3, 4, 1])
         self.assertEqual(client.created_drafts, 0)
         self.assertEqual(self.queue.list_jobs()[0].status, COMPLETED)
         saved = self.memory.load_record(REPORT_COLLECTION, JOB_ID)
         self.assertTrue(saved["success"])
-        self.assertEqual(saved["downloads"], 4)
+        self.assertEqual(saved["downloads"], 5)
         self.assertEqual(saved["metadata"]["listing_image_upload"]["status"], "SUCCESS")
 
     def test_resume_skips_all_existing_images(self) -> None:
@@ -278,16 +295,16 @@ class ResumeProductFactoryJobTest(unittest.TestCase):
             existing_images=tuple(
                 {
                     "rank": index,
-                    "filename": f"strawberry_birthday_party_printable_{index:02d}.png",
+                    "filename": f"woodland_preview_{index:02d}.png",
                 }
-                for index in range(1, 5)
+                for index in range(1, 6)
             )
         )
 
         result = self.service(client).resume(JOB_ID)
 
-        self.assertEqual(result.images_already_present, 4)
-        self.assertEqual(result.images_present_after, 4)
+        self.assertEqual(result.images_already_present, 5)
+        self.assertEqual(result.images_present_after, 5)
         self.assertEqual(result.images_uploaded_now, 0)
         self.assertEqual(client.uploaded_images, [])
         self.assertEqual(result.final_status, "COMPLETED")
@@ -295,11 +312,12 @@ class ResumeProductFactoryJobTest(unittest.TestCase):
     def test_failed_image_sync_does_not_upload_downloads_or_complete_queue(self) -> None:
         client = FakeResumeEtsyClient(
             existing_images=(
-                {"rank": 1, "filename": "strawberry_birthday_party_printable_01.png"},
-                {"rank": 2, "filename": "strawberry_birthday_party_printable_02.png"},
-                {"rank": 3, "filename": "strawberry_birthday_party_printable_03.png"},
+                {"rank": 1, "filename": "woodland_preview_01.png"},
+                {"rank": 2, "filename": "woodland_preview_02.png"},
+                {"rank": 3, "filename": "woodland_preview_03.png"},
+                {"rank": 4, "filename": "woodland_preview_04.png"},
             ),
-            fail_image_rank=4,
+            fail_image_rank=5,
         )
 
         result = self.service(client).resume(JOB_ID)
@@ -314,16 +332,16 @@ class ResumeProductFactoryJobTest(unittest.TestCase):
     def test_three_of_four_images_after_recovery_remains_needs_repair(self) -> None:
         client = FakeResumeEtsyClient(
             existing_images=(
-                {"rank": 1, "filename": "strawberry_birthday_party_printable_01.png"},
+                {"rank": 1, "filename": "woodland_preview_01.png"},
             ),
             mutate_upload_state=False,
         )
 
         result = self.service(client).resume(JOB_ID)
 
-        self.assertEqual(len(client.uploaded_images), 3)
+        self.assertEqual(len(client.uploaded_images), 4)
         self.assertEqual(result.images_already_present, 1)
-        self.assertEqual(result.images_uploaded_now, 3)
+        self.assertEqual(result.images_uploaded_now, 4)
         self.assertEqual(result.images_present_after, 1)
         self.assertEqual(result.verification, "FAIL")
         self.assertEqual(result.final_status, "NEEDS_REPAIR")
@@ -331,7 +349,7 @@ class ResumeProductFactoryJobTest(unittest.TestCase):
         saved = self.memory.load_record(REPORT_COLLECTION, JOB_ID)
         self.assertFalse(saved["success"])
         self.assertEqual(saved["failed_stage"], "listing_image_upload")
-        self.assertIn("expected 4 Etsy images", saved["errors"][0])
+        self.assertIn("expected 5 Etsy images", saved["errors"][0])
 
     def test_cli_prints_concise_error_without_traceback(self) -> None:
         class FailingResumeService:
@@ -441,9 +459,9 @@ class ResumeProductFactoryJobTest(unittest.TestCase):
 
         self.assertEqual(result.resumed_from_stage, "customer_download_upload")
         self.assertEqual(result.final_status, "COMPLETED")
-        self.assertEqual(result.digital_files_present_after, 4)
-        self.assertEqual(len(client.uploaded_files), 2)
-        self.assertEqual([item[2] for item in client.uploaded_files], [3, 4])
+        self.assertEqual(result.digital_files_present_after, 5)
+        self.assertEqual(len(client.uploaded_files), 3)
+        self.assertEqual([item[2] for item in client.uploaded_files], [3, 4, 1])
 
 
 if __name__ == "__main__":

@@ -7,6 +7,10 @@ from typing import Any
 
 from project_aurora.integrations.etsy.etsy_client import EtsyClient
 from project_aurora.integrations.etsy.etsy_config import EtsyConfig
+from project_aurora.integrations.etsy.etsy_listing_image_policy import (
+    MAX_LISTING_IMAGES,
+    MIN_LISTING_IMAGES,
+)
 from project_aurora.integrations.etsy.etsy_result import (
     EtsyImageUploadAttempt,
     EtsyImageUploadResult,
@@ -25,15 +29,15 @@ class EtsyImageUploadService:
         memory: MemoryManager,
         images_dir: Path,
         client: EtsyClient | None = None,
-        max_images: int = 4,
-        required_image_count: int = 4,
+        max_images: int = MAX_LISTING_IMAGES,
+        min_image_count: int = MIN_LISTING_IMAGES,
     ) -> None:
         self._config = config
         self._memory = memory
         self._images_dir = images_dir
         self._client = client or EtsyClient(config)
         self._max_images = max_images
-        self._required_image_count = required_image_count
+        self._min_image_count = min_image_count
 
     def upload_latest_draft_images(self) -> EtsyImageUploadResult:
         """Upload generated PNG images to the latest stored Etsy draft."""
@@ -55,10 +59,10 @@ class EtsyImageUploadService:
             errors.append("No non-empty PNG image files found.")
         if self._images_dir.name not in {"final_product_images", "listing_images"}:
             errors.append("Etsy image upload must use final_product_images or listing_images only.")
-        if image_files and len(image_files) != self._required_image_count:
+        if image_files and not self._min_image_count <= len(image_files) <= self._max_images:
             errors.append(
-                f"Exactly {self._required_image_count} final commercial PNG "
-                f"files are required, found {len(image_files)}."
+                f"Etsy listing images must contain between {self._min_image_count} "
+                f"and {self._max_images} PNG files, found {len(image_files)}."
             )
         if invalid_images:
             errors.extend(invalid_images)

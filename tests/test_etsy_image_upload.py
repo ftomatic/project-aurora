@@ -189,7 +189,7 @@ class EtsyImageUploadTest(unittest.TestCase):
         self.assertEqual(saved["status"], "SUCCESS")
         self.assertEqual(saved["images_uploaded"], 4)
 
-    def test_service_requires_exactly_four_images(self) -> None:
+    def test_service_accepts_five_listing_images(self) -> None:
         for index in range(5):
             (self.images_dir / f"asset_{index:02d}.png").write_bytes(
                 make_visible_png_bytes()
@@ -207,11 +207,56 @@ class EtsyImageUploadTest(unittest.TestCase):
             client=EtsyClient(config=self.config, urlopen=fake_urlopen),
         ).upload_latest_draft_images()
 
-        self.assertEqual(result.status, "CONFIGURATION_REQUIRED")
+        self.assertEqual(result.status, "SUCCESS")
         self.assertEqual(result.images_found, 5)
+        self.assertEqual(result.images_uploaded, 5)
+        self.assertEqual(len(calls), 6)
+
+    def test_service_accepts_ten_listing_images(self) -> None:
+        for index in range(10):
+            (self.images_dir / f"asset_{index:02d}.png").write_bytes(
+                make_visible_png_bytes()
+            )
+        calls = []
+
+        def fake_urlopen(api_request, timeout: int):  # type: ignore[no-untyped-def]
+            calls.append(api_request)
+            return FakeResponse({"listing_image_id": len(calls)})
+
+        result = EtsyImageUploadService(
+            config=self.config,
+            memory=self.memory,
+            images_dir=self.images_dir,
+            client=EtsyClient(config=self.config, urlopen=fake_urlopen),
+        ).upload_latest_draft_images()
+
+        self.assertEqual(result.status, "SUCCESS")
+        self.assertEqual(result.images_found, 10)
+        self.assertEqual(result.images_uploaded, 10)
+
+    def test_service_rejects_more_than_ten_listing_images(self) -> None:
+        for index in range(11):
+            (self.images_dir / f"asset_{index:02d}.png").write_bytes(
+                make_visible_png_bytes()
+            )
+        calls = []
+
+        def fake_urlopen(api_request, timeout: int):  # type: ignore[no-untyped-def]
+            calls.append(api_request)
+            return FakeResponse({"listing_image_id": len(calls)})
+
+        result = EtsyImageUploadService(
+            config=self.config,
+            memory=self.memory,
+            images_dir=self.images_dir,
+            client=EtsyClient(config=self.config, urlopen=fake_urlopen),
+        ).upload_latest_draft_images()
+
+        self.assertEqual(result.status, "CONFIGURATION_REQUIRED")
+        self.assertEqual(result.images_found, 11)
         self.assertEqual(result.images_uploaded, 0)
         self.assertEqual(calls, [])
-        self.assertIn("Exactly 4", result.errors[0])
+        self.assertIn("between 4 and 10", result.errors[0])
 
     def test_service_validates_before_calling_etsy(self) -> None:
         (self.images_dir / "a.png").write_bytes(make_visible_png_bytes())

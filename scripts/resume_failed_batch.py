@@ -17,6 +17,7 @@ sys.path.insert(0, str(PROJECT_ROOT))
 sys.path.insert(0, str(SRC_PATH))
 
 from project_aurora.integrations.etsy.etsy_config import EtsyConfig  # noqa: E402
+from project_aurora.config.local_env import load_local_env  # noqa: E402
 from project_aurora.image_generation.provider_registry import (  # noqa: E402
     ImageProviderConfig,
 )
@@ -117,6 +118,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 def main(argv: list[str] | None = None) -> None:
     """Run failed batch recovery."""
     args = parse_args(argv)
+    load_local_env(PROJECT_ROOT / "config" / "aurora.local.env")
     if not args.live:
         raise SystemExit("Use --live to resume failed production jobs.")
     report = run_failed_batch_recovery(limit=args.limit)
@@ -268,10 +270,12 @@ def _image_count(report: ProductionReport, reused: bool) -> int:
 
 
 def _report_verified_complete(report: ProductionReport) -> bool:
+    expected_images = _expected_listing_images(report)
+    expected_files = _expected_digital_files(report)
     return (
         report.success
-        and _listing_images_after(report) == 4
-        and _digital_files_after(report) == 4
+        and _listing_images_after(report) >= expected_images
+        and _digital_files_after(report) >= expected_files
     )
 
 
@@ -305,11 +309,22 @@ def _listing_images_after(report: ProductionReport) -> int:
     return int(report.images)
 
 
+def _expected_listing_images(report: ProductionReport) -> int:
+    value = _listing_upload_metadata(report).get("expected_images")
+    if isinstance(value, int):
+        return value
+    return 4
+
+
 def _digital_files_after(report: ProductionReport) -> int:
     value = _digital_upload_metadata(report).get("metadata")
     if isinstance(value, dict) and isinstance(value.get("total_present"), int):
         return int(value["total_present"])
     return int(report.downloads)
+
+
+def _expected_digital_files(report: ProductionReport) -> int:
+    return 5 if _digital_files_after(report) >= 5 else 4
 
 
 def _digital_files_uploaded_now(report: ProductionReport) -> int:
@@ -369,12 +384,13 @@ def print_recovery_report(report: FailedBatchRecoveryReport) -> None:
         print(f"Draft ID: {item.draft_id or ''}")
         print(f"Product: {item.product}")
         print("Existing Draft Reused: yes" if item.draft_id else "Existing Draft Reused: no")
-        print("Expected Images: 4")
+        expected_images = _expected_listing_images(item)
+        print(f"Expected Images: {expected_images}")
         print(f"Images Before: {_listing_images_before(item)}")
-        print(f"Missing Images Detected: {max(0, 4 - _listing_images_before(item))}")
+        print(f"Missing Images Detected: {max(0, expected_images - _listing_images_before(item))}")
         print(f"Images Uploaded: {_listing_images_uploaded_now(item)}")
         print(f"Images After: {_listing_images_after(item)}")
-        print("Expected Digital Files: 4")
+        print(f"Expected Digital Files: {_expected_digital_files(item)}")
         print(f"Digital Files After: {_digital_files_after(item)}")
         passed = _report_verified_complete(item)
         print(f"Verification: {'PASS' if passed else 'FAIL'}")

@@ -123,11 +123,11 @@ class EtsyIntegrationTest(unittest.TestCase):
     def tearDown(self) -> None:
         self.temp_dir.cleanup()
 
-    def _create_final_image_files(self) -> tuple[str, ...]:
+    def _create_final_image_files(self, count: int = 4) -> tuple[str, ...]:
         image_dir = Path(self.temp_dir.name) / "final_product_images"
-        image_dir.mkdir()
+        image_dir.mkdir(exist_ok=True)
         paths: list[str] = []
-        for index in range(1, 5):
+        for index in range(1, count + 1):
             path = image_dir / f"strawberry_birthday_party_printable_{index:02d}.png"
             Image.new("RGBA", (4000, 4000), (255, index * 20, 0, 255)).save(
                 path,
@@ -214,6 +214,41 @@ class EtsyIntegrationTest(unittest.TestCase):
         )
 
         self.assertEqual(mapper.validate_payload(payload), ())
+
+    def test_payload_validation_accepts_five_listing_images(self) -> None:
+        image_files = self._create_final_image_files(count=5)
+        mapper = EtsyListingMapper()
+        payload = mapper.map_to_draft(
+            listing_package=make_listing_package(image_files),
+            seo_package=self.seo_package,
+            config=self.config,
+        )
+
+        self.assertEqual(mapper.validate_payload(payload), ())
+
+    def test_payload_validation_accepts_ten_listing_images(self) -> None:
+        image_files = self._create_final_image_files(count=10)
+        mapper = EtsyListingMapper()
+        payload = mapper.map_to_draft(
+            listing_package=make_listing_package(image_files),
+            seo_package=self.seo_package,
+            config=self.config,
+        )
+
+        self.assertEqual(mapper.validate_payload(payload), ())
+
+    def test_payload_validation_rejects_more_than_ten_listing_images(self) -> None:
+        image_files = self._create_final_image_files(count=11)
+        mapper = EtsyListingMapper()
+        payload = mapper.map_to_draft(
+            listing_package=make_listing_package(image_files),
+            seo_package=self.seo_package,
+            config=self.config,
+        )
+
+        errors = mapper.validate_payload(payload)
+
+        self.assertTrue(any("between 4 and 10" in error for error in errors))
 
     def test_mock_client_does_not_call_etsy_api(self) -> None:
         payload = EtsyListingMapper().map_to_draft(

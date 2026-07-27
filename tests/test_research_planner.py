@@ -16,6 +16,7 @@ sys.path.insert(0, str(SRC_PATH))
 sys.path.insert(0, str(PROJECT_ROOT))
 
 from project_aurora.planning.production_queue_manager import (  # noqa: E402
+    FAILED,
     ProductionQueueManager,
 )
 from project_aurora.portfolio.atlas_portfolio_manager import (  # noqa: E402
@@ -31,6 +32,7 @@ from project_aurora.storage.memory_manager import MemoryManager  # noqa: E402
 from scripts.run_research_planner import (  # noqa: E402
     build_brand_profile_portfolio_candidates,
     handoff_to_forge,
+    parse_args,
     print_quality_gate,
     request_production_approval,
 )
@@ -191,6 +193,37 @@ class ResearchPlannerTest(unittest.TestCase):
         self.assertNotIn("Nursery Product 0", [item.keyword for item in plan.selected])
         rejected = {item.keyword: reason for item, reason in plan.rejected}
         self.assertEqual(rejected["Nursery Product 0"], "Duplicate historical product")
+
+    def test_failed_queue_product_does_not_permanently_block_selection(self) -> None:
+        self.queue.add_job(
+            priority="High",
+            product_name="Nursery Product 0",
+            category="wall art",
+            style="Soft Nursery",
+            seasonal_theme="Spring",
+            keywords=("nursery",),
+            confidence_score=0.91,
+            estimated_competition="Low",
+            estimated_demand="High",
+            estimated_revenue=100,
+            status=FAILED,
+        )
+        opportunities = (opportunity(0),)
+
+        plan = AtlasPortfolioManager(
+            config=self.config(daily_products=1),
+            queue_manager=self.queue,
+            memory=self.memory,
+        ).build_portfolio(opportunities)
+
+        self.assertEqual([item.keyword for item in plan.selected], ["Nursery Product 0"])
+        self.assertTrue(plan.quality_gate_passed)
+
+    def test_research_planner_count_argument_sets_required_products(self) -> None:
+        args = parse_args(["--auto-approve", "--count", "1"])
+
+        self.assertTrue(args.auto_approve)
+        self.assertEqual(args.count, 1)
 
     def test_confidence_threshold_blocks_weak_portfolio(self) -> None:
         opportunities = tuple(opportunity(index, confidence=70) for index in range(8))

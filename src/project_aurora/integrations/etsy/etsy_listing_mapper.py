@@ -7,6 +7,10 @@ from pathlib import Path
 from typing import Any
 
 from project_aurora.integrations.etsy.etsy_config import EtsyConfig
+from project_aurora.integrations.etsy.etsy_listing_image_policy import (
+    MAX_LISTING_IMAGES,
+    MIN_LISTING_IMAGES,
+)
 from project_aurora.image_generation.commercial_image_exporter import (
     validate_commercial_png,
 )
@@ -168,8 +172,11 @@ class EtsyListingMapper:
         if payload.is_digital and payload.quantity != 999:
             errors.append("Digital listing quantity must be 999.")
         if payload.is_digital:
-            if len(payload.image_files) != 4:
-                errors.append("Exactly 4 final commercial PNG files are required.")
+            if not MIN_LISTING_IMAGES <= len(payload.image_files) <= MAX_LISTING_IMAGES:
+                errors.append(
+                    f"Etsy listing images must contain between {MIN_LISTING_IMAGES} "
+                    f"and {MAX_LISTING_IMAGES} PNG files."
+                )
             for image_file in payload.image_files:
                 image_errors = validate_commercial_png(Path(image_file))
                 errors.extend(

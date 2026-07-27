@@ -121,7 +121,7 @@ class MerchantPreflight:
             for error in validate_commercial_png(path)
         ]
         if len(files) != COMMERCIAL_IMAGE_COUNT:
-            errors.append(f"Exactly 4 final listing images are required, found {len(files)}.")
+            errors.append(f"Exactly 4 customer PNG files are required, found {len(files)}.")
         errors.extend(file_errors)
         status = READY_FOR_ETSY_DRAFT if not errors else PREFLIGHT_FAILED
         return MerchantPreflightResult(

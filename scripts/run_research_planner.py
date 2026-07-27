@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import sys
+from dataclasses import replace
 from pathlib import Path
 from typing import Callable
 
@@ -46,6 +47,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     """Parse CLI arguments."""
     parser = argparse.ArgumentParser(description="Run Aurora research planner.")
     parser.add_argument("--auto-approve", action="store_true")
+    parser.add_argument(
+        "--count",
+        type=int,
+        default=None,
+        help="Number of production jobs required for this planner run.",
+    )
     return parser.parse_args(argv)
 
 
@@ -53,6 +60,10 @@ def main(argv: list[str] | None = None) -> None:
     """Run research-first planning and optional Forge handoff."""
     args = parse_args(argv)
     config = ResearchPlannerConfig.from_file(RESEARCH_CONFIG_PATH)
+    if args.count is not None:
+        if args.count < 1:
+            raise ValueError("--count must be at least 1.")
+        config = replace(config, daily_products=args.count)
     queue_manager = ProductionQueueManager(queue_path=QUEUE_PATH)
     research = AthenaMarketIntelligence(candidate_count=config.candidate_count).run()
     provider_status = tuple(

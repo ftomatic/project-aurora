@@ -3,13 +3,15 @@
 from __future__ import annotations
 
 import argparse
+import json
 import shutil
 import sys
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
+from time import sleep
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, Callable
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 SRC_PATH = PROJECT_ROOT / "src"
@@ -25,10 +27,16 @@ from project_aurora.integrations.etsy.etsy_config import EtsyConfig  # noqa: E40
 from project_aurora.integrations.etsy.etsy_digital_file_service import (  # noqa: E402
     EtsyDigitalFileService,
 )
+from project_aurora.integrations.etsy.etsy_listing_image_policy import (  # noqa: E402
+    MAX_LISTING_IMAGES,
+    MIN_LISTING_IMAGES,
+)
 from project_aurora.integrations.etsy.etsy_result import (  # noqa: E402
     EtsyImageUploadAttempt,
 )
 from project_aurora.image_generation.provider_registry import ImageProviderConfig  # noqa: E402
+from project_aurora.image_generation.image_inspector import inspect_png  # noqa: E402
+from project_aurora.config.local_env import load_local_env  # noqa: E402
 from project_aurora.planning.production_queue_manager import (  # noqa: E402
     ProductionJob,
     ProductionQueueManager,
@@ -37,6 +45,9 @@ from project_aurora.production.product_factory import (  # noqa: E402
     REPORT_COLLECTION,
     DefaultProductFactoryStageRunner,
     ProductFactory,
+)
+from project_aurora.production.digital_download_builder import (  # noqa: E402
+    DigitalDownloadBuilder,
 )
 from project_aurora.production.production_report import ProductionReport  # noqa: E402
 from project_aurora.storage.csv_storage import CSVStorage  # noqa: E402
@@ -74,11 +85,17 @@ class ProductFactoryResumeService:
         queue_manager: ProductionQueueManager,
         config: EtsyConfig,
         client: EtsyClient | None = None,
+        sleeper: Callable[[float], None] = sleep,
+        verification_timeout_seconds: float = 30.0,
+        verification_poll_seconds: float = 2.0,
     ) -> None:
         self._memory = memory
         self._queue_manager = queue_manager
         self._config = config
         self._client = client or EtsyClient(config)
+        self._sleeper = sleeper
+        self._verification_timeout_seconds = verification_timeout_seconds
+        self._verification_poll_seconds = verification_poll_seconds
 
     def resume(self, job_id: str) -> ResumeResult:
         """Resume a failed Product Factory job from its failed stage."""
@@ -112,12 +129,20 @@ class ProductFactoryResumeService:
         failed_stage: str,
     ) -> ResumeResult:
         final_images_dir = _final_images_dir_from_report(report_data)
-        final_files = _valid_final_image_files(final_images_dir)
-        existing_images = self._client.list_listing_images(listing_id)
+        _valid_final_image_files(final_images_dir)
+        listing_images_dir = _listing_images_dir_from_report(report_data)
+        listing_files = _valid_listing_image_files(listing_images_dir)
+        expected_listing_images = len(listing_files)
+        existing_images = self._poll_listing_images(
+            listing_id=listing_id,
+            expected_count=0,
+            endpoint_label="Pre-repair listing image lookup",
+            timeout_seconds=0,
+        )
         existing_by_rank = _existing_listing_images_by_rank(existing_images)
         attempts: list[EtsyImageUploadAttempt] = []
 
-        for rank, image_path in enumerate(final_files, start=1):
+        for rank, image_path in enumerate(listing_files, start=1):
             if _image_already_present(existing_by_rank.get(rank), image_path, rank):
                 continue
             attempts.append(self._upload_one(listing_id, image_path, rank))
@@ -126,18 +151,22 @@ class ProductFactoryResumeService:
         failed_attempts = tuple(
             attempt for attempt in attempts if attempt.status != "SUCCESS"
         )
-        verified_images = self._verified_listing_images(listing_id)
+        verified_images = self._poll_listing_images(
+            listing_id=listing_id,
+            expected_count=expected_listing_images,
+            endpoint_label="Post-upload listing image verification",
+        )
         images_after = len(verified_images)
-        if failed_attempts or images_after != COMMERCIAL_IMAGE_COUNT:
+        if failed_attempts or images_after < expected_listing_images:
             reason = (
-                f"expected {COMMERCIAL_IMAGE_COUNT} Etsy images, found "
+                f"expected {expected_listing_images} Etsy images, found "
                 f"{images_after} after recovery"
             )
             updated = _updated_report(
                 report_data=report_data,
                 success=False,
                 failed_stage="listing_image_upload",
-                images=min(images_after, COMMERCIAL_IMAGE_COUNT),
+                images=min(images_after, expected_listing_images),
                 downloads=int(report_data.get("downloads") or 0),
                 metadata_update={
                     "listing_image_upload": {
@@ -146,7 +175,7 @@ class ProductFactoryResumeService:
                         "images_already_present": len(existing_by_rank),
                         "images_uploaded_now": uploaded_now,
                         "images_present_after": images_after,
-                        "expected_images": COMMERCIAL_IMAGE_COUNT,
+                        "expected_images": expected_listing_images,
                         "verification": "FAIL",
                         "failed": len(failed_attempts),
                         "attempts": [_attempt_to_dict(attempt) for attempt in attempts],
@@ -176,16 +205,15 @@ class ProductFactoryResumeService:
                 errors=updated.errors,
             )
 
-        digital_result = EtsyDigitalFileService(
-            config=self._config,
-            memory=self._memory,
-            client=self._client,
-        ).sync_digital_files(
-            listing_id=listing_id,
-            final_images_dir=final_images_dir,
+        digital_result = self._sync_customer_downloads(listing_id, final_images_dir)
+        digital_total = len(
+            self._poll_digital_files(
+                listing_id=listing_id,
+                expected_count=5,
+                endpoint_label="Post-upload digital file verification",
+            )
         )
-        digital_total = self._verified_digital_file_count(listing_id)
-        success = digital_result.status == "SUCCESS" and digital_total == 4
+        success = digital_result.status == "SUCCESS" and digital_total == 5
         final_status = "COMPLETED" if success else "NEEDS_REPAIR"
         verification = "PASS" if success else "FAIL"
         updated_report = _updated_report(
@@ -201,9 +229,9 @@ class ProductFactoryResumeService:
                         "images_already_present": len(existing_by_rank),
                         "images_uploaded_now": uploaded_now,
                         "images_present_after": images_after,
-                        "expected_images": COMMERCIAL_IMAGE_COUNT,
+                        "expected_images": expected_listing_images,
                         "verification": "PASS",
-                        "total_present": COMMERCIAL_IMAGE_COUNT,
+                        "total_present": images_after,
                         "attempts": [_attempt_to_dict(attempt) for attempt in attempts],
                     },
                 "customer_download_upload": digital_result,
@@ -239,16 +267,15 @@ class ProductFactoryResumeService:
     ) -> ResumeResult:
         final_images_dir = _final_images_dir_from_report(report_data)
         _valid_final_image_files(final_images_dir)
-        digital_result = EtsyDigitalFileService(
-            config=self._config,
-            memory=self._memory,
-            client=self._client,
-        ).sync_digital_files(
-            listing_id=listing_id,
-            final_images_dir=final_images_dir,
+        digital_result = self._sync_customer_downloads(listing_id, final_images_dir)
+        digital_total = len(
+            self._poll_digital_files(
+                listing_id=listing_id,
+                expected_count=5,
+                endpoint_label="Post-upload digital file verification",
+            )
         )
-        digital_total = self._verified_digital_file_count(listing_id)
-        success = digital_result.status == "SUCCESS" and digital_total == 4
+        success = digital_result.status == "SUCCESS" and digital_total == 5
         updated_report = _updated_report(
             report_data=report_data,
             success=success,
@@ -276,6 +303,84 @@ class ProductFactoryResumeService:
             verification="PASS" if success else "FAIL",
             errors=updated_report.errors,
         )
+
+    def _sync_customer_downloads(self, listing_id: str, final_images_dir: Path) -> Any:
+        digital_service = EtsyDigitalFileService(
+            config=self._config,
+            memory=self._memory,
+            client=self._client,
+        )
+        png_result = digital_service.sync_digital_files(
+            listing_id=listing_id,
+            final_images_dir=final_images_dir,
+        )
+        _print_etsy_trace(
+            heading="ETSY UPLOAD TRACE",
+            listing_id=listing_id,
+            endpoint=f"/shops/{self._config.shop_id}/listings/{listing_id}/files",
+            response=_record_value(png_result),
+            extra={
+                "upload_endpoint": "uploadListingFile",
+                "file_group": "customer PNG files",
+            },
+        )
+        if png_result.status != "SUCCESS":
+            return png_result
+
+        zip_result = self._sync_customer_zip(
+            listing_id=listing_id,
+            final_images_dir=final_images_dir,
+            digital_service=digital_service,
+        )
+        _print_etsy_trace(
+            heading="ETSY UPLOAD TRACE",
+            listing_id=listing_id,
+            endpoint=f"/shops/{self._config.shop_id}/listings/{listing_id}/files",
+            response=_record_value(zip_result),
+            extra={
+                "upload_endpoint": "uploadListingFile",
+                "file_group": "customer ZIP file",
+            },
+        )
+        files_uploaded = int(png_result.files_uploaded) + int(zip_result.files_uploaded)
+        errors = tuple(png_result.errors) + tuple(zip_result.errors)
+        status = "SUCCESS" if png_result.status == "SUCCESS" and zip_result.status == "SUCCESS" else "PARTIAL_FAILURE"
+        return SimpleNamespace(
+            status=status,
+            files_uploaded=files_uploaded,
+            errors=errors,
+            to_dict=lambda: {
+                "status": status,
+                "png_sync": _record_value(png_result),
+                "zip_sync": _record_value(zip_result),
+                "files_uploaded": files_uploaded,
+                "errors": list(errors),
+            },
+        )
+
+    def _sync_customer_zip(
+        self,
+        *,
+        listing_id: str,
+        final_images_dir: Path,
+        digital_service: EtsyDigitalFileService,
+    ) -> Any:
+        existing = self._poll_digital_files(
+            listing_id=listing_id,
+            expected_count=0,
+            endpoint_label="Pre-repair digital file lookup",
+            timeout_seconds=0,
+        )
+        zip_path = _ensure_customer_zip(final_images_dir)
+        if any(_digital_record_filename(record) == zip_path.name for record in existing):
+            return SimpleNamespace(status="SUCCESS", files_uploaded=0, errors=())
+        if len(existing) >= 5:
+            return SimpleNamespace(
+                status="PARTIAL_FAILURE",
+                files_uploaded=0,
+                errors=("Etsy already has 5 digital files; ZIP cannot be uploaded without exceeding the limit.",),
+            )
+        return digital_service.upload_digital_file(listing_id=listing_id, file_path=zip_path)
 
     def _resume_with_product_factory(
         self,
@@ -333,6 +438,19 @@ class ProductFactoryResumeService:
                 status="FAILED",
                 errors=(str(error),),
             )
+        _print_etsy_trace(
+            heading="ETSY UPLOAD TRACE",
+            listing_id=listing_id,
+            endpoint=(
+                f"/shops/{self._config.shop_id}/listings/{listing_id}/images"
+            ),
+            response=response,
+            extra={
+                "upload_endpoint": "uploadListingImage",
+                "filename": image_path.name,
+                "rank": rank,
+            },
+        )
         image_id = response.get("listing_image_id") or response.get("image_id")
         return EtsyImageUploadAttempt(
             image_path=str(image_path),
@@ -347,10 +465,114 @@ class ProductFactoryResumeService:
         self._memory.save_record(REPORT_COLLECTION, report.job_id, report.to_dict())
 
     def _verified_listing_images(self, listing_id: str) -> dict[int, dict[str, Any]]:
-        return _existing_listing_images_by_rank(self._client.list_listing_images(listing_id))
+        return _existing_listing_images_by_rank(
+            self._poll_listing_images(
+                listing_id=listing_id,
+                expected_count=0,
+                endpoint_label="Listing image verification",
+                timeout_seconds=0,
+            )
+        )
 
     def _verified_digital_file_count(self, listing_id: str) -> int:
-        return len(self._client.list_listing_digital_files(listing_id))
+        return len(
+            self._poll_digital_files(
+                listing_id=listing_id,
+                expected_count=0,
+                endpoint_label="Digital file verification",
+                timeout_seconds=0,
+            )
+        )
+
+    def _poll_listing_images(
+        self,
+        *,
+        listing_id: str,
+        expected_count: int,
+        endpoint_label: str,
+        timeout_seconds: float | None = None,
+    ) -> tuple[dict[str, Any], ...]:
+        endpoint = f"/listings/{listing_id}/images"
+        return self._poll_etsy_results(
+            listing_id=listing_id,
+            endpoint=endpoint,
+            endpoint_label=endpoint_label,
+            expected_count=expected_count,
+            count_label="Number of listing images returned",
+            timeout_seconds=timeout_seconds,
+        )
+
+    def _poll_digital_files(
+        self,
+        *,
+        listing_id: str,
+        expected_count: int,
+        endpoint_label: str,
+        timeout_seconds: float | None = None,
+    ) -> tuple[dict[str, Any], ...]:
+        if not self._config.shop_id:
+            raise RuntimeError("ETSY_SHOP_ID is required.")
+        endpoint = f"/shops/{self._config.shop_id}/listings/{listing_id}/files"
+        return self._poll_etsy_results(
+            listing_id=listing_id,
+            endpoint=endpoint,
+            endpoint_label=endpoint_label,
+            expected_count=expected_count,
+            count_label="Number of digital files returned",
+            timeout_seconds=timeout_seconds,
+        )
+
+    def _poll_etsy_results(
+        self,
+        *,
+        listing_id: str,
+        endpoint: str,
+        endpoint_label: str,
+        expected_count: int,
+        count_label: str,
+        timeout_seconds: float | None,
+    ) -> tuple[dict[str, Any], ...]:
+        timeout = self._verification_timeout_seconds if timeout_seconds is None else timeout_seconds
+        deadline = datetime.now().timestamp() + timeout
+        last_results: tuple[dict[str, Any], ...] = ()
+        while True:
+            raw = self._get_verification_json(endpoint)
+            results = _results_from_raw(raw)
+            last_results = results
+            _print_etsy_trace(
+                heading="ETSY VERIFICATION TRACE",
+                listing_id=listing_id,
+                endpoint=endpoint,
+                response=raw,
+                extra={
+                    "verification_endpoint": endpoint_label,
+                    count_label: len(results),
+                    "expected_count": expected_count,
+                },
+            )
+            if expected_count <= 0 or len(results) >= expected_count:
+                return results
+            if datetime.now().timestamp() >= deadline:
+                print("ETSY VERIFICATION TIMEOUT")
+                print("")
+                print("Listing ID")
+                print(listing_id)
+                print("")
+                print("Verification endpoint")
+                print(endpoint)
+                print("")
+                print("Raw JSON")
+                print(json.dumps(raw, indent=2, sort_keys=True))
+                return last_results
+            self._sleeper(self._verification_poll_seconds)
+
+    def _get_verification_json(self, endpoint: str) -> dict[str, Any]:
+        get_json = getattr(self._client, "get_json", None)
+        if callable(get_json):
+            return get_json(endpoint)
+        if endpoint.endswith("/images"):
+            return {"results": list(self._client.list_listing_images(endpoint.split("/")[-2]))}
+        return {"results": list(self._client.list_listing_digital_files(endpoint.split("/")[-2]))}
 
 
 class StageAwareResumeRunner(DefaultProductFactoryStageRunner):
@@ -425,11 +647,13 @@ class StageAwareResumeRunner(DefaultProductFactoryStageRunner):
         listing_id = self._existing_draft_id or _latest_draft_id(self._memory)
         if not listing_id:
             raise RuntimeError("Existing Etsy draft ID is required for image sync.")
-        final_files = _valid_final_image_files(self.job_paths(job).final_images_dir)
+        _valid_final_image_files(self.job_paths(job).final_images_dir)
+        listing_files = _valid_listing_image_files(self.job_paths(job).listing_images_dir)
+        expected_listing_images = len(listing_files)
         existing = self._resume_client.list_listing_images(listing_id)
         existing_by_rank = _existing_listing_images_by_rank(existing)
         attempts: list[EtsyImageUploadAttempt] = []
-        for rank, image_path in enumerate(final_files, start=1):
+        for rank, image_path in enumerate(listing_files, start=1):
             if _image_already_present(existing_by_rank.get(rank), image_path, rank):
                 continue
             response = self._resume_client.upload_listing_image(listing_id, image_path, rank)
@@ -448,11 +672,11 @@ class StageAwareResumeRunner(DefaultProductFactoryStageRunner):
         errors = ()
         status = "SUCCESS"
         failed = 0
-        if images_after != COMMERCIAL_IMAGE_COUNT:
+        if images_after < expected_listing_images:
             status = "PARTIAL_FAILURE"
             failed = 1
             errors = (
-                f"expected {COMMERCIAL_IMAGE_COUNT} Etsy images, found "
+                f"expected {expected_listing_images} Etsy images, found "
                 f"{images_after} after recovery",
             )
         return SimpleNamespace(
@@ -461,7 +685,7 @@ class StageAwareResumeRunner(DefaultProductFactoryStageRunner):
             images_uploaded=len(attempts),
             images_already_present=len(existing_by_rank),
             images_present_after=images_after,
-            expected_images=COMMERCIAL_IMAGE_COUNT,
+            expected_images=expected_listing_images,
             failed=failed,
             warnings=(),
             errors=errors,
@@ -489,6 +713,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 def main(argv: list[str] | None = None) -> None:
     """Resume a failed Product Factory job safely."""
     args = parse_args(argv)
+    load_local_env(PROJECT_ROOT / "config" / "aurora.local.env")
     memory = MemoryManager(storage=CSVStorage(base_path=PROJECT_ROOT / "data" / "aurora"))
     queue_manager = ProductionQueueManager(queue_path=QUEUE_PATH)
     config = EtsyConfig.from_environment(PROJECT_ROOT / "config" / "etsy.yaml")
@@ -579,6 +804,17 @@ def _final_images_dir_from_report(report_data: dict[str, Any]) -> Path:
     return Path(value)
 
 
+def _listing_images_dir_from_report(report_data: dict[str, Any]) -> Path:
+    job_paths = report_data.get("job_paths")
+    if not isinstance(job_paths, dict):
+        raise RuntimeError("ProductionReport does not include job_paths.")
+    value = job_paths.get("listing_images_dir")
+    if isinstance(value, str) and value.strip():
+        return Path(value)
+    final_images_dir = _final_images_dir_from_report(report_data)
+    return final_images_dir.parent / "listing_images"
+
+
 def _valid_final_image_files(final_images_dir: Path) -> tuple[Path, ...]:
     if final_images_dir.name != "final_product_images":
         raise RuntimeError("Resume must use job final_product_images directory.")
@@ -596,6 +832,73 @@ def _valid_final_image_files(final_images_dir: Path) -> tuple[Path, ...]:
     if errors:
         raise RuntimeError("Invalid final image files: " + "; ".join(errors))
     return files
+
+
+def _valid_listing_image_files(listing_images_dir: Path) -> tuple[Path, ...]:
+    if listing_images_dir.name != "listing_images":
+        raise RuntimeError("Resume must use job listing_images directory.")
+    files = tuple(sorted(listing_images_dir.glob("*.png"), key=lambda path: path.name))
+    if not MIN_LISTING_IMAGES <= len(files) <= MAX_LISTING_IMAGES:
+        raise RuntimeError(
+            f"Expected between {MIN_LISTING_IMAGES} and {MAX_LISTING_IMAGES} "
+            f"listing PNG files, found {len(files)}."
+        )
+    errors = tuple(
+        f"{path.name}: invalid listing preview ({inspect_png(path).classification})"
+        for path in files
+        if not inspect_png(path).is_valid
+    )
+    if errors:
+        raise RuntimeError("Invalid listing image files: " + "; ".join(errors))
+    return files
+
+
+def _ensure_customer_zip(final_images_dir: Path) -> Path:
+    digital_downloads_dir = final_images_dir.parent / "digital_downloads"
+    safe_name = _safe_customer_zip_name(final_images_dir.parent.name)
+    existing_zips = tuple(sorted(digital_downloads_dir.glob("*.zip"), key=lambda path: path.name))
+    for zip_path in existing_zips:
+        if zip_path.name == safe_name:
+            return zip_path
+    for zip_path in existing_zips:
+        if 3 <= len(zip_path.name) <= 70 and all(
+            char.isalnum() or char in {"-", "_", "."} for char in zip_path.name
+        ):
+            return zip_path
+    result = DigitalDownloadBuilder(
+        final_images_dir=final_images_dir,
+        output_dir=digital_downloads_dir,
+        zip_filename=safe_name,
+    ).build()
+    if result.status != "SUCCESS" or not result.zip_path:
+        raise RuntimeError(
+            "Digital download ZIP could not be built: "
+            + "; ".join(result.errors or ("unknown error",))
+        )
+    return Path(result.zip_path)
+
+
+def _safe_customer_zip_name(job_folder_name: str) -> str:
+    parts = job_folder_name.split("_")
+    slug = "_".join(parts[5:]) if len(parts) > 5 else job_folder_name
+    cleaned = "".join(
+        char if char.isalnum() or char in {"-", "_"} else "_"
+        for char in slug.strip("_").casefold()
+    ).strip("_")
+    if not cleaned:
+        cleaned = "aurora_customer_files"
+    max_stem_length = 66
+    return f"{cleaned[:max_stem_length].strip('_')}.zip"
+
+
+def _digital_record_filename(record: dict[str, object]) -> str:
+    value = (
+        record.get("filename")
+        or record.get("file_name")
+        or record.get("name")
+        or record.get("display_name")
+    )
+    return Path(str(value)).name if value else ""
 
 
 def _archive_rejected_generated_images(generated_images_dir: Path) -> None:
@@ -722,6 +1025,12 @@ def _record_value(value: Any) -> Any:
         return {key: _record_value(item) for key, item in value.items()}
     if isinstance(value, datetime):
         return value.isoformat()
+    if hasattr(value, "__dict__"):
+        return {
+            key: _record_value(item)
+            for key, item in vars(value).items()
+            if not callable(item)
+        }
     return value
 
 
@@ -735,6 +1044,64 @@ def _attempt_to_dict(attempt: EtsyImageUploadAttempt) -> dict[str, Any]:
         "warnings": list(attempt.warnings),
         "metadata": attempt.metadata,
     }
+
+
+def _results_from_raw(raw: dict[str, Any]) -> tuple[dict[str, Any], ...]:
+    results = raw.get("results", ())
+    if isinstance(results, list):
+        return tuple(item for item in results if isinstance(item, dict))
+    if isinstance(results, tuple):
+        return tuple(item for item in results if isinstance(item, dict))
+    return ()
+
+
+def _print_etsy_trace(
+    *,
+    heading: str,
+    listing_id: str,
+    endpoint: str,
+    response: Any,
+    extra: dict[str, Any] | None = None,
+) -> None:
+    payload = _record_value(response)
+    print(heading)
+    print("")
+    print("Timestamp")
+    print(datetime.now().isoformat())
+    print("")
+    print("Listing ID")
+    print(listing_id)
+    print("")
+    print("Draft ID")
+    print(listing_id)
+    print("")
+    if extra:
+        upload_endpoint = extra.get("upload_endpoint")
+        if upload_endpoint:
+            print("Upload endpoint")
+            print(endpoint)
+            print("")
+            print("Upload response")
+            print(json.dumps(payload, indent=2, sort_keys=True))
+            print("")
+        verification_endpoint = extra.get("verification_endpoint")
+        if verification_endpoint:
+            print("Verification endpoint")
+            print(endpoint)
+            print("")
+            print("Verification response")
+            print(json.dumps(payload, indent=2, sort_keys=True))
+            print("")
+        for key, value in extra.items():
+            if key in {"upload_endpoint", "verification_endpoint"}:
+                continue
+            label = key if key.startswith("Number of ") else str(key).replace("_", " ").title()
+            print(label)
+            print(value)
+            print("")
+    print("Raw JSON")
+    print(json.dumps(payload, indent=2, sort_keys=True))
+    print("")
 
 
 def _job_by_id(queue_manager: ProductionQueueManager, job_id: str) -> ProductionJob:
