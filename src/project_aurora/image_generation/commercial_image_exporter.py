@@ -7,6 +7,11 @@ from pathlib import Path
 
 from PIL import Image
 
+from project_aurora.image_generation.clipart_transparency import (
+    TRANSPARENCY_REQUIRED,
+    ensure_clipart_transparency,
+    validate_clipart_file,
+)
 from project_aurora.image_generation.image_inspector import (
     GeneratedImageInspection,
     inspect_png,
@@ -118,6 +123,10 @@ class CommercialImageExporter:
                 _save_optimized_png(opaque, output_path)
                 return
 
+            working, transparency = ensure_clipart_transparency(working)
+            if transparency.status != "PASS":
+                _save_optimized_png(working, output_path)
+                return
             working = _trim_transparent_bounds(working)
             max_artwork = int(COMMERCIAL_IMAGE_SIZE[0] * COMMERCIAL_ARTWORK_RATIO)
             scale = min(max_artwork / working.width, max_artwork / working.height)
@@ -160,8 +169,10 @@ def validate_commercial_png(
     if not _dpi_is_acceptable(dpi):
         errors.append("Image must include 300-DPI metadata.")
     if product_family == CLIPART:
-        if inspection.alpha_minimum is None or inspection.alpha_minimum >= 255:
-            errors.append("Clipart must have a transparent background with alpha.")
+        transparency = validate_clipart_file(path)
+        if transparency.status != "PASS":
+            details = "; ".join(transparency.errors) or "Transparency validation failed."
+            errors.append(f"{TRANSPARENCY_REQUIRED}: {details}")
     elif product_family == STORYBOOK_SCENE:
         if inspection.alpha_minimum is not None and inspection.alpha_minimum < 255:
             errors.append("Storybook scene must keep an opaque full background.")
@@ -195,8 +206,8 @@ def _save_optimized_png(image: Image.Image, output_path: Path) -> None:
         output_path,
         format="PNG",
         dpi=(COMMERCIAL_IMAGE_DPI, COMMERCIAL_IMAGE_DPI),
-        optimize=True,
-        compress_level=9,
+        optimize=False,
+        compress_level=6,
     )
     if output_path.stat().st_size <= MAX_SINGLE_PNG_SIZE_BYTES:
         return

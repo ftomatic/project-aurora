@@ -79,14 +79,10 @@ def inspect_png(path: Path) -> GeneratedImageInspection:
     alpha_histogram = alpha_channel.histogram()
     visible_pixels = (width * height) - alpha_histogram[0]
     visible_mask = alpha_channel.point(lambda alpha: 255 if alpha > 0 else 0)
-    all_visible_pixels_white = bool(visible_pixels) and all(
-        extrema == (255, 255)
-        for extrema in ImageStat.Stat(
-            red_channel,
-            visible_mask,
-        ).extrema
-        + ImageStat.Stat(green_channel, visible_mask).extrema
-        + ImageStat.Stat(blue_channel, visible_mask).extrema
+    all_visible_pixels_white = _all_visible_pixels_white(
+        rgba,
+        visible_mask,
+        visible_pixels,
     )
     if alpha_maximum == 0:
         classification: ImageClassification = "FULLY_TRANSPARENT"
@@ -105,6 +101,39 @@ def inspect_png(path: Path) -> GeneratedImageInspection:
         visible_pixels=visible_pixels,
         all_visible_pixels_white=all_visible_pixels_white,
         classification=classification,
+    )
+
+
+def _all_visible_pixels_white(
+    rgba: Image.Image,
+    visible_mask: Image.Image,
+    visible_pixels: int,
+) -> bool:
+    if not visible_pixels:
+        return False
+    bbox = visible_mask.getbbox()
+    if bbox is None:
+        return False
+    if visible_pixels > 500_000:
+        cropped = rgba.crop(bbox)
+        width, height = cropped.size
+        step = max(1, int((width * height / 10_000) ** 0.5))
+        pixels = cropped.load()
+        for x in range(0, width, step):
+            for y in range(0, height, step):
+                red, green, blue, alpha = pixels[x, y]
+                if alpha > 0 and (red < 250 or green < 250 or blue < 250):
+                    return False
+        return True
+    red_channel, green_channel, blue_channel, _alpha_channel = rgba.split()
+    return all(
+        extrema == (255, 255)
+        for extrema in ImageStat.Stat(
+            red_channel,
+            visible_mask,
+        ).extrema
+        + ImageStat.Stat(green_channel, visible_mask).extrema
+        + ImageStat.Stat(blue_channel, visible_mask).extrema
     )
 
 

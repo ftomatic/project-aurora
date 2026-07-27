@@ -38,11 +38,13 @@ class DigitalDownloadBuilder:
         output_dir: Path,
         required_count: int = 4,
         zip_filename: str = DEFAULT_DIGITAL_DOWNLOAD_FILENAME,
+        product_family: str = "",
     ) -> None:
         self._final_images_dir = final_images_dir
         self._output_dir = output_dir
         self._required_count = required_count
         self._zip_filename = zip_filename
+        self._product_family = product_family
 
     def build(self) -> DigitalDownloadPackageResult:
         """Build and validate the customer download ZIP."""
@@ -91,7 +93,10 @@ class DigitalDownloadBuilder:
                 errors.append(f"Source image is not allowed: {image_path.name}.")
             errors.extend(
                 f"{image_path.name}: {error}"
-                for error in validate_commercial_png(image_path)
+                for error in validate_commercial_png(
+                    image_path,
+                    product_family=self._product_family,
+                )
             )
         return tuple(errors)
 

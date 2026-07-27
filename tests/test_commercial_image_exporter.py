@@ -46,10 +46,12 @@ class CommercialImageExporterTest(unittest.TestCase):
 
     def write_valid_sources(self) -> None:
         for index in range(1, 5):
-            write_png(
-                self.source_dir / f"source_{index:02d}.png",
-                (255, index * 20, 0, 255),
-            )
+            path = self.source_dir / f"source_{index:02d}.png"
+            image = Image.new("RGBA", (32, 32), (255, 0, 0, 0))
+            for x in range(8, 24):
+                for y in range(8, 24):
+                    image.putpixel((x, y), (255, index * 20, 0, 255))
+            image.save(path, format="PNG")
 
     def test_exports_exactly_four_4000_pngs_with_300_dpi(self) -> None:
         self.write_valid_sources()
@@ -78,7 +80,9 @@ class CommercialImageExporterTest(unittest.TestCase):
         for index in range(1, 5):
             path = self.source_dir / f"source_{index:02d}.png"
             image = Image.new("RGBA", (32, 32), (255, 0, 0, 0))
-            image.putpixel((0, 0), (255, 0, 0, 255))
+            for x in range(8, 24):
+                for y in range(8, 24):
+                    image.putpixel((x, y), (255, 0, 0, 255))
             image.save(path, format="PNG")
 
         result = CommercialImageExporter(
