@@ -473,9 +473,10 @@ class ResearchPlannerTest(unittest.TestCase):
 
         self.assertEqual(plan.quality_gate["required_products"], 5)
         self.assertEqual(plan.quality_gate["selected_products"], 4)
-        self.assertEqual(plan.quality_gate["portfolio_size"], "FAIL")
+        self.assertEqual(plan.quality_gate["portfolio_size"], "PASS")
+        self.assertEqual(plan.quality_gate["portfolio_size_warning"], "WARNING")
         self.assertEqual(plan.quality_gate["confidence"], "PASS")
-        self.assertEqual(plan.quality_gate["status"], "QUALITY_GATE_BLOCKED")
+        self.assertEqual(plan.quality_gate["status"], "READY_FOR_APPROVAL")
 
     def test_size_pass_but_confidence_failure_is_reported_separately(self) -> None:
         opportunities = tuple(opportunity(index, confidence=86) for index in range(5))
@@ -491,7 +492,20 @@ class ResearchPlannerTest(unittest.TestCase):
         self.assertEqual(plan.quality_gate["confidence"], "FAIL")
         self.assertEqual(plan.quality_gate["status"], "QUALITY_GATE_BLOCKED")
 
-    def test_exactly_five_products_required_before_approval(self) -> None:
+    def test_zero_valid_products_still_blocks_production(self) -> None:
+        opportunities = tuple(opportunity(index, confidence=60) for index in range(5))
+
+        plan = AtlasPortfolioManager(
+            config=self.config(minimum_confidence=85),
+            queue_manager=self.queue,
+            memory=self.memory,
+        ).build_portfolio(opportunities)
+
+        self.assertEqual(plan.quality_gate["selected_products"], 0)
+        self.assertEqual(plan.quality_gate["portfolio_size"], "FAIL")
+        self.assertEqual(plan.quality_gate["status"], "QUALITY_GATE_BLOCKED")
+
+    def test_one_or_more_valid_products_required_before_approval(self) -> None:
         opportunities = tuple(opportunity(index, confidence=88) for index in range(4))
         plan = AtlasPortfolioManager(
             config=self.config(minimum_confidence=85),
@@ -507,9 +521,9 @@ class ResearchPlannerTest(unittest.TestCase):
             )
             print_quality_gate(plan)
 
-        self.assertFalse(approved)
+        self.assertTrue(approved)
         self.assertIn("Selected Products\n4", output.getvalue())
-        self.assertIn("Portfolio Size\nFAIL", output.getvalue())
+        self.assertIn("Portfolio Size\nPASS", output.getvalue())
 
 
 if __name__ == "__main__":

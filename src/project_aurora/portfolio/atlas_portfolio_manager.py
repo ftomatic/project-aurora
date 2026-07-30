@@ -424,7 +424,9 @@ def _quality_gate(
     duplicate_failures: tuple[str, ...],
 ) -> dict[str, Any]:
     average = round(_average(item.confidence for item in selected), 2)
-    portfolio_size_pass = len(selected) == required_products
+    selected_count = len(selected)
+    portfolio_size_pass = selected_count > 0
+    portfolio_size_warning = 0 < selected_count < required_products
     product_confidence_pass = all(
         item.confidence >= _ABSOLUTE_MINIMUM_CONFIDENCE for item in selected
     )
@@ -432,22 +434,25 @@ def _quality_gate(
     duplicate_check_pass = not duplicate_failures
     confidence_pass = product_confidence_pass and average_confidence_pass
     status = "READY_FOR_APPROVAL"
-    if not (
-        portfolio_size_pass
-        and confidence_pass
-        and duplicate_check_pass
-    ):
+    if not (portfolio_size_pass and confidence_pass and duplicate_check_pass):
         status = "QUALITY_GATE_BLOCKED"
+    warnings: list[str] = []
+    if portfolio_size_warning:
+        warnings.append(
+            "Requested portfolio size was not reached; continuing with valid selected products."
+        )
     return {
         "required_products": required_products,
-        "selected_products": len(selected),
+        "selected_products": selected_count,
         "portfolio_size": "PASS" if portfolio_size_pass else "FAIL",
+        "portfolio_size_warning": "WARNING" if portfolio_size_warning else "NONE",
         "minimum_confidence": minimum_confidence,
         "average_confidence": average,
         "confidence": "PASS" if confidence_pass else "FAIL",
         "product_confidence": "PASS" if product_confidence_pass else "FAIL",
         "duplicate_check": "PASS" if duplicate_check_pass else "FAIL",
         "status": status,
+        "warnings": warnings,
     }
 
 
@@ -460,9 +465,13 @@ def _selection_failure_reasons(
     confidence_failures: tuple[str, ...],
 ) -> tuple[str, ...]:
     reasons: list[str] = []
-    if selected_count < required_count:
+    if selected_count == 0:
         reasons.append(
-            f"Only {selected_count} of {required_count} required products could be selected."
+            f"Zero valid products could be selected from the target of {required_count}."
+        )
+    elif selected_count < required_count:
+        reasons.append(
+            f"Selected {selected_count} of {required_count} target products; production may continue."
         )
     if duplicate_failures:
         reasons.append(

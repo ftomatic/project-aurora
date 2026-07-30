@@ -13,7 +13,16 @@ from project_aurora.image_generation.image_inspector import inspect_png
 PREVIEW_SIZE = (3000, 3000)
 PREVIEW_DPI = 300
 ARTWORK_FRAME_RATIO = 0.85
+SCENE_FRAME_RATIO = 0.96
 CREAM = (248, 243, 232, 255)
+LISTING_FAMILY_AUTO = "AUTO"
+LISTING_FAMILY_CLIPART = "CLIPART"
+LISTING_FAMILY_STORYBOOK = "STORYBOOK"
+SUPPORTED_LISTING_FAMILIES = {
+    LISTING_FAMILY_AUTO,
+    LISTING_FAMILY_CLIPART,
+    LISTING_FAMILY_STORYBOOK,
+}
 
 
 @dataclass(frozen=True, slots=True)
@@ -42,12 +51,16 @@ class ListingPreviewExporter:
         output_prefix: str,
         storybook_scenes_dir: Path | None = None,
         required_count: int = 4,
+        listing_family: str = LISTING_FAMILY_AUTO,
     ) -> None:
         self._final_images_dir = final_images_dir
         self._storybook_scenes_dir = storybook_scenes_dir
         self._output_dir = output_dir
         self._output_prefix = output_prefix
         self._required_count = required_count
+        self._listing_family = listing_family.strip().upper()
+        if self._listing_family not in SUPPORTED_LISTING_FAMILIES:
+            raise ValueError(f"Unsupported listing family: {listing_family}.")
 
     def export(self) -> ListingPreviewExportResult:
         """Create preview images from final transparent customer PNGs."""
@@ -58,8 +71,14 @@ class ListingPreviewExporter:
         self._output_dir.mkdir(parents=True, exist_ok=True)
         preview_files: list[str] = []
         scene_file = self._storybook_scene_file()
+        listing_family = self._resolved_listing_family(scene_file)
         start_index = 1
-        if scene_file is not None:
+        if listing_family == LISTING_FAMILY_STORYBOOK:
+            if scene_file is None:
+                return ListingPreviewExportResult(
+                    status="FAILED",
+                    errors=("Storybook listing family requires a completed storybook scene.",),
+                )
             output_path = self._output_dir / f"{self._output_prefix}_preview_01.png"
             self._export_scene(scene_file, output_path)
             preview_files.append(str(output_path))
@@ -74,6 +93,11 @@ class ListingPreviewExporter:
         if not self._final_images_dir.exists():
             return ()
         return tuple(sorted(self._final_images_dir.glob("*.png"), key=lambda item: item.name))
+
+    def _resolved_listing_family(self, scene_file: Path | None) -> str:
+        if self._listing_family != LISTING_FAMILY_AUTO:
+            return self._listing_family
+        return LISTING_FAMILY_STORYBOOK if scene_file is not None else LISTING_FAMILY_CLIPART
 
     def _storybook_scene_file(self) -> Path | None:
         if self._storybook_scenes_dir is None or not self._storybook_scenes_dir.exists():
@@ -110,7 +134,8 @@ class ListingPreviewExporter:
     def _export_scene(source_path: Path, output_path: Path) -> None:
         with Image.open(source_path) as image:
             scene = image.convert("RGBA")
-            scene.thumbnail(PREVIEW_SIZE, Image.Resampling.LANCZOS)
+            max_scene = int(PREVIEW_SIZE[0] * SCENE_FRAME_RATIO)
+            scene.thumbnail((max_scene, max_scene), Image.Resampling.LANCZOS)
             canvas = _paper_texture()
             left = (PREVIEW_SIZE[0] - scene.width) // 2
             top = (PREVIEW_SIZE[1] - scene.height) // 2

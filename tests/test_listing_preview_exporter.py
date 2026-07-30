@@ -14,6 +14,8 @@ SRC_PATH = PROJECT_ROOT / "src"
 sys.path.insert(0, str(SRC_PATH))
 
 from project_aurora.image_generation.listing_preview_exporter import (  # noqa: E402
+    LISTING_FAMILY_CLIPART,
+    LISTING_FAMILY_STORYBOOK,
     ListingPreviewExporter,
     PREVIEW_SIZE,
 )
@@ -89,6 +91,54 @@ class ListingPreviewExporterTest(unittest.TestCase):
         self.assertEqual(len(result.preview_files), 5)
         self.assertEqual(Path(result.preview_files[0]).name, "fox_garden_preview_01.png")
         self.assertEqual(Path(result.preview_files[1]).name, "fox_garden_preview_02.png")
+
+    def test_clipart_family_ignores_existing_storybook_scene(self) -> None:
+        scene_dir = self.base_path / "storybook_scenes"
+        scene_dir.mkdir()
+        write_storybook_scene(scene_dir / "fox_garden_scene.png")
+
+        result = ListingPreviewExporter(
+            final_images_dir=self.final_dir,
+            storybook_scenes_dir=scene_dir,
+            output_dir=self.preview_dir,
+            output_prefix="fox_garden",
+            listing_family=LISTING_FAMILY_CLIPART,
+        ).export()
+
+        self.assertEqual(result.status, "SUCCESS")
+        self.assertEqual(len(result.preview_files), 4)
+        self.assertEqual(Path(result.preview_files[0]).name, "fox_garden_preview_01.png")
+
+    def test_storybook_family_requires_scene(self) -> None:
+        result = ListingPreviewExporter(
+            final_images_dir=self.final_dir,
+            output_dir=self.preview_dir,
+            output_prefix="fox_garden",
+            listing_family=LISTING_FAMILY_STORYBOOK,
+        ).export()
+
+        self.assertEqual(result.status, "FAILED")
+        self.assertIn("requires a completed storybook scene", result.errors[0])
+
+    def test_storybook_primary_scene_occupies_most_canvas(self) -> None:
+        scene_dir = self.base_path / "storybook_scenes"
+        scene_dir.mkdir()
+        write_storybook_scene(scene_dir / "fox_garden_scene.png")
+
+        result = ListingPreviewExporter(
+            final_images_dir=self.final_dir,
+            storybook_scenes_dir=scene_dir,
+            output_dir=self.preview_dir,
+            output_prefix="fox_garden",
+            listing_family=LISTING_FAMILY_STORYBOOK,
+        ).export()
+
+        self.assertEqual(result.status, "SUCCESS")
+        with Image.open(result.preview_files[0]) as image:
+            pixels = image.convert("RGBA")
+            center = pixels.getpixel((PREVIEW_SIZE[0] // 2, PREVIEW_SIZE[1] // 2))
+            margin = pixels.getpixel((30, 30))
+        self.assertNotEqual(center, margin)
 
 
 if __name__ == "__main__":

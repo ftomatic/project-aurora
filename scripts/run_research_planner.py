@@ -407,6 +407,10 @@ def print_quality_gate(plan: AtlasPortfolioPlan) -> None:
     print("")
     print("Portfolio Size")
     print(gate["portfolio_size"])
+    if gate.get("portfolio_size_warning") == "WARNING":
+        print("")
+        print("Portfolio Size Warning")
+        print("Requested count not reached; continuing with valid selected products.")
     print("")
     print("Minimum Confidence")
     print(f"{gate['minimum_confidence']:.0f}%")
