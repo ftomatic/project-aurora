@@ -13,9 +13,11 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 SRC_PATH = PROJECT_ROOT / "src"
 sys.path.insert(0, str(SRC_PATH))
 
-from project_aurora.image_generation.listing_preview_exporter import (  # noqa: E402
+from project_aurora.image_generation.listing_family_decision import (  # noqa: E402
     LISTING_FAMILY_CLIPART,
     LISTING_FAMILY_STORYBOOK,
+)
+from project_aurora.image_generation.listing_preview_exporter import (  # noqa: E402
     ListingPreviewExporter,
     PREVIEW_SIZE,
 )
@@ -109,7 +111,7 @@ class ListingPreviewExporterTest(unittest.TestCase):
         self.assertEqual(len(result.preview_files), 4)
         self.assertEqual(Path(result.preview_files[0]).name, "fox_garden_preview_01.png")
 
-    def test_storybook_family_requires_scene(self) -> None:
+    def test_storybook_family_without_scene_falls_back_to_clipart(self) -> None:
         result = ListingPreviewExporter(
             final_images_dir=self.final_dir,
             output_dir=self.preview_dir,
@@ -117,8 +119,8 @@ class ListingPreviewExporterTest(unittest.TestCase):
             listing_family=LISTING_FAMILY_STORYBOOK,
         ).export()
 
-        self.assertEqual(result.status, "FAILED")
-        self.assertIn("requires a completed storybook scene", result.errors[0])
+        self.assertEqual(result.status, "SUCCESS")
+        self.assertEqual(len(result.preview_files), 4)
 
     def test_storybook_primary_scene_occupies_most_canvas(self) -> None:
         scene_dir = self.base_path / "storybook_scenes"
