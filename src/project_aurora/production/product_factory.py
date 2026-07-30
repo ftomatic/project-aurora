@@ -203,6 +203,7 @@ class DefaultProductFactoryStageRunner:
             niche_theme=job.product_name,
             intended_customer=job.target_customer,
             artwork_composition=art_direction.composition,
+            listing_family=_job_generation_override(job),
         )
         art_package = build_art_direction_package(
             product_name=job.product_name,
@@ -547,6 +548,11 @@ class DefaultProductFactoryStageRunner:
 
         self._refresh_etsy_config()
         job_paths = self.job_paths(job)
+        try:
+            prompt_package = self._memory.load_prompt_package(job.id)
+        except FileNotFoundError:
+            prompt_package = {}
+        _verify_storybook_acceptance_gate(job, job_paths, prompt_package)
         _validate_job_seo_package(
             seo_package,
             job,
@@ -1222,6 +1228,17 @@ def _generation_plan_from_prompt(
     )
 
 
+def _job_generation_override(job: ProductionJob) -> str:
+    for evidence in job.source_evidence:
+        cleaned = str(evidence).strip()
+        if "=" not in cleaned:
+            continue
+        key, value = cleaned.split("=", 1)
+        if key.strip().casefold() in {"listing_family", "generation_mode"}:
+            return value.strip().upper()
+    return "AUTO"
+
+
 def _set_prompt_generation_mode(
     memory: MemoryManager,
     package_id: str,
@@ -1240,6 +1257,114 @@ def _set_prompt_generation_mode(
         scene_required=generation_mode == GENERATION_MODE_STORYBOOK,
     ).to_dict()
     memory.save_prompt_package(package, package_id=package_id)
+
+
+def _verify_storybook_acceptance_gate(
+    job: ProductionJob,
+    job_paths: ProductFactoryJobPaths,
+    prompt_package: dict[str, Any],
+) -> None:
+    generation_plan = _generation_plan_from_prompt(job, prompt_package)
+    if generation_plan.resolved_mode != GENERATION_MODE_STORYBOOK:
+        return
+    errors: list[str] = []
+    fingerprint = str(prompt_package.get("art_direction_fingerprint") or "")
+    if not fingerprint:
+        errors.append("Missing art-direction fingerprint.")
+
+    final_files = tuple(sorted(job_paths.final_images_dir.glob("*.png"), key=lambda path: path.name))
+    if len(final_files) != 4:
+        errors.append(f"Expected exactly four customer PNG files, found {len(final_files)}.")
+    for path in final_files:
+        alpha_error = _transparent_png_error(path)
+        if alpha_error:
+            errors.append(alpha_error)
+
+    scene_files = tuple(sorted(job_paths.storybook_scenes_dir.glob("*.png"), key=lambda path: path.name))
+    if len(scene_files) != 1:
+        errors.append(f"Expected exactly one storybook scene, found {len(scene_files)}.")
+    else:
+        errors.extend(_validate_storybook_scene_file(scene_files[0]))
+        if not _asset_manifest_matches(job_paths.storybook_scenes_dir, fingerprint):
+            errors.append("Storybook scene fingerprint does not match active art direction.")
+
+    preview_files = _ensure_listing_previews(
+        job,
+        job_paths,
+        generation_mode=GENERATION_MODE_STORYBOOK,
+        art_direction_fingerprint=fingerprint,
+    )
+    preview_manifest = _read_json_file(job_paths.listing_images_dir / "preview_manifest.json")
+    if not preview_files:
+        errors.append("No listing preview files were generated.")
+    else:
+        preview_01 = Path(preview_files[0])
+        scene_path = scene_files[0] if scene_files else None
+        if scene_path is not None and str(preview_manifest.get("primary_preview_source") or "") != str(scene_path):
+            errors.append("preview_01 source is not the validated storybook scene.")
+        preview_error = _storybook_primary_preview_error(preview_01)
+        if preview_error:
+            errors.append(preview_error)
+    if preview_manifest.get("listing_family") != GENERATION_MODE_STORYBOOK:
+        errors.append("Listing preview manifest is not STORYBOOK.")
+    if str(preview_manifest.get("art_direction_fingerprint") or "") != fingerprint:
+        errors.append("Listing preview fingerprint does not match active art direction.")
+
+    if errors:
+        raise ProductFactoryStageError("storybook_acceptance_gate", tuple(errors))
+
+
+def _transparent_png_error(path: Path) -> str:
+    from PIL import Image
+
+    try:
+        with Image.open(path) as image:
+            rgba = image.convert("RGBA")
+            alpha_min, alpha_max = rgba.getchannel("A").getextrema()
+    except OSError as error:
+        return f"{path.name}: invalid PNG ({error})."
+    if alpha_min >= 250:
+        return f"{path.name}: missing real alpha transparency."
+    if alpha_max == 0:
+        return f"{path.name}: fully transparent."
+    return ""
+
+
+def _storybook_primary_preview_error(path: Path) -> str:
+    from PIL import Image
+
+    try:
+        with Image.open(path) as image:
+            rgba = image.convert("RGBA")
+    except OSError as error:
+        return f"preview_01 invalid PNG ({error})."
+    if rgba.size != (3000, 3000):
+        return f"preview_01 has unexpected size {rgba.size}."
+    alpha_min, _alpha_max = rgba.getchannel("A").getextrema()
+    if alpha_min < 245:
+        return "preview_01 is not fully opaque."
+    bounds = _meaningful_scene_bounds(rgba)
+    if bounds is None:
+        return "preview_01 has no meaningful scene content."
+    left, top, right, bottom = bounds
+    width_occupancy = (right - left) / max(1, rgba.width)
+    height_occupancy = (bottom - top) / max(1, rgba.height)
+    if width_occupancy < 0.90 or height_occupancy < 0.90:
+        return (
+            "preview_01 scene occupies less than 90 percent of preview width or height "
+            f"({width_occupancy:.2%} x {height_occupancy:.2%})."
+        )
+    return ""
+
+
+def _read_json_file(path: Path) -> dict[str, Any]:
+    if not path.exists():
+        return {}
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        return {}
+    return value if isinstance(value, dict) else {}
 
 
 def _save_art_direction_package(
