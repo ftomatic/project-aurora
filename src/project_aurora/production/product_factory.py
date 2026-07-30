@@ -203,6 +203,17 @@ class DefaultProductFactoryStageRunner:
                 "transparent_background": image_family.transparent_background,
                 "openai_background": image_family.openai_background,
                 "product_family_requirements": image_family.prompt_requirements,
+                "storybook_scene_prompt": _storybook_scene_prompt(
+                    job,
+                    scope.canonical_product_type,
+                ),
+                "storybook_scene_requirements": (
+                    "complete whimsical watercolor storybook scene",
+                    "rich illustrated background",
+                    "foreground middle ground and background",
+                    "French cottage garden or woodland setting when relevant",
+                    "same characters costumes palette and theme as clipart",
+                ),
                 "style": art_direction.recommended_style,
                 "palette": art_direction.palette,
                 "rendering_family": art_direction.rendering_family,
@@ -264,7 +275,7 @@ class DefaultProductFactoryStageRunner:
             str(prompt_package.get("product_type") or job.category),
             job.category,
         )
-        return ImageGenerationEngine(
+        clipart_result = ImageGenerationEngine(
             memory=self._memory,
             output_dir=job_paths.generated_images_dir,
             provider_config=self._image_config,
@@ -281,6 +292,22 @@ class DefaultProductFactoryStageRunner:
             background=image_family.openai_background,
             output_format=self._image_config.output_format,
             number_of_images=self._image_config.number_of_images,
+        )
+        if image_family.family != CLIPART:
+            return clipart_result
+        scene_result = self._generate_storybook_scene(job, prompt_package, job_paths)
+        if getattr(clipart_result, "status", "").upper() != "SUCCESS":
+            return clipart_result
+        if getattr(scene_result, "status", "").upper() != "SUCCESS":
+            return scene_result
+        return SimpleNamespace(
+            status="SUCCESS",
+            provider=getattr(clipart_result, "provider", "OpenAI GPT Image"),
+            generated_files=tuple(getattr(clipart_result, "generated_files", ())),
+            storybook_scene_files=tuple(getattr(scene_result, "generated_files", ())),
+            warnings=tuple(getattr(clipart_result, "warnings", ()))
+            + tuple(getattr(scene_result, "warnings", ())),
+            errors=(),
         )
 
     def _generate_storybook_scene(
@@ -480,21 +507,35 @@ class DefaultProductFactoryStageRunner:
         )
 
     def upload_listing_images(self, job: ProductionJob) -> Any:
-        """Upload the four final customer PNGs as Etsy listing images."""
+        """Upload cream-background preview PNGs as Etsy listing images."""
         from project_aurora.integrations.etsy.etsy_image_upload_service import (
             EtsyImageUploadService,
+        )
+        from project_aurora.image_generation.listing_preview_exporter import (
+            ListingPreviewExporter,
         )
 
         self._refresh_etsy_config()
         job_paths = self.job_paths(job)
+        preview_result = ListingPreviewExporter(
+            final_images_dir=job_paths.final_images_dir,
+            storybook_scenes_dir=job_paths.storybook_scenes_dir,
+            output_dir=job_paths.listing_images_dir,
+            output_prefix=_asset_filename_prefix(job),
+        ).export()
+        if preview_result.status != "SUCCESS":
+            raise ProductFactoryStageError(
+                "listing_image_upload",
+                preview_result.errors or ("Listing preview images could not be created.",),
+            )
         return EtsyImageUploadService(
             config=self._etsy_config,
             memory=self._memory,
-            images_dir=job_paths.final_images_dir,
+            images_dir=job_paths.listing_images_dir,
         ).upload_latest_draft_images()
 
     def upload_customer_downloads(self, job: ProductionJob, listing_id: str | None) -> Any:
-        """Upload four customer PNGs and the ZIP download."""
+        """Build and upload the customer ZIP download."""
         from project_aurora.integrations.etsy.etsy_digital_file_service import (
             EtsyDigitalFileService,
         )
@@ -513,16 +554,6 @@ class DefaultProductFactoryStageRunner:
             str(prompt_package.get("product_type") or job.category),
             job.category,
         )
-        service = EtsyDigitalFileService(
-            config=self._etsy_config,
-            memory=self._memory,
-        )
-        png_result = service.sync_digital_files(
-            listing_id=listing_id,
-            final_images_dir=job_paths.final_images_dir,
-        )
-        if getattr(png_result, "status", "").upper() != "SUCCESS":
-            return png_result
         package = DigitalDownloadBuilder(
             final_images_dir=job_paths.final_images_dir,
             output_dir=job_paths.digital_downloads_dir,
@@ -534,30 +565,12 @@ class DefaultProductFactoryStageRunner:
                 "customer_download_upload",
                 package.errors or ("Digital download ZIP could not be created.",),
             )
-        zip_result = service.upload_digital_file(
+        return EtsyDigitalFileService(
+            config=self._etsy_config,
+            memory=self._memory,
+        ).upload_digital_file(
             listing_id=listing_id,
             file_path=Path(package.zip_path),
-        )
-        png_uploaded = int(getattr(png_result, "files_uploaded", 0))
-        zip_uploaded = int(getattr(zip_result, "files_uploaded", 0))
-        failed = int(getattr(png_result, "failed", 0)) + int(getattr(zip_result, "failed", 0))
-        errors = tuple(getattr(png_result, "errors", ()) or ()) + tuple(
-            getattr(zip_result, "errors", ()) or ()
-        )
-        warnings = tuple(getattr(png_result, "warnings", ()) or ()) + tuple(
-            getattr(zip_result, "warnings", ()) or ()
-        )
-        return SimpleNamespace(
-            status="SUCCESS" if getattr(zip_result, "status", "").upper() == "SUCCESS" else "PARTIAL_FAILURE",
-            files_uploaded=png_uploaded + zip_uploaded,
-            failed=failed,
-            errors=errors,
-            warnings=warnings,
-            metadata={
-                "png_upload": _summarize_result(png_result),
-                "zip_upload": _summarize_result(zip_result),
-                "zip_path": package.zip_path,
-            },
         )
 
     def _refresh_etsy_config(self) -> None:
@@ -1073,11 +1086,11 @@ def _simple_clipart_prompt(job: ProductionJob, canonical_product_type: str) -> s
         f"Product type: {canonical_product_type}. "
         f"Show: {subjects}. "
         f"Brand direction: {profile.get('primary_brand', 'storybook watercolor woodland illustrations')}. "
-        "Whimsical vintage watercolor storybook character illustrations with warm watercolor, "
-        "cottagecore costume details, woodland charm, soft natural lighting, beautiful composition, expressive "
-        "woodland or farm animals, French 17th and 18th century inspired clothing, "
-        "lace collars, ruffled sleeves, embroidered waistcoats, bonnets, layered dresses, "
-        "fitted coats, gentle human-like activities, delicate botanicals, hand-painted watercolor texture, "
+        "Whimsical vintage watercolor storybook illustrations with warm watercolor, "
+        "rich storybook scenes, cottagecore details, woodland atmosphere, cozy interiors "
+        "when appropriate, soft natural lighting, beautiful composition, expressive "
+        "woodland or farm animals, classic country clothing where relevant, gentle "
+        "human-like activities, delicate botanicals, hand-painted watercolor texture, "
         "warm nostalgic charm. "
         f"Palette: {palette}. "
         "Each subject must be isolated, fully visible, centered, separate, and clean edged "
