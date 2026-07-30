@@ -21,8 +21,13 @@ from project_aurora.image_generation.provider_registry import (  # noqa: E402
     ImageProviderConfig,
 )
 from project_aurora.planning.production_queue_manager import (  # noqa: E402
+    COMPLETED,
+    READY,
     ProductionJob,
     ProductionQueueManager,
+)
+from project_aurora.production.product_capability_resolver import (  # noqa: E402
+    ProductCapabilityResolver,
 )
 from project_aurora.production.product_factory import (  # noqa: E402
     REPORT_COLLECTION,
@@ -133,6 +138,7 @@ class BatchProductionFactory:
         elapsed_time = 0.0
         previous_generated_images = False
         print_queue_selection_diagnostics(self._queue_manager)
+        self._promote_eligible_jobs_when_ready_is_empty(count)
         while completed + failed < count:
             job = self._queue_manager.next_ready_job()
             if job is None:
@@ -207,6 +213,39 @@ class BatchProductionFactory:
         if self._save_report:
             self._save_batch_report(batch_report)
         return batch_report
+
+    def _promote_eligible_jobs_when_ready_is_empty(self, count: int) -> None:
+        """Promote eligible queued work when no jobs are manually marked READY."""
+        jobs = self._queue_manager.list_jobs()
+        if any(job.status == READY for job in jobs):
+            return
+        resolver = ProductCapabilityResolver()
+        promoted = 0
+        print("")
+        print("Queue Auto Promotion")
+        for job in jobs:
+            if promoted >= count:
+                break
+            if job.status == COMPLETED:
+                print(f"{job.id} - {job.product_name}")
+                print("SKIPPED")
+                print("Completed jobs are not retried automatically.")
+                continue
+            capability = resolver.resolve(job.product_name, job.category, job.category)
+            if not capability.supported:
+                print(f"{job.id} - {job.product_name}")
+                print("SKIPPED")
+                print(capability.reason)
+                continue
+            self._queue_manager.mark_ready(job.id)
+            promoted += 1
+            print(f"{job.id} - {job.product_name}")
+            print("PROMOTED_TO_READY")
+            if job.status != READY:
+                print("WARNING")
+                print(f"Recovered queued job from {job.status}.")
+        if promoted == 0:
+            print("None")
 
     def _save_batch_report(self, report: BatchFactoryReport) -> None:
         key = f"batch_{datetime.now().strftime('%Y%m%d_%H%M%S')}"

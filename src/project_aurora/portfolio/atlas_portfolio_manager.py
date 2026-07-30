@@ -135,7 +135,7 @@ class AtlasPortfolioPlan:
 
 
 class AtlasPortfolioManager:
-    """Build exactly five research-backed products with strict diversity."""
+    """Build the strongest available research-backed products for production."""
 
     def __init__(
         self,
@@ -152,9 +152,18 @@ class AtlasPortfolioManager:
         opportunities: tuple[MarketOpportunity, ...],
         provider_status: tuple[dict[str, Any], ...] = (),
     ) -> AtlasPortfolioPlan:
-        """Select today's five-product research-backed portfolio."""
+        """Select the strongest available research-backed portfolio."""
         duplicates = self._duplicate_names()
-        ranked = tuple(sorted(opportunities, key=_score_key))
+        ranked = tuple(
+            sorted(
+                opportunities,
+                key=lambda item: _score_key(
+                    item,
+                    duplicates,
+                    self._config.duplicate_threshold,
+                ),
+            )
+        )
         selected: list[MarketOpportunity] = []
         rejected: list[tuple[MarketOpportunity, str]] = []
         counts: dict[str, Counter[str]] = {
@@ -167,8 +176,8 @@ class AtlasPortfolioManager:
         selected_ids: set[str] = set()
         relaxations: list[dict[str, str]] = []
         rejected_by_id: dict[str, tuple[MarketOpportunity, str]] = {}
-        duplicate_failures: set[str] = set()
-        confidence_failures: set[str] = set()
+        duplicate_warnings: set[str] = set()
+        confidence_warnings: set[str] = set()
 
         for stage in _relaxation_stages():
             if stage.relaxed_label and _has_remaining_candidates(
@@ -188,21 +197,8 @@ class AtlasPortfolioManager:
                     break
                 if opportunity.id in selected_ids:
                     continue
-                duplicate_risk = _max_similarity(opportunity.keyword, duplicates)
-                if duplicate_risk >= self._config.duplicate_threshold:
-                    duplicate_failures.add(opportunity.keyword)
-                    rejected_by_id[opportunity.id] = (
-                        opportunity,
-                        "Duplicate historical product",
-                    )
-                    continue
                 if opportunity.confidence < _ABSOLUTE_MINIMUM_CONFIDENCE:
-                    confidence_failures.add(opportunity.keyword)
-                    rejected_by_id[opportunity.id] = (
-                        opportunity,
-                        "Below strict 85% product confidence minimum",
-                    )
-                    continue
+                    confidence_warnings.add(opportunity.keyword)
                 limit_reason = self._limit_reason(
                     opportunity,
                     counts,
@@ -213,26 +209,47 @@ class AtlasPortfolioManager:
                     continue
                 selected.append(opportunity)
                 selected_ids.add(opportunity.id)
+                duplicate_risk = _max_similarity(opportunity.keyword, duplicates)
+                if duplicate_risk >= self._config.duplicate_threshold:
+                    duplicate_warnings.add(opportunity.keyword)
                 _increment_counts(counts, opportunity)
             if len(selected) >= self._config.daily_products:
                 break
+
+        for opportunity in ranked:
+            if len(selected) >= self._config.daily_products:
+                break
+            if opportunity.id in selected_ids:
+                continue
+            selected.append(opportunity)
+            selected_ids.add(opportunity.id)
+            duplicate_risk = _max_similarity(opportunity.keyword, duplicates)
+            if duplicate_risk >= self._config.duplicate_threshold:
+                duplicate_warnings.add(opportunity.keyword)
+            if opportunity.confidence < _ABSOLUTE_MINIMUM_CONFIDENCE:
+                confidence_warnings.add(opportunity.keyword)
+            _increment_counts(counts, opportunity)
+            rejected_by_id.pop(opportunity.id, None)
 
         average = _average(item.confidence for item in selected)
         quality_gate = _quality_gate(
             selected=tuple(selected),
             required_products=self._config.daily_products,
             minimum_confidence=self._config.minimum_confidence,
-            duplicate_failures=(),
+            duplicate_warnings=tuple(duplicate_warnings),
+            confidence_warnings=tuple(confidence_warnings),
         )
-        quality_gate_passed = bool(quality_gate["status"] == "READY_FOR_APPROVAL")
+        quality_gate_passed = bool(
+            quality_gate["status"] in {"READY_FOR_PRODUCTION", "READY_WITH_WARNINGS"}
+        )
         decisions = tuple(_decision(item) for item in selected)
         rejected = tuple(rejected_by_id.values())
         failure_reasons = _selection_failure_reasons(
             selected_count=len(selected),
             required_count=self._config.daily_products,
             rejected=rejected,
-            duplicate_failures=tuple(duplicate_failures),
-            confidence_failures=tuple(confidence_failures),
+            duplicate_warnings=tuple(duplicate_warnings),
+            confidence_warnings=tuple(confidence_warnings),
         )
         return AtlasPortfolioPlan(
             selected=tuple(selected),
@@ -421,7 +438,8 @@ def _quality_gate(
     selected: tuple[MarketOpportunity, ...],
     required_products: int,
     minimum_confidence: float,
-    duplicate_failures: tuple[str, ...],
+    duplicate_warnings: tuple[str, ...],
+    confidence_warnings: tuple[str, ...],
 ) -> dict[str, Any]:
     average = round(_average(item.confidence for item in selected), 2)
     selected_count = len(selected)
@@ -431,16 +449,18 @@ def _quality_gate(
         item.confidence >= _ABSOLUTE_MINIMUM_CONFIDENCE for item in selected
     )
     average_confidence_pass = average >= minimum_confidence
-    duplicate_check_pass = not duplicate_failures
+    duplicate_check_pass = not duplicate_warnings
     confidence_pass = product_confidence_pass and average_confidence_pass
-    status = "READY_FOR_APPROVAL"
-    if not (portfolio_size_pass and confidence_pass and duplicate_check_pass):
-        status = "QUALITY_GATE_BLOCKED"
     warnings: list[str] = []
     if portfolio_size_warning:
-        warnings.append(
-            "Requested portfolio size was not reached; continuing with valid selected products."
-        )
+        warnings.append(f"Portfolio contains {selected_count} instead of {required_products} products.")
+    if duplicate_warnings:
+        warnings.append("Duplicate preference relaxed.")
+    if confidence_warnings or not confidence_pass:
+        warnings.append("Confidence preference relaxed.")
+    status = "READY_WITH_WARNINGS" if warnings else "READY_FOR_PRODUCTION"
+    if not portfolio_size_pass:
+        status = "NO_VALID_PRODUCTS"
     return {
         "required_products": required_products,
         "selected_products": selected_count,
@@ -461,8 +481,8 @@ def _selection_failure_reasons(
     selected_count: int,
     required_count: int,
     rejected: tuple[tuple[MarketOpportunity, str], ...],
-    duplicate_failures: tuple[str, ...],
-    confidence_failures: tuple[str, ...],
+    duplicate_warnings: tuple[str, ...],
+    confidence_warnings: tuple[str, ...],
 ) -> tuple[str, ...]:
     reasons: list[str] = []
     if selected_count == 0:
@@ -473,13 +493,13 @@ def _selection_failure_reasons(
         reasons.append(
             f"Selected {selected_count} of {required_count} target products; production may continue."
         )
-    if duplicate_failures:
+    if duplicate_warnings:
         reasons.append(
-            "Duplicate prevention blocked: " + ", ".join(sorted(duplicate_failures))
+            "Duplicate preference relaxed: " + ", ".join(sorted(duplicate_warnings))
         )
-    if confidence_failures:
+    if confidence_warnings:
         reasons.append(
-            "Below 85% confidence blocked: " + ", ".join(sorted(confidence_failures))
+            "Confidence preference relaxed: " + ", ".join(sorted(confidence_warnings))
         )
     blocked_constraints = sorted({reason for _, reason in rejected if "limit" in reason.casefold()})
     for reason in blocked_constraints:
@@ -487,14 +507,24 @@ def _selection_failure_reasons(
     return tuple(reasons)
 
 
-def _score_key(item: MarketOpportunity) -> tuple[float, float, float, str]:
+def _score_key(
+    item: MarketOpportunity,
+    duplicates: tuple[str, ...] = (),
+    duplicate_threshold: float = 1.0,
+) -> tuple[bool, float, float, str]:
     score = (
         item.trend_score * 0.28
         + (100 - item.competition_score) * 0.18
         + item.commercial_potential * 0.26
         + item.confidence * 0.28
     )
-    return (-score, item.competition_score, item.keyword.casefold())
+    duplicate_risk = _max_similarity(item.keyword, duplicates)
+    return (
+        duplicate_risk >= duplicate_threshold,
+        -score,
+        item.competition_score,
+        item.keyword.casefold(),
+    )
 
 
 def _demand_label(score: float) -> str:

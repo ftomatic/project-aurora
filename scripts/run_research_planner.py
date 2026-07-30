@@ -48,6 +48,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run Aurora research planner.")
     parser.add_argument("--auto-approve", action="store_true")
     parser.add_argument(
+        "--require-approval",
+        action="store_true",
+        help="Pause for operator approval before queue handoff.",
+    )
+    parser.add_argument(
         "--count",
         type=int,
         default=None,
@@ -93,12 +98,17 @@ def main(argv: list[str] | None = None) -> None:
         print_blocked_reasons(plan)
         return
     print("")
-    print("Awaiting Approval")
-    approved = args.auto_approve or request_production_approval(
-        plan,
-        estimate,
-        input,
-    )
+    approved = True
+    if args.require_approval and not args.auto_approve:
+        print("Awaiting Approval")
+        approved = request_production_approval(
+            plan,
+            estimate,
+            input,
+        )
+    else:
+        print("Approval Mode")
+        print("AUTO")
     if not approved:
         print("")
         print("Status")
@@ -409,8 +419,8 @@ def print_quality_gate(plan: AtlasPortfolioPlan) -> None:
     print(gate["portfolio_size"])
     if gate.get("portfolio_size_warning") == "WARNING":
         print("")
-        print("Portfolio Size Warning")
-        print("Requested count not reached; continuing with valid selected products.")
+        print("WARNING")
+        print(gate.get("warnings", ["Requested count not reached."])[0])
     print("")
     print("Minimum Confidence")
     print(f"{gate['minimum_confidence']:.0f}%")
@@ -425,11 +435,20 @@ def print_quality_gate(plan: AtlasPortfolioPlan) -> None:
     print(gate["duplicate_check"])
     for relaxation in plan.constraint_relaxations:
         print("")
-        print("Constraint Relaxed")
+        print("WARNING")
+        print("Constraint relaxed.")
+        print("")
+        print("Constraint")
         print(relaxation["constraint"])
         print("")
         print("Reason")
         print(relaxation["reason"])
+    for warning in gate.get("warnings", ()):
+        if warning.startswith("Portfolio contains"):
+            continue
+        print("")
+        print("WARNING")
+        print(warning)
     print("")
     print("Status")
     print(gate["status"])

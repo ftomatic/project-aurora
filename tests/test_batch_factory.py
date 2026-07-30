@@ -194,6 +194,21 @@ class BatchFactoryTest(unittest.TestCase):
         self.assertEqual(report.drafts_created, 0)
         self.assertEqual(report.draft_ids, ())
 
+    def test_failed_eligible_job_is_promoted_when_no_ready_jobs_exist(self) -> None:
+        self.queue.add_existing_job(make_job(1, status=FAILED))
+
+        with patch("sys.stdout", new_callable=StringIO) as output:
+            report = self.run_batch(count=1)
+
+        self.assertEqual(report.completed, 1)
+        self.assertEqual(report.failed, 0)
+        self.assertEqual(report.draft_ids, ("listing-job-1",))
+        self.assertEqual(self.queue.list_jobs()[0].status, COMPLETED)
+        rendered = output.getvalue()
+        self.assertIn("Queue Auto Promotion", rendered)
+        self.assertIn("PROMOTED_TO_READY", rendered)
+        self.assertIn("WARNING\nRecovered queued job from FAILED.", rendered)
+
     def test_ready_capability_skip_is_reported_not_silently_ignored(self) -> None:
         self.queue.add_existing_job(
             ProductionJob(

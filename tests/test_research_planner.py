@@ -169,7 +169,7 @@ class ResearchPlannerTest(unittest.TestCase):
         for distribution in plan.diversity().values():
             self.assertTrue(all(value == 1 for value in distribution.values()))
 
-    def test_duplicate_prevention_rejects_existing_queue_product(self) -> None:
+    def test_duplicate_prevention_ranks_existing_queue_product_lower(self) -> None:
         self.queue.add_job(
             priority="High",
             product_name="Nursery Product 0",
@@ -191,8 +191,7 @@ class ResearchPlannerTest(unittest.TestCase):
         ).build_portfolio(opportunities)
 
         self.assertNotIn("Nursery Product 0", [item.keyword for item in plan.selected])
-        rejected = {item.keyword: reason for item, reason in plan.rejected}
-        self.assertEqual(rejected["Nursery Product 0"], "Duplicate historical product")
+        self.assertTrue(plan.quality_gate_passed)
 
     def test_failed_queue_product_does_not_permanently_block_selection(self) -> None:
         self.queue.add_job(
@@ -225,7 +224,7 @@ class ResearchPlannerTest(unittest.TestCase):
         self.assertTrue(args.auto_approve)
         self.assertEqual(args.count, 1)
 
-    def test_confidence_threshold_blocks_weak_portfolio(self) -> None:
+    def test_confidence_threshold_warns_for_weak_portfolio(self) -> None:
         opportunities = tuple(opportunity(index, confidence=70) for index in range(8))
 
         plan = AtlasPortfolioManager(
@@ -234,7 +233,9 @@ class ResearchPlannerTest(unittest.TestCase):
             memory=self.memory,
         ).build_portfolio(opportunities)
 
-        self.assertFalse(plan.quality_gate_passed)
+        self.assertTrue(plan.quality_gate_passed)
+        self.assertEqual(plan.quality_gate["status"], "READY_WITH_WARNINGS")
+        self.assertIn("Confidence preference relaxed.", plan.quality_gate["warnings"])
         self.assertLess(plan.average_confidence, 85)
 
     def test_business_report_generation(self) -> None:
@@ -418,7 +419,7 @@ class ResearchPlannerTest(unittest.TestCase):
         self.assertEqual(len(plan.selected), 5)
         self.assertEqual(plan.quality_gate["portfolio_size"], "PASS")
         self.assertEqual(plan.quality_gate["confidence"], "PASS")
-        self.assertEqual(plan.quality_gate["status"], "READY_FOR_APPROVAL")
+        self.assertEqual(plan.quality_gate["status"], "READY_FOR_PRODUCTION")
 
     def test_fifth_candidate_found_without_relaxation(self) -> None:
         opportunities = tuple(opportunity(index, confidence=89) for index in range(5))
@@ -460,7 +461,7 @@ class ResearchPlannerTest(unittest.TestCase):
             plan.constraint_relaxations[0]["constraint"],
             "Allow second product type",
         )
-        self.assertEqual(plan.quality_gate["status"], "READY_FOR_APPROVAL")
+        self.assertEqual(plan.quality_gate["status"], "READY_FOR_PRODUCTION")
 
     def test_confidence_pass_but_size_failure_is_reported_separately(self) -> None:
         opportunities = tuple(opportunity(index, confidence=88) for index in range(4))
@@ -476,7 +477,7 @@ class ResearchPlannerTest(unittest.TestCase):
         self.assertEqual(plan.quality_gate["portfolio_size"], "PASS")
         self.assertEqual(plan.quality_gate["portfolio_size_warning"], "WARNING")
         self.assertEqual(plan.quality_gate["confidence"], "PASS")
-        self.assertEqual(plan.quality_gate["status"], "READY_FOR_APPROVAL")
+        self.assertEqual(plan.quality_gate["status"], "READY_WITH_WARNINGS")
 
     def test_size_pass_but_confidence_failure_is_reported_separately(self) -> None:
         opportunities = tuple(opportunity(index, confidence=86) for index in range(5))
@@ -490,9 +491,10 @@ class ResearchPlannerTest(unittest.TestCase):
         self.assertEqual(plan.quality_gate["selected_products"], 5)
         self.assertEqual(plan.quality_gate["portfolio_size"], "PASS")
         self.assertEqual(plan.quality_gate["confidence"], "FAIL")
-        self.assertEqual(plan.quality_gate["status"], "QUALITY_GATE_BLOCKED")
+        self.assertEqual(plan.quality_gate["status"], "READY_WITH_WARNINGS")
+        self.assertIn("Confidence preference relaxed.", plan.quality_gate["warnings"])
 
-    def test_zero_valid_products_still_blocks_production(self) -> None:
+    def test_low_confidence_products_still_enter_production_with_warnings(self) -> None:
         opportunities = tuple(opportunity(index, confidence=60) for index in range(5))
 
         plan = AtlasPortfolioManager(
@@ -501,9 +503,9 @@ class ResearchPlannerTest(unittest.TestCase):
             memory=self.memory,
         ).build_portfolio(opportunities)
 
-        self.assertEqual(plan.quality_gate["selected_products"], 0)
-        self.assertEqual(plan.quality_gate["portfolio_size"], "FAIL")
-        self.assertEqual(plan.quality_gate["status"], "QUALITY_GATE_BLOCKED")
+        self.assertEqual(plan.quality_gate["selected_products"], 5)
+        self.assertEqual(plan.quality_gate["portfolio_size"], "PASS")
+        self.assertEqual(plan.quality_gate["status"], "READY_WITH_WARNINGS")
 
     def test_one_or_more_valid_products_required_before_approval(self) -> None:
         opportunities = tuple(opportunity(index, confidence=88) for index in range(4))

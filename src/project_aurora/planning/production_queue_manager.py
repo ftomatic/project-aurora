@@ -226,6 +226,10 @@ class ProductionQueueManager:
         """Mark a job in progress."""
         return self._mark_status(job_id, IN_PROGRESS)
 
+    def mark_ready(self, job_id: str) -> ProductionJob:
+        """Mark a job ready for production."""
+        return self._mark_status(job_id, READY)
+
     def mark_completed(self, job_id: str) -> ProductionJob:
         """Mark a job completed."""
         return self._mark_status(job_id, COMPLETED)
