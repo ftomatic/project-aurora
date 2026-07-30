@@ -14,6 +14,10 @@ from types import SimpleNamespace
 from typing import Any, Protocol
 
 from project_aurora.integrations.etsy.etsy_config import EtsyConfig
+from project_aurora.integrations.etsy.etsy_listing_image_policy import (
+    MAX_LISTING_IMAGES,
+    MIN_LISTING_IMAGES,
+)
 from project_aurora.integrations.etsy.etsy_token_manager import EtsyTokenManager
 from project_aurora.brand_profile import load_brand_profile, score_brand_fit
 from project_aurora.listing.listing_package import (
@@ -29,6 +33,17 @@ from project_aurora.production.product_image_family import (
     CLIPART,
     STORYBOOK_SCENE,
     resolve_product_image_family,
+)
+from project_aurora.production.generation_plan import (
+    GENERATION_MODE_CLIPART,
+    GENERATION_MODE_STORYBOOK,
+    GenerationPlan,
+    GenerationPlanResolver,
+)
+from project_aurora.production.art_direction_package import (
+    ArtDirectionPackage,
+    art_direction_package_from_dict,
+    build_art_direction_package,
 )
 from project_aurora.production.production_report import ProductionReport
 from project_aurora.seo.seo_engine import SEOEngine
@@ -182,27 +197,54 @@ class DefaultProductFactoryStageRunner:
         if art_direction.status == "REJECTED":
             raise RuntimeError("Muse rejected style below confidence threshold.")
 
-        image_family = resolve_product_image_family(
-            job.product_name,
-            scope.canonical_product_type,
-            job.category,
+        generation_plan = GenerationPlanResolver().resolve(
+            product_name=job.product_name,
+            product_category=scope.canonical_product_type,
+            niche_theme=job.product_name,
+            intended_customer=job.target_customer,
+            artwork_composition=art_direction.composition,
         )
+        art_package = build_art_direction_package(
+            product_name=job.product_name,
+            product_category=scope.canonical_product_type,
+            style=art_direction.recommended_style,
+            season=job.seasonal_theme,
+            palette=art_direction.palette,
+            mood=art_direction.mood,
+        )
+        _save_art_direction_package(self.job_paths(job), art_package)
         final_prompt = _product_family_prompt(
             job,
             scope.canonical_product_type,
-            image_family.family,
+            CLIPART,
+            art_package,
         )
-        negative_prompt = _product_family_negative_prompt(image_family.family)
+        negative_prompt = _product_family_negative_prompt(CLIPART)
         self._memory.save_prompt_package(
             {
                 "product_name": job.product_name,
                 "collection": job.product_name,
                 "theme": job.seasonal_theme,
                 "product_type": scope.canonical_product_type,
-                "product_family": image_family.family,
-                "transparent_background": image_family.transparent_background,
-                "openai_background": image_family.openai_background,
-                "product_family_requirements": image_family.prompt_requirements,
+                "generation_mode": generation_plan.resolved_mode,
+                "generation_plan": generation_plan.to_dict(),
+                "art_direction_package": art_package.to_dict(),
+                "art_direction_fingerprint": art_package.fingerprint,
+                "listing_family": generation_plan.resolved_mode,
+                "product_family": CLIPART,
+                "customer_product_family": CLIPART,
+                "transparent_background": True,
+                "openai_background": "transparent",
+                "product_family_requirements": (
+                    "isolated watercolor clipart elements",
+                    "fully transparent background",
+                    "no white, cream, paper, grid, checkerboard, room, landscape, scene, frame, or border",
+                ),
+                "storybook_scene_prompt": _storybook_scene_prompt(
+                    job,
+                    scope.canonical_product_type,
+                    art_package,
+                ),
                 "style": art_direction.recommended_style,
                 "palette": art_direction.palette,
                 "rendering_family": art_direction.rendering_family,
@@ -259,12 +301,16 @@ class DefaultProductFactoryStageRunner:
             prompt_package = {}
         _validate_product_type_expectation(job, prompt_package)
         _print_art_direction_diagnostics(prompt_package, job)
-        image_family = resolve_product_image_family(
-            job.product_name,
-            str(prompt_package.get("product_type") or job.category),
-            job.category,
+        generation_plan = _generation_plan_from_prompt(job, prompt_package)
+        _print_generation_plan(
+            job=job,
+            generation_plan=generation_plan,
+            job_paths=job_paths,
+            scene_generated=False,
+            transparency_validation="PENDING",
+            primary_preview_source="storybook_scenes_dir" if generation_plan.scene_required else "listing_images_dir",
         )
-        return ImageGenerationEngine(
+        customer_result = ImageGenerationEngine(
             memory=self._memory,
             output_dir=job_paths.generated_images_dir,
             provider_config=self._image_config,
@@ -277,10 +323,76 @@ class DefaultProductFactoryStageRunner:
             dpi=300,
             size=self._image_config.size,
             quality=self._image_config.quality,
-            transparent_background=image_family.transparent_background,
-            background=image_family.openai_background,
+            transparent_background=True,
+            background="transparent",
             output_format=self._image_config.output_format,
             number_of_images=self._image_config.number_of_images,
+        )
+        if customer_result.status != "SUCCESS":
+            return customer_result
+        if generation_plan.scene_required:
+            scene_result = self._generate_validated_storybook_scene(
+                job,
+                prompt_package,
+                job_paths,
+            )
+            if scene_result.status != "SUCCESS":
+                _set_prompt_generation_mode(
+                    self._memory,
+                    job.id,
+                    GENERATION_MODE_CLIPART,
+                    "Storybook scene failed validation; fell back to CLIPART mode.",
+                )
+                return _with_extra_warning(
+                    customer_result,
+                    "Storybook scene failed validation; fell back to CLIPART mode.",
+                )
+            _print_generation_plan(
+                job=job,
+                generation_plan=generation_plan,
+                job_paths=job_paths,
+                scene_generated=True,
+                transparency_validation="CUSTOMER_PNGS_REQUESTED_TRANSPARENT",
+                primary_preview_source="storybook_scenes_dir",
+            )
+        return customer_result
+
+    def _generate_validated_storybook_scene(
+        self,
+        job: ProductionJob,
+        prompt_package: dict[str, Any],
+        job_paths: ProductFactoryJobPaths,
+    ) -> Any:
+        result = self._generate_storybook_scene(job, prompt_package, job_paths)
+        errors = _validate_storybook_scene_result(result)
+        if not errors:
+            return result
+        for path in getattr(result, "generated_files", ()):
+            try:
+                Path(str(path)).unlink()
+            except FileNotFoundError:
+                pass
+        retry_package = dict(prompt_package)
+        retry_package["storybook_scene_prompt"] = (
+            _storybook_scene_prompt(
+                job,
+                job.category,
+                _art_direction_package_from_prompt(job, prompt_package),
+            )
+            + " IMPORTANT: full-frame edge-to-edge storybook scene occupying at least 90 percent of the canvas; no tiny centered artwork."
+        )
+        retry_result = self._generate_storybook_scene(job, retry_package, job_paths)
+        retry_errors = _validate_storybook_scene_result(retry_result)
+        if retry_errors:
+            return SimpleNamespace(
+                status="FAILED",
+                generated_files=(),
+                warnings=(),
+                errors=tuple((*errors, *retry_errors)),
+            )
+        return _with_extra_warning(
+            retry_result,
+            "Retried storybook scene after occupancy validation failure.",
         )
 
     def _generate_storybook_scene(
@@ -294,27 +406,36 @@ class DefaultProductFactoryStageRunner:
         )
 
         existing = tuple(sorted(job_paths.storybook_scenes_dir.glob("*.png")))
-        if existing:
+        fingerprint = str(prompt_package.get("art_direction_fingerprint") or "")
+        if existing and _asset_manifest_matches(job_paths.storybook_scenes_dir, fingerprint):
             return SimpleNamespace(
                 status="SUCCESS",
                 generated_files=tuple(str(path) for path in existing),
                 warnings=("Reused existing storybook scene.",),
                 errors=(),
             )
+        if existing:
+            _clear_pngs(job_paths.storybook_scenes_dir)
         scene_package_id = f"{job.id}_storybook_scene"
         scene_package = dict(prompt_package)
         scene_package["image_prompt"] = str(
             prompt_package.get("storybook_scene_prompt")
-            or _storybook_scene_prompt(job, job.category)
+            or _storybook_scene_prompt(
+                job,
+                job.category,
+                _art_direction_package_from_prompt(job, prompt_package),
+            )
         )
         scene_package["product_family"] = STORYBOOK_SCENE
         scene_package["transparent_background"] = False
         scene_package["openai_background"] = "opaque"
         self._memory.save_prompt_package(scene_package, package_id=scene_package_id)
-        return ImageGenerationEngine(
+        job_paths.storybook_scenes_dir.mkdir(parents=True, exist_ok=True)
+        scene_config = replace(self._image_config, number_of_images=1, background="opaque")
+        result = ImageGenerationEngine(
             memory=self._memory,
             output_dir=job_paths.storybook_scenes_dir,
-            provider_config=self._image_config,
+            provider_config=scene_config,
         ).run(
             prompt_package_id=scene_package_id,
             provider=self._image_config.provider,
@@ -329,6 +450,13 @@ class DefaultProductFactoryStageRunner:
             output_format=self._image_config.output_format,
             number_of_images=1,
         )
+        if result.status == "SUCCESS":
+            _write_asset_manifest(
+                job_paths.storybook_scenes_dir,
+                fingerprint,
+                "storybook_scene",
+            )
+        return result
 
     def run_image_qa(self, job: ProductionJob) -> Any:
         """Keep visual QA optional in the recovery production path."""
@@ -355,17 +483,11 @@ class DefaultProductFactoryStageRunner:
             prompt_package = self._memory.load_prompt_package(job.id)
         except FileNotFoundError:
             prompt_package = {}
-        image_family = resolve_product_image_family(
-            job.product_name,
-            str(prompt_package.get("product_type") or job.category),
-            job.category,
-        )
-
         return CommercialImageExporter(
             source_dir=job_paths.generated_images_dir,
             output_dir=job_paths.final_images_dir,
             output_prefix=_asset_filename_prefix(job),
-            product_family=image_family.family,
+            product_family=CLIPART,
         ).export()
 
     def generate_seo(self, job: ProductionJob) -> Any:
@@ -487,7 +609,16 @@ class DefaultProductFactoryStageRunner:
 
         self._refresh_etsy_config()
         job_paths = self.job_paths(job)
-        listing_files = _ensure_listing_previews(job, job_paths)
+        try:
+            prompt_package = self._memory.load_prompt_package(job.id)
+        except FileNotFoundError:
+            prompt_package = {}
+        _ensure_listing_previews(
+            job,
+            job_paths,
+            generation_mode=str(prompt_package.get("generation_mode") or GENERATION_MODE_CLIPART),
+            art_direction_fingerprint=str(prompt_package.get("art_direction_fingerprint") or ""),
+        )
         return EtsyImageUploadService(
             config=self._etsy_config,
             memory=self._memory,
@@ -645,21 +776,12 @@ class DefaultProductFactoryStageRunner:
         )
         if not pngs:
             return None
-        try:
-            prompt_package = self._memory.load_prompt_package(job.id)
-        except FileNotFoundError:
-            prompt_package = {}
-        image_family = resolve_product_image_family(
-            job.product_name,
-            str(prompt_package.get("product_type") or job.category),
-            job.category,
-        )
         valid_pngs = tuple(
             path
             for path in pngs
             if not validate_commercial_png(
                 path,
-                product_family=image_family.family,
+                product_family=CLIPART,
             )
         )
         if len(pngs) == COMMERCIAL_IMAGE_COUNT and len(valid_pngs) == COMMERCIAL_IMAGE_COUNT:
@@ -1070,12 +1192,241 @@ def _asset_filename_prefix(job: ProductionJob) -> str:
     return f"{job_short}_{product}"
 
 
+def _generation_plan_from_prompt(
+    job: ProductionJob,
+    prompt_package: dict[str, Any],
+) -> GenerationPlan:
+    stored = prompt_package.get("generation_plan")
+    if isinstance(stored, dict):
+        mode = str(stored.get("resolved_mode") or GENERATION_MODE_CLIPART).upper()
+        return GenerationPlan(
+            resolved_mode=mode,
+            decision_reason=str(stored.get("decision_reason") or "Loaded from persisted prompt package."),
+            customer_png_count=int(stored.get("customer_png_count") or 4),
+            scene_required=bool(stored.get("scene_required") or mode == GENERATION_MODE_STORYBOOK),
+            matched_terms=tuple(str(item) for item in stored.get("matched_terms", ())),
+        )
+    if "listing_family" not in prompt_package and "generation_mode" not in prompt_package:
+        return GenerationPlan(
+            resolved_mode=GENERATION_MODE_CLIPART,
+            decision_reason="Legacy prompt package without persisted generation plan; defaulted to CLIPART.",
+            scene_required=False,
+        )
+    return GenerationPlanResolver().resolve(
+        product_name=job.product_name,
+        product_category=str(prompt_package.get("product_type") or job.category),
+        niche_theme=job.product_name,
+        intended_customer=job.target_customer,
+        artwork_composition=str(prompt_package.get("composition") or ""),
+        listing_family=str(prompt_package.get("listing_family") or "AUTO"),
+    )
+
+
+def _set_prompt_generation_mode(
+    memory: MemoryManager,
+    package_id: str,
+    generation_mode: str,
+    reason: str,
+) -> None:
+    try:
+        package = memory.load_prompt_package(package_id)
+    except FileNotFoundError:
+        return
+    package["generation_mode"] = generation_mode
+    package["listing_family"] = generation_mode
+    package["generation_plan"] = GenerationPlan(
+        resolved_mode=generation_mode,
+        decision_reason=reason,
+        scene_required=generation_mode == GENERATION_MODE_STORYBOOK,
+    ).to_dict()
+    memory.save_prompt_package(package, package_id=package_id)
+
+
+def _save_art_direction_package(
+    job_paths: ProductFactoryJobPaths,
+    art_package: ArtDirectionPackage,
+) -> None:
+    job_paths.job_root.mkdir(parents=True, exist_ok=True)
+    (job_paths.job_root / "art_direction_package.json").write_text(
+        json.dumps(art_package.to_dict(), indent=2, sort_keys=True),
+        encoding="utf-8",
+    )
+
+
+def _art_direction_package_from_prompt(
+    job: ProductionJob,
+    prompt_package: dict[str, Any],
+) -> ArtDirectionPackage:
+    stored = prompt_package.get("art_direction_package")
+    if isinstance(stored, dict):
+        return art_direction_package_from_dict(stored)
+    return build_art_direction_package(
+        product_name=job.product_name,
+        product_category=str(prompt_package.get("product_type") or job.category),
+        style=str(prompt_package.get("style") or job.style),
+        season=job.seasonal_theme,
+        palette=str(prompt_package.get("palette") or ""),
+        mood=str(prompt_package.get("mood") or ""),
+    )
+
+
+def _asset_manifest_matches(
+    directory: Path,
+    fingerprint: str,
+    *,
+    manifest_name: str = "asset_manifest.json",
+) -> bool:
+    if not fingerprint:
+        return True
+    manifest_path = directory / manifest_name
+    if not manifest_path.exists():
+        return False
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        return False
+    return str(manifest.get("art_direction_fingerprint") or "") == fingerprint
+
+
+def _write_asset_manifest(directory: Path, fingerprint: str, source_stage: str) -> None:
+    directory.mkdir(parents=True, exist_ok=True)
+    (directory / "asset_manifest.json").write_text(
+        json.dumps(
+            {
+                "art_direction_fingerprint": fingerprint,
+                "source_stage": source_stage,
+                "files": [path.name for path in sorted(directory.glob("*.png"))],
+            },
+            indent=2,
+            sort_keys=True,
+        ),
+        encoding="utf-8",
+    )
+
+
+def _clear_pngs(directory: Path) -> None:
+    if not directory.exists():
+        return
+    for path in directory.glob("*.png"):
+        path.unlink()
+
+
+def _with_extra_warning(result: Any, warning: str) -> Any:
+    warnings = tuple(getattr(result, "warnings", ()) or ())
+    if hasattr(result, "__dataclass_fields__"):
+        return replace(result, warnings=(*warnings, warning))
+    setattr(result, "warnings", (*warnings, warning))
+    return result
+
+
+def _validate_storybook_scene_result(result: Any) -> tuple[str, ...]:
+    files = tuple(Path(str(path)) for path in getattr(result, "generated_files", ()))
+    if getattr(result, "status", "") != "SUCCESS":
+        errors = tuple(str(item) for item in getattr(result, "errors", ()) or ())
+        return errors or ("Storybook scene generation failed.",)
+    if len(files) != 1:
+        return (f"Expected exactly one storybook scene, found {len(files)}.",)
+    return _validate_storybook_scene_file(files[0])
+
+
+def _validate_storybook_scene_file(path: Path) -> tuple[str, ...]:
+    from PIL import Image
+
+    errors: list[str] = []
+    try:
+        with Image.open(path) as image:
+            rgba = image.convert("RGBA")
+    except OSError as error:
+        return (f"Invalid storybook scene PNG: {error}",)
+    alpha = rgba.getchannel("A")
+    if alpha.getextrema()[0] < 245:
+        errors.append("Storybook scene must be predominantly opaque.")
+    width, height = rgba.size
+    bounds = _meaningful_scene_bounds(rgba)
+    if bounds is None:
+        errors.append("Storybook scene has no meaningful visible artwork.")
+        return tuple(errors)
+    left, top, right, bottom = bounds
+    occupancy_width = (right - left) / max(1, width)
+    occupancy_height = (bottom - top) / max(1, height)
+    if occupancy_width < 0.75 or occupancy_height < 0.75:
+        errors.append(
+            "Storybook scene artwork occupies less than 75 percent of canvas width or height."
+        )
+    return tuple(errors)
+
+
+def _meaningful_scene_bounds(image: Any) -> tuple[int, int, int, int] | None:
+    width, height = image.size
+    pixels = image.load()
+    corners = (
+        pixels[0, 0][:3],
+        pixels[width - 1, 0][:3],
+        pixels[0, height - 1][:3],
+        pixels[width - 1, height - 1][:3],
+    )
+    background = tuple(sum(color[index] for color in corners) // 4 for index in range(3))
+    xs: list[int] = []
+    ys: list[int] = []
+    step = max(1, min(width, height) // 300)
+    for y in range(0, height, step):
+        for x in range(0, width, step):
+            red, green, blue, alpha = pixels[x, y]
+            if alpha < 245:
+                continue
+            if abs(red - background[0]) + abs(green - background[1]) + abs(blue - background[2]) > 36:
+                xs.append(x)
+                ys.append(y)
+    if not xs or not ys:
+        return None
+    return min(xs), min(ys), max(xs) + 1, max(ys) + 1
+
+
+def _print_generation_plan(
+    *,
+    job: ProductionJob,
+    generation_plan: GenerationPlan,
+    job_paths: ProductFactoryJobPaths,
+    scene_generated: bool,
+    transparency_validation: str,
+    primary_preview_source: str,
+) -> None:
+    scene_existing = any(job_paths.storybook_scenes_dir.glob("*.png")) if job_paths.storybook_scenes_dir.exists() else False
+    print("GENERATION PLAN")
+    print("")
+    print("Product:")
+    print(job.product_name)
+    print("Resolved Mode:")
+    print(generation_plan.resolved_mode)
+    print("Decision Reason:")
+    print(generation_plan.decision_reason)
+    print("Customer PNG Count:")
+    print(generation_plan.customer_png_count)
+    print("Scene Required:")
+    print("YES" if generation_plan.scene_required else "NO")
+    print("Scene Existing:")
+    print("YES" if scene_existing else "NO")
+    print("Scene Generated:")
+    print("YES" if scene_generated else "NO")
+    print("Transparency Validation:")
+    print(transparency_validation)
+    print("Listing Preview Family:")
+    print(generation_plan.resolved_mode)
+    print("Primary Preview Source:")
+    print(primary_preview_source)
+
+
 def _ensure_listing_previews(
     job: ProductionJob,
     job_paths: ProductFactoryJobPaths,
+    generation_mode: str = GENERATION_MODE_CLIPART,
+    art_direction_fingerprint: str = "",
 ) -> tuple[Path, ...]:
     """Create or reuse job-scoped Etsy listing preview PNGs."""
-    existing = _valid_existing_listing_previews(job_paths.listing_images_dir)
+    existing = _valid_existing_listing_previews(
+        job_paths.listing_images_dir,
+        art_direction_fingerprint=art_direction_fingerprint,
+    )
     if existing is not None:
         print("Listing previews reused")
         print(len(existing))
@@ -1094,9 +1445,15 @@ def _ensure_listing_previews(
         output_prefix=_asset_filename_prefix(job),
         storybook_scenes_dir=job_paths.storybook_scenes_dir,
         required_count=4,
+        listing_family=(
+            GENERATION_MODE_STORYBOOK
+            if generation_mode == GENERATION_MODE_STORYBOOK
+            else GENERATION_MODE_CLIPART
+        ),
         product_category=job.category,
         niche_theme=job.product_name,
         intended_customer=job.target_customer,
+        art_direction_fingerprint=art_direction_fingerprint,
     ).export()
     if result.status != "SUCCESS":
         raise RuntimeError("; ".join(result.errors) or "Listing preview generation failed.")
@@ -1105,12 +1462,21 @@ def _ensure_listing_previews(
     return tuple(Path(path) for path in result.preview_files)
 
 
-def _valid_existing_listing_previews(listing_images_dir: Path) -> tuple[Path, ...] | None:
+def _valid_existing_listing_previews(
+    listing_images_dir: Path,
+    art_direction_fingerprint: str = "",
+) -> tuple[Path, ...] | None:
     """Return existing valid listing previews, or None when regeneration is needed."""
     if not listing_images_dir.exists():
         return None
     files = tuple(sorted(listing_images_dir.glob("*.png"), key=lambda path: path.name))
-    if not 4 <= len(files) <= 10:
+    if not (MIN_LISTING_IMAGES <= len(files) <= MAX_LISTING_IMAGES):
+        return None
+    if art_direction_fingerprint and not _asset_manifest_matches(
+        listing_images_dir,
+        art_direction_fingerprint,
+        manifest_name="preview_manifest.json",
+    ):
         return None
     from project_aurora.image_generation.image_inspector import inspect_png
 
@@ -1119,15 +1485,21 @@ def _valid_existing_listing_previews(listing_images_dir: Path) -> tuple[Path, ..
     return None
 
 
-def _simple_clipart_prompt(job: ProductionJob, canonical_product_type: str) -> str:
+def _simple_clipart_prompt(
+    job: ProductionJob,
+    canonical_product_type: str,
+    art_package: ArtDirectionPackage | None = None,
+) -> str:
     subjects = _prompt_subjects(job)
     palette = _prompt_palette(job)
     profile = load_brand_profile()
+    art_descriptor = art_package.descriptor() if art_package else ""
     return (
         "Create actual customer clipart illustrations only. "
         f"Product: {job.product_name}. "
         f"Product type: {canonical_product_type}. "
         f"Show: {subjects}. "
+        f"Canonical art direction: {art_descriptor} "
         f"Brand direction: {profile.get('primary_brand', 'storybook watercolor woodland illustrations')}. "
         "Whimsical vintage watercolor storybook illustrations with warm watercolor, "
         "rich storybook scenes, cottagecore details, woodland atmosphere, cozy interiors "
@@ -1154,32 +1526,42 @@ def _product_family_prompt(
     job: ProductionJob,
     canonical_product_type: str,
     product_family: str,
+    art_package: ArtDirectionPackage | None = None,
 ) -> str:
     if product_family == STORYBOOK_SCENE:
-        return _storybook_scene_prompt(job, canonical_product_type)
-    return _simple_clipart_prompt(job, canonical_product_type)
+        return _storybook_scene_prompt(job, canonical_product_type, art_package)
+    return _simple_clipart_prompt(job, canonical_product_type, art_package)
 
 
-def _storybook_scene_prompt(job: ProductionJob, canonical_product_type: str) -> str:
+def _storybook_scene_prompt(
+    job: ProductionJob,
+    canonical_product_type: str,
+    art_package: ArtDirectionPackage | None = None,
+) -> str:
     subjects = _prompt_subjects(job)
     palette = _prompt_palette(job)
     profile = load_brand_profile()
+    art_descriptor = art_package.descriptor() if art_package else ""
     return (
         "Create one complete customer-ready watercolor storybook scene. "
         f"Product: {job.product_name}. "
         f"Product type: {canonical_product_type}. "
         f"Scene subject: {subjects}. "
+        f"Canonical art direction: {art_descriptor} "
         f"Brand direction: {profile.get('primary_brand', 'storybook watercolor woodland illustrations')}. "
-        "Use a rich cozy woodland environment, cottagecore details, warm natural lighting, "
-        "soft watercolor rendering, and a full beautiful composition. "
+        "Create a complete full-frame whimsical storybook illustration with a coherent environment, "
+        "foreground, middle ground, and background. Characters must naturally interact in a "
+        "product-specific activity. Use a rich cozy woodland environment, cottagecore details, "
+        "warm natural lighting, soft watercolor rendering, and an edge-to-edge painted composition. "
         f"Palette: {palette}. "
         "The background must remain part of the artwork. No transparency. "
         "Fill the canvas with a complete illustration while keeping every character fully visible. "
         "Entire body visible. Head visible. Ears visible. Feet visible. Tail visible when present. "
         "Accessories visible. Leave at least 10 percent padding around important subjects. "
         "Do not crop, clip, cut off, zoom in too close, or let any character touch the edge. "
-        "No isolated clipart, no transparent background, no cutout elements, no grid, no border, "
-        "no product cover, no mockup, no product label, no typography. "
+        "No isolated floating objects, no clipart sheet, no collage, no grid, no checkerboard, "
+        "no white empty canvas, no transparent background, no cutout elements, no border, "
+        "no mockup, no product cover, no product label, no typography. "
         "No text, no words, no letters, no numbers, no logo, no watermark."
     )
 

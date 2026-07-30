@@ -20,6 +20,7 @@ from project_aurora.image_generation.listing_family_decision import (  # noqa: E
 from project_aurora.image_generation.listing_preview_exporter import (  # noqa: E402
     ListingPreviewExporter,
     PREVIEW_SIZE,
+    _opaque_occupancy,
 )
 
 
@@ -141,6 +142,44 @@ class ListingPreviewExporterTest(unittest.TestCase):
             center = pixels.getpixel((PREVIEW_SIZE[0] // 2, PREVIEW_SIZE[1] // 2))
             margin = pixels.getpixel((30, 30))
         self.assertNotEqual(center, margin)
+
+    def test_storybook_primary_preview_uses_full_canvas_without_grid_template(self) -> None:
+        scene_dir = self.base_path / "storybook_scenes"
+        scene_dir.mkdir()
+        write_storybook_scene(scene_dir / "fox_garden_scene.png")
+
+        result = ListingPreviewExporter(
+            final_images_dir=self.final_dir,
+            storybook_scenes_dir=scene_dir,
+            output_dir=self.preview_dir,
+            output_prefix="fox_garden",
+            listing_family=LISTING_FAMILY_STORYBOOK,
+        ).export()
+
+        self.assertEqual(result.status, "SUCCESS")
+        with Image.open(result.preview_files[0]) as image:
+            preview = image.convert("RGBA")
+            corner = preview.getpixel((10, 10))
+            occupancy = _opaque_occupancy(preview)
+        self.assertGreaterEqual(occupancy[0], 0.85)
+        self.assertGreaterEqual(occupancy[1], 0.85)
+        self.assertLess(corner[0], 180)
+        self.assertLess(corner[1], 200)
+
+    def test_clipart_preview_keeps_transparency_preview_background(self) -> None:
+        result = ListingPreviewExporter(
+            final_images_dir=self.final_dir,
+            output_dir=self.preview_dir,
+            output_prefix="fox_garden",
+            listing_family=LISTING_FAMILY_CLIPART,
+        ).export()
+
+        self.assertEqual(result.status, "SUCCESS")
+        with Image.open(result.preview_files[0]) as image:
+            corner = image.convert("RGBA").getpixel((10, 10))
+        self.assertGreater(corner[0], 230)
+        self.assertGreater(corner[1], 220)
+        self.assertGreater(corner[2], 200)
 
 
 if __name__ == "__main__":

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import json
 from pathlib import Path
 
 from PIL import Image, ImageDraw
@@ -54,6 +55,7 @@ class ListingPreviewExporter:
         niche_theme: str = "",
         intended_customer: str = "",
         artwork_composition: str = "",
+        art_direction_fingerprint: str = "",
         decision_engine: ListingFamilyDecisionEngine | None = None,
     ) -> None:
         self._final_images_dir = final_images_dir
@@ -66,6 +68,7 @@ class ListingPreviewExporter:
         self._niche_theme = niche_theme
         self._intended_customer = intended_customer
         self._artwork_composition = artwork_composition
+        self._art_direction_fingerprint = art_direction_fingerprint
         self._decision_engine = decision_engine or ListingFamilyDecisionEngine()
 
     def export(self) -> ListingPreviewExportResult:
@@ -90,13 +93,17 @@ class ListingPreviewExporter:
         if listing_family == LISTING_FAMILY_STORYBOOK:
             output_path = self._output_dir / f"{self._output_prefix}_preview_01.png"
             assert scene_file is not None
-            self._export_scene(scene_file, output_path)
+            try:
+                self.render_storybook_primary_preview(scene_file, output_path)
+            except RuntimeError as error:
+                return ListingPreviewExportResult(status="FAILED", errors=(str(error),))
             preview_files.append(str(output_path))
             start_index = 2
         for index, source_path in enumerate(source_files, start=start_index):
             output_path = self._output_dir / f"{self._output_prefix}_preview_{index:02d}.png"
             self._export_one(source_path, output_path)
             preview_files.append(str(output_path))
+        self._write_manifest(preview_files, listing_family, scene_file)
         return ListingPreviewExportResult(status="SUCCESS", preview_files=tuple(preview_files))
 
     def _source_files(self) -> tuple[Path, ...]:
@@ -136,16 +143,35 @@ class ListingPreviewExporter:
             canvas.save(output_path, format="PNG", dpi=(PREVIEW_DPI, PREVIEW_DPI))
 
     @staticmethod
-    def _export_scene(source_path: Path, output_path: Path) -> None:
+    def render_storybook_primary_preview(source_path: Path, output_path: Path) -> None:
+        """Render a storybook scene as a full-canvas primary Etsy preview."""
         with Image.open(source_path) as image:
             scene = image.convert("RGBA")
-            max_scene = int(PREVIEW_SIZE[0] * SCENE_FRAME_RATIO)
-            scene.thumbnail((max_scene, max_scene), Image.Resampling.LANCZOS)
-            canvas = _paper_texture()
-            left = (PREVIEW_SIZE[0] - scene.width) // 2
-            top = (PREVIEW_SIZE[1] - scene.height) // 2
-            canvas.alpha_composite(scene, (left, top))
+            canvas = _cover_image(scene, PREVIEW_SIZE)
+            occupancy = _opaque_occupancy(canvas)
+            if occupancy[0] < 0.85 or occupancy[1] < 0.85:
+                raise RuntimeError(
+                    "Storybook primary preview scene occupies less than 85 percent "
+                    "of preview width or height."
+                )
             canvas.save(output_path, format="PNG", dpi=(PREVIEW_DPI, PREVIEW_DPI))
+
+    def _write_manifest(
+        self,
+        preview_files: list[str],
+        listing_family: str,
+        scene_file: Path | None,
+    ) -> None:
+        manifest = {
+            "listing_family": listing_family,
+            "art_direction_fingerprint": self._art_direction_fingerprint,
+            "primary_preview_source": str(scene_file) if scene_file else "",
+            "preview_files": [Path(path).name for path in preview_files],
+        }
+        (self._output_dir / "preview_manifest.json").write_text(
+            json.dumps(manifest, indent=2, sort_keys=True),
+            encoding="utf-8",
+        )
 
 
 def _trim_transparent_bounds(image: Image.Image) -> Image.Image:
@@ -172,3 +198,27 @@ def _paper_texture() -> Image.Image:
             width=1,
         )
     return canvas
+
+
+def _cover_image(image: Image.Image, size: tuple[int, int]) -> Image.Image:
+    """Resize an image to cover the target canvas, cropping only overflow."""
+    source = image.convert("RGBA")
+    target_width, target_height = size
+    scale = max(target_width / source.width, target_height / source.height)
+    resized_size = (
+        max(1, round(source.width * scale)),
+        max(1, round(source.height * scale)),
+    )
+    resized = source.resize(resized_size, Image.Resampling.LANCZOS)
+    left = max(0, (resized.width - target_width) // 2)
+    top = max(0, (resized.height - target_height) // 2)
+    return resized.crop((left, top, left + target_width, top + target_height))
+
+
+def _opaque_occupancy(image: Image.Image) -> tuple[float, float]:
+    alpha = image.convert("RGBA").getchannel("A")
+    bbox = alpha.getbbox()
+    if bbox is None:
+        return 0.0, 0.0
+    left, top, right, bottom = bbox
+    return (right - left) / image.width, (bottom - top) / image.height

@@ -46,6 +46,7 @@ from project_aurora.production.product_factory import (  # noqa: E402
     DefaultProductFactoryStageRunner,
     ProductFactory,
     ProductFactoryJobPaths,
+    _generation_plan_from_prompt,
     _ensure_listing_previews,
 )
 from project_aurora.production.digital_download_builder import (  # noqa: E402
@@ -134,8 +135,30 @@ class ProductFactoryResumeService:
         _valid_final_image_files(final_images_dir)
         listing_images_dir = _listing_images_dir_from_report(report_data)
         job = _job_by_id(self._queue_manager, job_id)
+        try:
+            prompt_package = self._memory.load_prompt_package(job_id)
+        except FileNotFoundError:
+            prompt_package = {}
+        generation_plan = _generation_plan_from_prompt(job, prompt_package)
+        if generation_plan.scene_required:
+            StageAwareResumeRunner(
+                memory=self._memory,
+                etsy_config=self._config,
+                image_config=ImageProviderConfig.from_file(OPENAI_CONFIG_PATH),
+                existing_draft_id=listing_id,
+                resume_client=self._client,
+            )._generate_validated_storybook_scene(
+                job,
+                prompt_package,
+                _job_paths_from_report(report_data),
+            )
         preview_count_before = len(tuple(listing_images_dir.glob("*.png")))
-        _ensure_listing_previews(job, _job_paths_from_report(report_data))
+        _ensure_listing_previews(
+            job,
+            _job_paths_from_report(report_data),
+            generation_mode=generation_plan.resolved_mode,
+            art_direction_fingerprint=str(prompt_package.get("art_direction_fingerprint") or ""),
+        )
         preview_count_after = len(tuple(listing_images_dir.glob("*.png")))
         if preview_count_before != preview_count_after:
             print("Listing previews regenerated during resume")
@@ -657,7 +680,19 @@ class StageAwareResumeRunner(DefaultProductFactoryStageRunner):
         if not listing_id:
             raise RuntimeError("Existing Etsy draft ID is required for image sync.")
         _valid_final_image_files(self.job_paths(job).final_images_dir)
-        _ensure_listing_previews(job, self.job_paths(job))
+        try:
+            prompt_package = self._memory.load_prompt_package(job.id)
+        except FileNotFoundError:
+            prompt_package = {}
+        generation_plan = _generation_plan_from_prompt(job, prompt_package)
+        if generation_plan.scene_required:
+            self._generate_validated_storybook_scene(job, prompt_package, self.job_paths(job))
+        _ensure_listing_previews(
+            job,
+            self.job_paths(job),
+            generation_mode=generation_plan.resolved_mode,
+            art_direction_fingerprint=str(prompt_package.get("art_direction_fingerprint") or ""),
+        )
         listing_files = _valid_listing_image_files(self.job_paths(job).listing_images_dir)
         expected_listing_images = len(listing_files)
         existing = self._resume_client.list_listing_images(listing_id)

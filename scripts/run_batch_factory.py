@@ -425,7 +425,7 @@ def refill_queue_from_research(
     )
     candidates = build_brand_profile_portfolio_candidates(
         research.opportunities,
-        target_count=max(config.daily_products * 2, 10),
+        target_count=max(config.daily_products * 4, 50),
     )
     if not candidates:
         print("Products selected")
@@ -447,7 +447,12 @@ def refill_queue_from_research(
         for reason in plan.selection_failure_reasons or ("No valid products selected.",):
             print(reason)
         return 0
-    return handoff_to_forge(plan, queue_manager)
+    return handoff_to_forge(
+        plan,
+        queue_manager,
+        fallback_opportunities=candidates,
+        target_new_jobs=config.daily_products,
+    )
 
 
 def load_batch_runtime_config(path: Path) -> BatchRuntimeConfig:

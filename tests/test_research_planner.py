@@ -16,6 +16,7 @@ sys.path.insert(0, str(SRC_PATH))
 sys.path.insert(0, str(PROJECT_ROOT))
 
 from project_aurora.planning.production_queue_manager import (  # noqa: E402
+    COMPLETED,
     FAILED,
     ProductionQueueManager,
 )
@@ -337,6 +338,53 @@ class ResearchPlannerTest(unittest.TestCase):
         self.assertEqual(created, 5)
         self.assertEqual(len(self.queue.list_jobs()), 5)
         self.assertTrue(all(job.status == "READY" for job in self.queue.list_jobs()))
+
+    def test_handoff_uses_fallback_candidates_when_selected_products_already_exist(self) -> None:
+        existing = opportunity(
+            0,
+            product_name="Mouse Nursery Watercolor Clipart",
+            product_type="watercolor_animal_collection",
+            style="Storybook Watercolor",
+        )
+        replacement = opportunity(
+            99,
+            product_name="Fox Tea Party Watercolor Clipart",
+            product_type="watercolor_animal_collection",
+            style="Storybook Watercolor",
+        )
+        self.queue.add_job(
+            priority="High",
+            product_name=existing.keyword.title(),
+            category="watercolor_animal_collection",
+            style="Storybook Watercolor",
+            seasonal_theme="Evergreen",
+            keywords=("mouse", "nursery"),
+            confidence_score=0.96,
+            estimated_competition="Low",
+            estimated_demand="High",
+            estimated_revenue=100,
+            status=COMPLETED,
+        )
+        plan = AtlasPortfolioManager(
+            config=self.config(daily_products=1),
+            queue_manager=self.queue,
+            memory=self.memory,
+        ).build_portfolio((existing,))
+
+        with redirect_stdout(StringIO()) as output:
+            created = handoff_to_forge(
+                plan,
+                self.queue,
+                fallback_opportunities=(existing, replacement),
+                target_new_jobs=1,
+            )
+
+        self.assertEqual(created, 1)
+        names = {job.product_name for job in self.queue.list_jobs()}
+        self.assertIn("Fox Tea Party Watercolor Clipart", names)
+        rendered = output.getvalue()
+        self.assertIn("Mouse Nursery Watercolor Clipart", rendered)
+        self.assertIn("Production job already exists in queue.", rendered)
 
     def test_brand_profile_candidates_filter_legacy_products_before_atlas(self) -> None:
         legacy = (

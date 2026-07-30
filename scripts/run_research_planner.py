@@ -84,7 +84,7 @@ def main(argv: list[str] | None = None) -> None:
     atlas = AtlasPortfolioManager(config=config, queue_manager=queue_manager)
     brand_candidates = build_brand_profile_portfolio_candidates(
         research.opportunities,
-        target_count=max(config.daily_products * 2, 10),
+        target_count=max(config.daily_products * 4, 50),
     )
     plan = atlas.build_portfolio(
         brand_candidates,
@@ -114,7 +114,12 @@ def main(argv: list[str] | None = None) -> None:
         print("Status")
         print("AWAITING_APPROVAL")
         return
-    created = handoff_to_forge(plan, queue_manager)
+    created = handoff_to_forge(
+        plan,
+        queue_manager,
+        fallback_opportunities=brand_candidates,
+        target_new_jobs=config.daily_products,
+    )
     print("")
     print("Forge Handoff")
     print(f"{created} jobs queued")
@@ -467,15 +472,26 @@ def print_blocked_reasons(plan: AtlasPortfolioPlan) -> None:
 def handoff_to_forge(
     plan: AtlasPortfolioPlan,
     queue_manager: ProductionQueueManager,
+    fallback_opportunities: tuple[MarketOpportunity, ...] = (),
+    target_new_jobs: int | None = None,
 ) -> int:
     """Persist approved products as READY jobs for Forge."""
     created = 0
     queue_before = len(queue_manager.list_jobs())
     ready_before = sum(1 for job in queue_manager.list_jobs() if job.status == READY)
-    transformed_created = len(plan.selected)
     enqueue_attempted = 0
     decision_logs: list[tuple[str, str, str]] = []
-    for opportunity in plan.selected:
+    opportunities = list(plan.selected)
+    opportunity_ids = {item.id for item in opportunities}
+    for opportunity in fallback_opportunities:
+        if opportunity.id not in opportunity_ids:
+            opportunities.append(opportunity)
+            opportunity_ids.add(opportunity.id)
+    transformed_created = len(opportunities)
+    target = target_new_jobs if target_new_jobs is not None else len(opportunities)
+    for opportunity in opportunities:
+        if created >= target:
+            break
         enqueue_attempted += 1
         decision = resolve_watercolor_scope(
             opportunity.keyword,

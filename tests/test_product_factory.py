@@ -28,12 +28,22 @@ from project_aurora.planning.production_queue_manager import (  # noqa: E402
 from project_aurora.image_generation.provider_registry import (  # noqa: E402
     ImageProviderConfig,
 )
+from project_aurora.image_generation.image_result import ImageResult  # noqa: E402
+from project_aurora.production.generation_plan import (  # noqa: E402
+    GENERATION_MODE_STORYBOOK,
+)
+from project_aurora.production.art_direction_package import (  # noqa: E402
+    build_art_direction_package,
+)
 from project_aurora.production.product_factory import (  # noqa: E402
     REPORT_COLLECTION,
     DefaultProductFactoryStageRunner,
     DryRunProductFactoryStageRunner,
     ProductFactoryPaths,
     ProductFactory,
+    _product_family_prompt,
+    _storybook_scene_prompt,
+    _valid_existing_listing_previews,
 )
 from project_aurora.production.production_report import (  # noqa: E402
     ProductionReport,
@@ -77,6 +87,24 @@ def make_visible_png_base64() -> str:
 def write_visible_png(path: Path, size: tuple[int, int] = (2, 2)) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     Image.new("RGBA", size, (255, 0, 0, 255)).save(path, format="PNG")
+
+
+def write_transparent_clipart_png(path: Path, size: tuple[int, int] = (64, 64)) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    image = Image.new("RGBA", size, (255, 255, 255, 0))
+    for x in range(12, 52):
+        for y in range(10, 54):
+            image.putpixel((x, y), (120, 70, 30, 255))
+    image.save(path, format="PNG")
+
+
+def write_full_scene_png(path: Path, size: tuple[int, int] = (128, 128)) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    image = Image.new("RGBA", size, (120, 170, 130, 255))
+    for x in range(size[0]):
+        for y in range(size[1]):
+            image.putpixel((x, y), ((x * 3) % 255, (y * 2) % 255, 120, 255))
+    image.save(path, format="PNG")
 
 
 class FakeOpenAIImagesClient:
@@ -442,6 +470,183 @@ class ProductFactoryTest(unittest.TestCase):
         self.assertEqual(captured["run_kwargs"]["quality"], "medium")
         self.assertEqual(captured["provider_config"].quality, "medium")
         self.assertIn("job_1_woodland_baby_animals", str(captured["output_dir"]))
+
+    def test_clipart_request_uses_explicit_transparent_background_settings(self) -> None:
+        captured: dict[str, object] = {}
+
+        class FakeImageGenerationEngine:
+            def __init__(self, **kwargs: object) -> None:
+                self._output_dir = kwargs["output_dir"]
+
+            def run(self, **kwargs: object) -> object:
+                captured["run_kwargs"] = kwargs
+                return SimpleNamespace(status="SUCCESS", generated_files=(), warnings=())
+
+        self.memory.save_prompt_package(
+            {
+                "product_name": self.job.product_name,
+                "collection": self.job.product_name,
+                "product_type": self.job.category,
+                "style": self.job.style,
+                "image_prompt": "Visible transparent clipart prompt.",
+            },
+            package_id=self.job.id,
+        )
+        runner = DefaultProductFactoryStageRunner(
+            memory=self.memory,
+            etsy_config=SimpleNamespace(),
+            paths=ProductFactoryPaths(jobs_dir=self.base_path / "jobs"),
+            image_config=ImageProviderConfig(provider="openai", number_of_images=4),
+        )
+
+        with patch(
+            "project_aurora.image_generation.image_generation_engine.ImageGenerationEngine",
+            FakeImageGenerationEngine,
+        ):
+            runner.generate_images(self.job)
+
+        self.assertTrue(captured["run_kwargs"]["transparent_background"])
+        self.assertEqual(captured["run_kwargs"]["background"], "transparent")
+        self.assertEqual(captured["run_kwargs"]["number_of_images"], 4)
+
+    def test_storybook_generates_four_customer_pngs_plus_separate_scene(self) -> None:
+        calls: list[dict[str, object]] = []
+
+        class FakeImageGenerationEngine:
+            def __init__(self, **kwargs: object) -> None:
+                self._output_dir = kwargs["output_dir"]
+
+            def run(self, **kwargs: object) -> ImageResult:
+                calls.append(kwargs)
+                self._output_dir.mkdir(parents=True, exist_ok=True)
+                image_type = str(kwargs["image_type"])
+                files: list[str] = []
+                if image_type == "storybook_scene":
+                    path = self._output_dir / "scene.png"
+                    write_full_scene_png(path)
+                    files.append(str(path))
+                else:
+                    for index in range(1, 5):
+                        path = self._output_dir / f"customer_{index}.png"
+                        write_transparent_clipart_png(path)
+                        files.append(str(path))
+                return ImageResult(
+                    status="SUCCESS",
+                    provider="fake",
+                    generated_files=tuple(files),
+                    generation_time=0,
+                    cost_estimate=0,
+                    warnings=(),
+                    errors=(),
+                )
+
+        self.memory.save_prompt_package(
+            {
+                "product_name": self.job.product_name,
+                "collection": self.job.product_name,
+                "product_type": "watercolor_animal_collection",
+                "style": self.job.style,
+                "image_prompt": "Transparent customer clipart prompt.",
+                "listing_family": GENERATION_MODE_STORYBOOK,
+                "generation_mode": GENERATION_MODE_STORYBOOK,
+                "generation_plan": {
+                    "resolved_mode": GENERATION_MODE_STORYBOOK,
+                    "decision_reason": "test",
+                    "customer_png_count": 4,
+                    "scene_required": True,
+                    "matched_terms": ["woodland"],
+                },
+                "storybook_scene_prompt": "Full frame storybook scene.",
+            },
+            package_id=self.job.id,
+        )
+        runner = DefaultProductFactoryStageRunner(
+            memory=self.memory,
+            etsy_config=SimpleNamespace(),
+            paths=ProductFactoryPaths(jobs_dir=self.base_path / "jobs"),
+            image_config=ImageProviderConfig(provider="openai", number_of_images=4),
+        )
+
+        with patch(
+            "project_aurora.image_generation.image_generation_engine.ImageGenerationEngine",
+            FakeImageGenerationEngine,
+        ):
+            result = runner.generate_images(self.job)
+
+        job_paths = runner.job_paths(self.job)
+        self.assertEqual(result.status, "SUCCESS")
+        self.assertEqual(len(tuple(job_paths.generated_images_dir.glob("*.png"))), 4)
+        self.assertEqual(len(tuple(job_paths.storybook_scenes_dir.glob("*.png"))), 1)
+        self.assertEqual(calls[0]["number_of_images"], 4)
+        self.assertTrue(calls[0]["transparent_background"])
+        self.assertEqual(calls[0]["background"], "transparent")
+        self.assertEqual(calls[1]["number_of_images"], 1)
+        self.assertFalse(calls[1]["transparent_background"])
+        self.assertEqual(calls[1]["background"], "opaque")
+
+    def test_scene_and_clipart_prompts_share_art_direction_package(self) -> None:
+        art_package = build_art_direction_package(
+            product_name="Rabbit Tea Party Watercolor Clipart",
+            product_category="watercolor animal collection",
+            style="Whimsical Storybook",
+            season="Spring",
+            palette="warm cream, sage green, muted blue, soft coral",
+            mood="cozy tea party",
+        )
+        job = ProductionJob(
+            id="rabbit_job",
+            priority="High",
+            product_name="Rabbit Tea Party Watercolor Clipart",
+            category="Digital Clipart",
+            style="Whimsical Storybook",
+            seasonal_theme="Spring",
+            keywords=("rabbit", "tea party", "watercolor"),
+            confidence_score=0.95,
+            estimated_competition="Low",
+            estimated_demand="High",
+            estimated_revenue=150,
+            status=READY,
+        )
+
+        clipart_prompt = _product_family_prompt(
+            job,
+            "watercolor animal collection",
+            "CLIPART",
+            art_package,
+        )
+        scene_prompt = _storybook_scene_prompt(
+            job,
+            "watercolor animal collection",
+            art_package,
+        )
+
+        for expected in (
+            "mother rabbit in sage green dress",
+            "father rabbit in muted blue jacket",
+            "tea table",
+            "sage green",
+            "muted blue",
+            "soft watercolor and gentle gouache",
+        ):
+            self.assertIn(expected, clipart_prompt)
+            self.assertIn(expected, scene_prompt)
+
+    def test_listing_preview_fingerprint_mismatch_invalidates_existing_previews(self) -> None:
+        preview_dir = self.base_path / "listing_images"
+        preview_dir.mkdir()
+        for index in range(1, 5):
+            write_visible_png(preview_dir / f"preview_{index:02d}.png", size=(3000, 3000))
+        (preview_dir / "preview_manifest.json").write_text(
+            '{"art_direction_fingerprint": "old-fingerprint"}',
+            encoding="utf-8",
+        )
+
+        reused = _valid_existing_listing_previews(
+            preview_dir,
+            art_direction_fingerprint="new-fingerprint",
+        )
+
+        self.assertIsNone(reused)
 
     def test_live_image_path_sends_medium_to_openai_sdk_from_config(self) -> None:
         fake_client = FakeOpenAIClient()
