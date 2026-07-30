@@ -194,20 +194,63 @@ class BatchFactoryTest(unittest.TestCase):
         self.assertEqual(report.drafts_created, 0)
         self.assertEqual(report.draft_ids, ())
 
-    def test_failed_eligible_job_is_promoted_when_no_ready_jobs_exist(self) -> None:
+    def test_failed_job_is_not_promoted_without_retry_policy(self) -> None:
         self.queue.add_existing_job(make_job(1, status=FAILED))
 
         with patch("sys.stdout", new_callable=StringIO) as output:
             report = self.run_batch(count=1)
 
-        self.assertEqual(report.completed, 1)
+        self.assertEqual(report.completed, 0)
         self.assertEqual(report.failed, 0)
+        self.assertEqual(report.draft_ids, ())
+        self.assertEqual(self.queue.list_jobs()[0].status, FAILED)
+        rendered = output.getvalue()
+        self.assertIn("Queue empty.", rendered)
+        self.assertIn("Generated 0 new jobs.", rendered)
+
+    def test_empty_queue_refills_and_processes_new_ready_job(self) -> None:
+        def refill(queue_manager: ProductionQueueManager, requested: int) -> int:
+            queue_manager.add_existing_job(make_job(1, status=READY))
+            return 1
+
+        with patch("sys.stdout", new_callable=StringIO) as output:
+            report = BatchProductionFactory(
+                queue_manager=self.queue,
+                memory=self.memory,
+                stage_runner_factory=lambda _job: FakeBatchStageRunner(),
+                queue_refill=refill,
+            ).run(1)
+
+        self.assertEqual(report.completed, 1)
         self.assertEqual(report.draft_ids, ("listing-job-1",))
         self.assertEqual(self.queue.list_jobs()[0].status, COMPLETED)
         rendered = output.getvalue()
-        self.assertIn("Queue Auto Promotion", rendered)
-        self.assertIn("PROMOTED_TO_READY", rendered)
-        self.assertIn("WARNING\nRecovered queued job from FAILED.", rendered)
+        self.assertIn("Queue empty.", rendered)
+        self.assertIn("Running research planner...", rendered)
+        self.assertIn("Generated 1 new jobs.", rendered)
+        self.assertIn("Continuing production.", rendered)
+
+    def test_completed_jobs_are_not_duplicated_during_refill(self) -> None:
+        self.queue.add_existing_job(make_job(1, status=COMPLETED))
+
+        def refill(queue_manager: ProductionQueueManager, requested: int) -> int:
+            queue_manager.add_existing_job(make_job(2, status=READY))
+            return 1
+
+        report = BatchProductionFactory(
+            queue_manager=self.queue,
+            memory=self.memory,
+            stage_runner_factory=lambda _job: FakeBatchStageRunner(),
+            queue_refill=refill,
+        ).run(1)
+
+        self.assertEqual(report.completed, 1)
+        jobs = self.queue.list_jobs()
+        self.assertEqual(len(jobs), 2)
+        self.assertEqual(
+            {job.id: job.status for job in jobs},
+            {"job-1": COMPLETED, "job-2": COMPLETED},
+        )
 
     def test_ready_capability_skip_is_reported_not_silently_ignored(self) -> None:
         self.queue.add_existing_job(

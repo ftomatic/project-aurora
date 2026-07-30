@@ -5,7 +5,7 @@ from __future__ import annotations
 import argparse
 import sys
 import tempfile
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime
 from pathlib import Path
 from time import sleep
@@ -22,6 +22,7 @@ from project_aurora.image_generation.provider_registry import (  # noqa: E402
 )
 from project_aurora.planning.production_queue_manager import (  # noqa: E402
     COMPLETED,
+    FAILED,
     READY,
     ProductionJob,
     ProductionQueueManager,
@@ -45,6 +46,17 @@ from scripts.run_product_factory import (  # noqa: E402
     print_etsy_config_diagnostics,
 )
 from project_aurora.config.local_env import load_local_env  # noqa: E402
+from project_aurora.portfolio.atlas_portfolio_manager import (  # noqa: E402
+    AtlasPortfolioManager,
+)
+from project_aurora.research.athena_market_intelligence import (  # noqa: E402
+    AthenaMarketIntelligence,
+)
+from project_aurora.research.research_config import ResearchPlannerConfig  # noqa: E402
+from scripts.run_research_planner import (  # noqa: E402
+    build_brand_profile_portfolio_candidates,
+    handoff_to_forge,
+)
 
 
 REAL_QUEUE_PATH = (
@@ -56,6 +68,7 @@ REAL_QUEUE_PATH = (
 )
 DAILY_FACTORY_CONFIG_PATH = PROJECT_ROOT / "config" / "daily_factory.yaml"
 LOCAL_ENV_PATH = PROJECT_ROOT / "config" / "aurora.local.env"
+RESEARCH_CONFIG_PATH = PROJECT_ROOT / "config" / "research.yaml"
 
 
 @dataclass(frozen=True, slots=True)
@@ -65,6 +78,7 @@ class BatchRuntimeConfig:
     openai_image_delay_seconds: float = 15.0
     openai_rate_limit_max_retries: int = 3
     openai_rate_limit_safety_seconds: float = 3.0
+    auto_refill_queue: bool = True
 
 
 @dataclass(frozen=True, slots=True)
@@ -115,6 +129,8 @@ class BatchProductionFactory:
         save_report: bool = True,
         image_delay_seconds: float = 0.0,
         sleeper: Callable[[float], None] = sleep,
+        auto_refill_queue: bool = True,
+        queue_refill: Callable[[ProductionQueueManager, int], int] | None = None,
     ) -> None:
         self._queue_manager = queue_manager
         self._memory = memory
@@ -122,6 +138,8 @@ class BatchProductionFactory:
         self._save_report = save_report
         self._image_delay_seconds = image_delay_seconds
         self._sleeper = sleeper
+        self._auto_refill_queue = auto_refill_queue
+        self._queue_refill = queue_refill
 
     def run(self, count: int) -> BatchFactoryReport:
         """Run up to count ready jobs, continuing after individual failures."""
@@ -138,7 +156,7 @@ class BatchProductionFactory:
         elapsed_time = 0.0
         previous_generated_images = False
         print_queue_selection_diagnostics(self._queue_manager)
-        self._promote_eligible_jobs_when_ready_is_empty(count)
+        self._refill_queue_when_ready_is_empty(count)
         while completed + failed < count:
             job = self._queue_manager.next_ready_job()
             if job is None:
@@ -214,8 +232,32 @@ class BatchProductionFactory:
             self._save_batch_report(batch_report)
         return batch_report
 
+    def _refill_queue_when_ready_is_empty(self, count: int) -> None:
+        """Run planning when no READY work exists."""
+        jobs = self._queue_manager.list_jobs()
+        if any(job.status == READY for job in jobs):
+            return
+        print("")
+        print("Queue empty.")
+        if not self._auto_refill_queue:
+            print("Auto refill disabled.")
+            return
+        print("Running research planner...")
+        if self._queue_refill is None:
+            print("Generated 0 new jobs.")
+            print("Reason")
+            print("No queue refill pipeline is configured for this runner.")
+            return
+        created = self._queue_refill(self._queue_manager, count)
+        print(f"Generated {created} new jobs.")
+        if created > 0:
+            print("Continuing production.")
+        else:
+            print("Reason")
+            print("Planner produced zero new jobs.")
+
     def _promote_eligible_jobs_when_ready_is_empty(self, count: int) -> None:
-        """Promote eligible queued work when no jobs are manually marked READY."""
+        """Legacy retry policy hook; never retries FAILED jobs by default."""
         jobs = self._queue_manager.list_jobs()
         if any(job.status == READY for job in jobs):
             return
@@ -223,6 +265,8 @@ class BatchProductionFactory:
         promoted = 0
         print("")
         print("Queue Auto Promotion")
+        print("WARNING")
+        print("Retry policy is disabled for FAILED jobs.")
         for job in jobs:
             if promoted >= count:
                 break
@@ -230,6 +274,11 @@ class BatchProductionFactory:
                 print(f"{job.id} - {job.product_name}")
                 print("SKIPPED")
                 print("Completed jobs are not retried automatically.")
+                continue
+            if job.status == FAILED:
+                print(f"{job.id} - {job.product_name}")
+                print("SKIPPED")
+                print("Failed jobs require an explicit retry policy.")
                 continue
             capability = resolver.resolve(job.product_name, job.category, job.category)
             if not capability.supported:
@@ -340,7 +389,65 @@ def _run_live_batch(count: int) -> BatchFactoryReport:
         ),
         save_report=True,
         image_delay_seconds=runtime_config.openai_image_delay_seconds,
+        auto_refill_queue=runtime_config.auto_refill_queue,
+        queue_refill=lambda manager, requested: refill_queue_from_research(
+            manager,
+            memory,
+            requested,
+        ),
     ).run(count)
+
+
+def refill_queue_from_research(
+    queue_manager: ProductionQueueManager,
+    memory: MemoryManager,
+    requested_count: int,
+) -> int:
+    """Run Athena/Atlas and persist new READY jobs for continuous production."""
+    config = ResearchPlannerConfig.from_file(RESEARCH_CONFIG_PATH)
+    config = replace(config, daily_products=max(1, requested_count))
+    research = AthenaMarketIntelligence(candidate_count=config.candidate_count).run()
+    if not research.opportunities:
+        print("Research candidates")
+        print("0")
+        print("Reason")
+        print("Empty research dataset.")
+        return 0
+    provider_status = tuple(
+        {
+            "provider": status.provider,
+            "priority": status.priority,
+            "status": status.status,
+            "detail": status.detail,
+            "opportunities": status.opportunities,
+        }
+        for status in research.provider_statuses
+    )
+    candidates = build_brand_profile_portfolio_candidates(
+        research.opportunities,
+        target_count=max(config.daily_products * 2, 10),
+    )
+    if not candidates:
+        print("Products selected")
+        print("0")
+        print("Reason")
+        print("No candidates passed brand/product transformation.")
+        return 0
+    atlas = AtlasPortfolioManager(
+        config=config,
+        queue_manager=queue_manager,
+        memory=memory,
+    )
+    plan = atlas.build_portfolio(candidates, provider_status=provider_status)
+    atlas.save_report(plan)
+    if not plan.selected:
+        print("Products selected")
+        print("0")
+        print("Reason")
+        for reason in plan.selection_failure_reasons or ("No valid products selected.",):
+            print(reason)
+        return 0
+    return handoff_to_forge(plan, queue_manager)
 
 
 def load_batch_runtime_config(path: Path) -> BatchRuntimeConfig:
@@ -363,7 +470,12 @@ def load_batch_runtime_config(path: Path) -> BatchRuntimeConfig:
         openai_rate_limit_safety_seconds=float(
             values.get("openai_rate_limit_safety_seconds", "3")
         ),
+        auto_refill_queue=_config_bool(values.get("auto_refill_queue", "true")),
     )
+
+
+def _config_bool(value: str) -> bool:
+    return value.strip().casefold() in {"1", "true", "yes", "on"}
 
 
 def _build_batch_report(
