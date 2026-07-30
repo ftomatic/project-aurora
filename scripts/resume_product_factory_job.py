@@ -45,6 +45,8 @@ from project_aurora.production.product_factory import (  # noqa: E402
     REPORT_COLLECTION,
     DefaultProductFactoryStageRunner,
     ProductFactory,
+    ProductFactoryJobPaths,
+    _ensure_listing_previews,
 )
 from project_aurora.production.digital_download_builder import (  # noqa: E402
     DigitalDownloadBuilder,
@@ -131,6 +133,13 @@ class ProductFactoryResumeService:
         final_images_dir = _final_images_dir_from_report(report_data)
         _valid_final_image_files(final_images_dir)
         listing_images_dir = _listing_images_dir_from_report(report_data)
+        job = _job_by_id(self._queue_manager, job_id)
+        preview_count_before = len(tuple(listing_images_dir.glob("*.png")))
+        _ensure_listing_previews(job, _job_paths_from_report(report_data))
+        preview_count_after = len(tuple(listing_images_dir.glob("*.png")))
+        if preview_count_before != preview_count_after:
+            print("Listing previews regenerated during resume")
+            print(preview_count_after)
         listing_files = _valid_listing_image_files(listing_images_dir)
         expected_listing_images = len(listing_files)
         existing_images = self._poll_listing_images(
@@ -648,6 +657,7 @@ class StageAwareResumeRunner(DefaultProductFactoryStageRunner):
         if not listing_id:
             raise RuntimeError("Existing Etsy draft ID is required for image sync.")
         _valid_final_image_files(self.job_paths(job).final_images_dir)
+        _ensure_listing_previews(job, self.job_paths(job))
         listing_files = _valid_listing_image_files(self.job_paths(job).listing_images_dir)
         expected_listing_images = len(listing_files)
         existing = self._resume_client.list_listing_images(listing_id)
@@ -813,6 +823,33 @@ def _listing_images_dir_from_report(report_data: dict[str, Any]) -> Path:
         return Path(value)
     final_images_dir = _final_images_dir_from_report(report_data)
     return final_images_dir.parent / "listing_images"
+
+
+def _job_paths_from_report(report_data: dict[str, Any]) -> ProductFactoryJobPaths:
+    job_paths = report_data.get("job_paths")
+    if not isinstance(job_paths, dict):
+        raise RuntimeError("ProductionReport does not include job_paths.")
+    final_images_dir = _final_images_dir_from_report(report_data)
+    listing_images_dir = _listing_images_dir_from_report(report_data)
+    job_root_value = job_paths.get("job_root")
+    job_root = Path(str(job_root_value)) if job_root_value else final_images_dir.parent
+    generated_value = job_paths.get("generated_images_dir")
+    storybook_value = job_paths.get("storybook_scenes_dir")
+    downloads_value = job_paths.get("digital_downloads_dir")
+    return ProductFactoryJobPaths(
+        job_root=job_root,
+        generated_images_dir=(
+            Path(str(generated_value)) if generated_value else job_root / "generated_images"
+        ),
+        final_images_dir=final_images_dir,
+        storybook_scenes_dir=(
+            Path(str(storybook_value)) if storybook_value else job_root / "storybook_scenes"
+        ),
+        listing_images_dir=listing_images_dir,
+        digital_downloads_dir=(
+            Path(str(downloads_value)) if downloads_value else job_root / "digital_downloads"
+        ),
+    )
 
 
 def _valid_final_image_files(final_images_dir: Path) -> tuple[Path, ...]:

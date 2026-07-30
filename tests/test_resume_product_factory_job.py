@@ -309,6 +309,36 @@ class ResumeProductFactoryJobTest(unittest.TestCase):
         self.assertEqual(client.uploaded_images, [])
         self.assertEqual(result.final_status, "COMPLETED")
 
+    def test_resume_regenerates_listing_previews_when_deleted(self) -> None:
+        for path in self.listing_dir.glob("*.png"):
+            path.unlink()
+        client = FakeResumeEtsyClient(existing_images=())
+
+        result = self.service(client).resume(JOB_ID)
+
+        self.assertEqual(result.final_status, "COMPLETED")
+        self.assertEqual(result.images_uploaded_now, 4)
+        self.assertEqual(len(tuple(self.listing_dir.glob("*.png"))), 4)
+        self.assertEqual(
+            [item[2] for item in client.uploaded_images],
+            [1, 2, 3, 4],
+        )
+
+    def test_resume_regenerates_listing_previews_when_partial(self) -> None:
+        for path in sorted(self.listing_dir.glob("*.png"))[2:]:
+            path.unlink()
+        client = FakeResumeEtsyClient(existing_images=())
+
+        result = self.service(client).resume(JOB_ID)
+
+        self.assertEqual(result.final_status, "COMPLETED")
+        self.assertEqual(result.images_uploaded_now, 4)
+        self.assertEqual(len(tuple(self.listing_dir.glob("*.png"))), 4)
+        self.assertEqual(
+            [item[2] for item in client.uploaded_images],
+            [1, 2, 3, 4],
+        )
+
     def test_failed_image_sync_does_not_upload_downloads_or_complete_queue(self) -> None:
         client = FakeResumeEtsyClient(
             existing_images=(

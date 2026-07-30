@@ -480,17 +480,18 @@ class DefaultProductFactoryStageRunner:
         )
 
     def upload_listing_images(self, job: ProductionJob) -> Any:
-        """Upload the final customer PNGs as Etsy listing images."""
+        """Upload generated Etsy listing preview images."""
         from project_aurora.integrations.etsy.etsy_image_upload_service import (
             EtsyImageUploadService,
         )
 
         self._refresh_etsy_config()
         job_paths = self.job_paths(job)
+        listing_files = _ensure_listing_previews(job, job_paths)
         return EtsyImageUploadService(
             config=self._etsy_config,
             memory=self._memory,
-            images_dir=job_paths.final_images_dir,
+            images_dir=job_paths.listing_images_dir,
         ).upload_latest_draft_images()
 
     def upload_customer_downloads(self, job: ProductionJob, listing_id: str | None) -> Any:
@@ -1067,6 +1068,55 @@ def _asset_filename_prefix(job: ProductionJob) -> str:
     job_short = _slug_part(job.id)[:8] or "job"
     product = _slug_part(job.product_name) or "product"
     return f"{job_short}_{product}"
+
+
+def _ensure_listing_previews(
+    job: ProductionJob,
+    job_paths: ProductFactoryJobPaths,
+) -> tuple[Path, ...]:
+    """Create or reuse job-scoped Etsy listing preview PNGs."""
+    existing = _valid_existing_listing_previews(job_paths.listing_images_dir)
+    if existing is not None:
+        print("Listing previews reused")
+        print(len(existing))
+        return existing
+
+    from project_aurora.image_generation.listing_preview_exporter import (
+        ListingPreviewExporter,
+    )
+
+    job_paths.listing_images_dir.mkdir(parents=True, exist_ok=True)
+    for path in job_paths.listing_images_dir.glob("*.png"):
+        path.unlink()
+    result = ListingPreviewExporter(
+        final_images_dir=job_paths.final_images_dir,
+        output_dir=job_paths.listing_images_dir,
+        output_prefix=_asset_filename_prefix(job),
+        storybook_scenes_dir=job_paths.storybook_scenes_dir,
+        required_count=4,
+        product_category=job.category,
+        niche_theme=job.product_name,
+        intended_customer=job.target_customer,
+    ).export()
+    if result.status != "SUCCESS":
+        raise RuntimeError("; ".join(result.errors) or "Listing preview generation failed.")
+    print("Listing previews generated")
+    print(len(result.preview_files))
+    return tuple(Path(path) for path in result.preview_files)
+
+
+def _valid_existing_listing_previews(listing_images_dir: Path) -> tuple[Path, ...] | None:
+    """Return existing valid listing previews, or None when regeneration is needed."""
+    if not listing_images_dir.exists():
+        return None
+    files = tuple(sorted(listing_images_dir.glob("*.png"), key=lambda path: path.name))
+    if not 4 <= len(files) <= 10:
+        return None
+    from project_aurora.image_generation.image_inspector import inspect_png
+
+    if all(inspect_png(path).is_valid for path in files):
+        return files
+    return None
 
 
 def _simple_clipart_prompt(job: ProductionJob, canonical_product_type: str) -> str:

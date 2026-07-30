@@ -637,7 +637,7 @@ class ProductFactoryTest(unittest.TestCase):
         self.assertEqual(len(captured["source_files"]), 4)
         self.assertEqual(captured["product_family"], "CLIPART")
 
-    def test_etsy_upload_uses_only_current_job_final_images(self) -> None:
+    def test_etsy_upload_generates_listing_previews_from_current_job_final_images(self) -> None:
         captured: dict[str, object] = {}
         runner = DefaultProductFactoryStageRunner(
             memory=self.memory,
@@ -670,9 +670,10 @@ class ProductFactoryTest(unittest.TestCase):
             result = runner.upload_listing_images(self.job)
 
         self.assertEqual(result.status, "SUCCESS")
-        self.assertEqual(captured["images_dir"], job_paths.final_images_dir)
+        self.assertEqual(captured["images_dir"], job_paths.listing_images_dir)
         self.assertEqual(len(captured["files"]), 4)
         self.assertEqual(len(tuple(job_paths.final_images_dir.glob("*.png"))), 4)
+        self.assertEqual(len(tuple(job_paths.listing_images_dir.glob("*.png"))), 4)
 
     def test_customer_download_uploads_four_pngs_and_zip(self) -> None:
         captured: dict[str, object] = {}
