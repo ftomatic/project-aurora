@@ -41,7 +41,9 @@ from project_aurora.production.product_factory import (  # noqa: E402
     DryRunProductFactoryStageRunner,
     ProductFactoryPaths,
     ProductFactory,
+    ProductFactoryStageError,
     _product_family_prompt,
+    _raise_if_failed,
     _storybook_scene_prompt,
     _valid_existing_listing_previews,
 )
@@ -53,6 +55,10 @@ from project_aurora.image_generation.openai_provider import (  # noqa: E402
 )
 from project_aurora.integrations.etsy.etsy_client import EtsyClient  # noqa: E402
 from project_aurora.integrations.etsy.etsy_config import EtsyConfig  # noqa: E402
+from project_aurora.integrations.etsy.etsy_result import (  # noqa: E402
+    EtsyImageUploadAttempt,
+    EtsyImageUploadResult,
+)
 from project_aurora.storage.csv_storage import CSVStorage  # noqa: E402
 from project_aurora.storage.memory_manager import MemoryManager  # noqa: E402
 from scripts.run_product_factory import (  # noqa: E402
@@ -522,9 +528,10 @@ class ProductFactoryTest(unittest.TestCase):
                 image_type = str(kwargs["image_type"])
                 files: list[str] = []
                 if image_type == "storybook_scene":
-                    path = self._output_dir / "scene.png"
-                    write_full_scene_png(path)
-                    files.append(str(path))
+                    for index in range(1, 5):
+                        path = self._output_dir / f"scene_{index}.png"
+                        write_full_scene_png(path)
+                        files.append(str(path))
                 else:
                     for index in range(1, 5):
                         path = self._output_dir / f"customer_{index}.png"
@@ -576,11 +583,11 @@ class ProductFactoryTest(unittest.TestCase):
         job_paths = runner.job_paths(self.job)
         self.assertEqual(result.status, "SUCCESS")
         self.assertEqual(len(tuple(job_paths.generated_images_dir.glob("*.png"))), 4)
-        self.assertEqual(len(tuple(job_paths.storybook_scenes_dir.glob("*.png"))), 1)
+        self.assertEqual(len(tuple(job_paths.storybook_scenes_dir.glob("*.png"))), 4)
         self.assertEqual(calls[0]["number_of_images"], 4)
         self.assertTrue(calls[0]["transparent_background"])
         self.assertEqual(calls[0]["background"], "transparent")
-        self.assertEqual(calls[1]["number_of_images"], 1)
+        self.assertEqual(calls[1]["number_of_images"], 4)
         self.assertFalse(calls[1]["transparent_background"])
         self.assertEqual(calls[1]["background"], "opaque")
 
@@ -974,6 +981,32 @@ class ProductFactoryTest(unittest.TestCase):
         self.assertEqual(len(fake_client.images.calls), 1)
         self.assertEqual(len(tuple(job_paths.generated_images_dir.glob("*.png"))), 4)
         self.assertEqual(len(tuple(job_paths.storybook_scenes_dir.glob("*.png"))), 0)
+
+    def test_failed_listing_upload_reports_attempt_error(self) -> None:
+        result = EtsyImageUploadResult(
+            status="PARTIAL_FAILURE",
+            etsy_listing_id="listing-123",
+            images_found=1,
+            images_uploaded=0,
+            failed=1,
+            attempts=(
+                EtsyImageUploadAttempt(
+                    image_path="/tmp/preview_01.png",
+                    rank=1,
+                    status="FAILED",
+                    errors=("Etsy API request failed: [Errno 32] Broken pipe",),
+                ),
+            ),
+        )
+
+        with self.assertRaises(ProductFactoryStageError) as context:
+            _raise_if_failed("listing_image_upload", result)
+
+        self.assertEqual(context.exception.stage, "listing_image_upload")
+        self.assertEqual(
+            str(context.exception),
+            "preview_01.png: Etsy API request failed: [Errno 32] Broken pipe",
+        )
 
 
 if __name__ == "__main__":

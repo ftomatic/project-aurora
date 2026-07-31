@@ -10,6 +10,7 @@ from project_aurora.integrations.etsy.etsy_config import EtsyConfig
 from project_aurora.integrations.etsy.etsy_listing_image_policy import (
     MAX_LISTING_IMAGES,
     MIN_LISTING_IMAGES,
+    MIN_STORYBOOK_LISTING_IMAGES,
 )
 from project_aurora.integrations.etsy.etsy_result import (
     EtsyImageUploadAttempt,
@@ -18,6 +19,9 @@ from project_aurora.integrations.etsy.etsy_result import (
 from project_aurora.integrations.etsy.etsy_upload_manager import EtsyUploadManager
 from project_aurora.image_generation.image_inspector import inspect_png
 from project_aurora.storage.memory_manager import MemoryManager
+
+
+STORYBOOK_LISTING_FAMILY = "STORYBOOK"
 
 
 class EtsyImageUploadService:
@@ -59,9 +63,10 @@ class EtsyImageUploadService:
             errors.append("No non-empty PNG image files found.")
         if self._images_dir.name not in {"final_product_images", "listing_images"}:
             errors.append("Etsy image upload must use final_product_images or listing_images only.")
-        if image_files and not self._min_image_count <= len(image_files) <= self._max_images:
+        minimum = self._resolved_min_image_count()
+        if image_files and not minimum <= len(image_files) <= self._max_images:
             errors.append(
-                f"Etsy listing images must contain between {self._min_image_count} "
+                f"Etsy listing images must contain between {minimum} "
                 f"and {self._max_images} PNG files, found {len(image_files)}."
             )
         if invalid_images:
@@ -185,6 +190,25 @@ class EtsyImageUploadService:
             for path in sorted(self._images_dir.glob("*.png"), key=lambda p: p.name)
             if path.is_file() and path.stat().st_size > 0
         ]
+
+    def _resolved_min_image_count(self) -> int:
+        if self._listing_family() == STORYBOOK_LISTING_FAMILY:
+            return MIN_STORYBOOK_LISTING_IMAGES
+        return self._min_image_count
+
+    def _listing_family(self) -> str:
+        manifest_path = self._images_dir / "preview_manifest.json"
+        if not manifest_path.exists():
+            return ""
+        try:
+            import json
+
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return ""
+        if not isinstance(manifest, dict):
+            return ""
+        return str(manifest.get("listing_family") or "").strip().upper()
 
     @staticmethod
     def _invalid_images(image_files: list[Path]) -> tuple[str, ...]:

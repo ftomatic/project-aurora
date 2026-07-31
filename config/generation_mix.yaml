@@ -1,0 +1,9 @@
+# Aurora generation-family mix targets for AUTO mode.
+
+generation_mix:
+  storybook: 50
+  clipart: 25
+  characters: 10
+  botanical: 10
+  digital_paper: 5
+  wedding: 0

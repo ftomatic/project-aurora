@@ -86,6 +86,22 @@ class EtsyClient:
             return tuple(item for item in results if isinstance(item, dict))
         return ()
 
+    def delete_listing_image(
+        self,
+        listing_id: str,
+        image_id: str,
+    ) -> dict[str, Any]:
+        """Delete one image from an existing Etsy draft listing."""
+        if not self._config.shop_id:
+            raise RuntimeError("ETSY_SHOP_ID is required.")
+        return self._request_json(
+            path=(
+                f"/shops/{self._config.shop_id}/listings/"
+                f"{listing_id}/images/{image_id}"
+            ),
+            method="DELETE",
+        )
+
     def upload_listing_digital_file(
         self,
         listing_id: str,
@@ -314,6 +330,8 @@ class EtsyClient:
             raise RuntimeError(
                 f"Etsy API request failed: {error.reason}"
             ) from error
+        if not raw_body.strip():
+            return {}
         response_data = json.loads(raw_body)
         if not isinstance(response_data, dict):
             raise RuntimeError("Etsy API response was not a JSON object.")

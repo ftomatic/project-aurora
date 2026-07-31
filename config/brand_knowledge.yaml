@@ -1,0 +1,49 @@
+# RainbowMilkStudio brand-knowledge foundation.
+
+brand:
+  preferred_subjects:
+    - rabbit
+    - fox
+    - mouse
+    - bear
+    - hedgehog
+    - woodland animals
+    - mushrooms
+    - teapots
+    - garden flowers
+  preferred_themes:
+    - tea party
+    - baking
+    - gardening
+    - reading
+    - nursery
+    - cottagecore
+    - woodland homes
+  preferred_style:
+    - soft watercolor
+    - vintage storybook
+    - cottagecore
+    - warm natural lighting
+    - gentle expressions
+  preferred_palettes:
+    - sage green
+    - warm cream
+    - muted blue
+    - soft coral
+    - honey beige
+  seo_vocabulary:
+    - watercolor clipart
+    - storybook illustration
+    - woodland animals
+    - nursery decor
+    - commercial use PNG
+  target_customer:
+    - parents
+    - crafters
+    - nursery designers
+    - digital printable buyers
+  avoid_subjects:
+    - teacher worksheets
+    - typography-only products
+    - generic planners
+    - unrelated digital paper

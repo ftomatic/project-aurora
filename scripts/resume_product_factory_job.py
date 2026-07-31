@@ -30,6 +30,7 @@ from project_aurora.integrations.etsy.etsy_digital_file_service import (  # noqa
 from project_aurora.integrations.etsy.etsy_listing_image_policy import (  # noqa: E402
     MAX_LISTING_IMAGES,
     MIN_LISTING_IMAGES,
+    MIN_STORYBOOK_LISTING_IMAGES,
 )
 from project_aurora.integrations.etsy.etsy_result import (  # noqa: E402
     EtsyImageUploadAttempt,
@@ -146,7 +147,7 @@ class ProductFactoryResumeService:
                 etsy_config=self._config,
                 image_config=ImageProviderConfig.from_file(OPENAI_CONFIG_PATH),
                 existing_draft_id=listing_id,
-                resume_client=self._client,
+                client=self._client,
             )._generate_validated_storybook_scene(
                 job,
                 prompt_package,
@@ -910,9 +911,14 @@ def _valid_listing_image_files(listing_images_dir: Path) -> tuple[Path, ...]:
     if listing_images_dir.name != "listing_images":
         raise RuntimeError("Resume must use job listing_images directory.")
     files = tuple(sorted(listing_images_dir.glob("*.png"), key=lambda path: path.name))
-    if not MIN_LISTING_IMAGES <= len(files) <= MAX_LISTING_IMAGES:
+    minimum = (
+        MIN_STORYBOOK_LISTING_IMAGES
+        if _listing_manifest_family(listing_images_dir) == "STORYBOOK"
+        else MIN_LISTING_IMAGES
+    )
+    if not minimum <= len(files) <= MAX_LISTING_IMAGES:
         raise RuntimeError(
-            f"Expected between {MIN_LISTING_IMAGES} and {MAX_LISTING_IMAGES} "
+            f"Expected between {minimum} and {MAX_LISTING_IMAGES} "
             f"listing PNG files, found {len(files)}."
         )
     errors = tuple(
@@ -923,6 +929,19 @@ def _valid_listing_image_files(listing_images_dir: Path) -> tuple[Path, ...]:
     if errors:
         raise RuntimeError("Invalid listing image files: " + "; ".join(errors))
     return files
+
+
+def _listing_manifest_family(listing_images_dir: Path) -> str:
+    manifest_path = listing_images_dir / "preview_manifest.json"
+    if not manifest_path.exists():
+        return ""
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        return ""
+    if not isinstance(manifest, dict):
+        return ""
+    return str(manifest.get("listing_family") or "").strip().upper()
 
 
 def _ensure_customer_zip(final_images_dir: Path) -> Path:

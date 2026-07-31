@@ -12,8 +12,12 @@ SRC_PATH = PROJECT_ROOT / "src"
 sys.path.insert(0, str(SRC_PATH))
 
 from project_aurora.production.generation_plan import (  # noqa: E402
+    GENERATION_MODE_BOTANICAL,
+    GENERATION_MODE_CHARACTERS,
     GENERATION_MODE_CLIPART,
+    GENERATION_MODE_DIGITAL_PAPER,
     GENERATION_MODE_STORYBOOK,
+    GENERATION_MODE_WEDDING,
     GenerationPlanResolver,
 )
 
@@ -58,6 +62,22 @@ class GenerationPlanResolverTest(unittest.TestCase):
 
         self.assertEqual(plan.resolved_mode, GENERATION_MODE_STORYBOOK)
         self.assertTrue(plan.scene_required)
+
+    def test_expanded_generation_modes_are_supported_without_scene(self) -> None:
+        for mode in (
+            GENERATION_MODE_CHARACTERS,
+            GENERATION_MODE_BOTANICAL,
+            GENERATION_MODE_DIGITAL_PAPER,
+            GENERATION_MODE_WEDDING,
+        ):
+            with self.subTest(mode=mode):
+                plan = self.resolver.resolve(
+                    product_name="RainbowMilkStudio Product",
+                    listing_family=mode,
+                )
+
+                self.assertEqual(plan.resolved_mode, mode)
+                self.assertFalse(plan.scene_required)
 
 
 if __name__ == "__main__":

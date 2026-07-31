@@ -7,20 +7,23 @@ from dataclasses import dataclass, field
 from project_aurora.image_generation.listing_family_decision import (
     CLIPART_TERMS,
     LISTING_FAMILY_AUTO,
-    LISTING_FAMILY_CLIPART,
-    LISTING_FAMILY_STORYBOOK,
     STORYBOOK_TERMS,
     _matched_terms,
 )
-
-
-GENERATION_MODE_CLIPART = "CLIPART"
-GENERATION_MODE_STORYBOOK = "STORYBOOK"
-SUPPORTED_GENERATION_MODES = {
-    LISTING_FAMILY_AUTO,
+from project_aurora.production.generation_strategy import (
+    GENERATION_MODE_AUTO,
+    GENERATION_MODE_BOTANICAL,
+    GENERATION_MODE_CHARACTERS,
     GENERATION_MODE_CLIPART,
+    GENERATION_MODE_DIGITAL_PAPER,
     GENERATION_MODE_STORYBOOK,
-}
+    GENERATION_MODE_WEDDING,
+    SUPPORTED_GENERATION_STRATEGIES,
+    normalize_generation_mode,
+)
+
+
+SUPPORTED_GENERATION_MODES = SUPPORTED_GENERATION_STRATEGIES
 
 
 @dataclass(frozen=True, slots=True)
@@ -73,9 +76,15 @@ class GenerationPlanResolver:
                 decision_reason="Explicit per-product generation mode override.",
                 scene_required=True,
             )
-        if requested == GENERATION_MODE_CLIPART:
+        if requested in {
+            GENERATION_MODE_CLIPART,
+            GENERATION_MODE_CHARACTERS,
+            GENERATION_MODE_BOTANICAL,
+            GENERATION_MODE_DIGITAL_PAPER,
+            GENERATION_MODE_WEDDING,
+        }:
             return GenerationPlan(
-                resolved_mode=GENERATION_MODE_CLIPART,
+                resolved_mode=requested,
                 decision_reason="Explicit per-product generation mode override.",
                 scene_required=False,
             )
@@ -111,10 +120,7 @@ class GenerationPlanResolver:
 
 
 def _normalize_mode(value: str) -> str:
-    mode = (value or LISTING_FAMILY_AUTO).strip().upper()
-    if mode not in SUPPORTED_GENERATION_MODES:
-        raise ValueError(f"Unsupported generation mode: {value}.")
-    return mode
+    return normalize_generation_mode(value or GENERATION_MODE_AUTO or LISTING_FAMILY_AUTO)
 
 
 def _context_text(*values: str) -> str:

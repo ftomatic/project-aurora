@@ -31,6 +31,7 @@ from project_aurora.production.product_capability_resolver import (  # noqa: E40
     TEMPLATE_REQUIRED,
     ProductCapabilityResolver,
 )
+from project_aurora.production.watercolor_scope import resolve_watercolor_scope  # noqa: E402
 from project_aurora.seo.seo_engine import SEOEngine  # noqa: E402
 from project_aurora.storage.csv_storage import CSVStorage  # noqa: E402
 from project_aurora.storage.memory_manager import MemoryManager  # noqa: E402
@@ -94,6 +95,35 @@ class ProductionHardeningTest(unittest.TestCase):
 
         self.assertFalse(result.resolved)
         self.assertIn("No verified taxonomy", result.resolution_reason)
+
+    def test_wedding_printable_scope_allows_invitation_name(self) -> None:
+        result = resolve_watercolor_scope(
+            "Wildflower Wedding Invitation",
+            "wedding printable",
+        )
+
+        self.assertTrue(result.supported)
+        self.assertEqual(result.canonical_product_type, "wedding_printable")
+
+    def test_plain_invitation_without_wedding_printable_category_still_blocks(self) -> None:
+        result = resolve_watercolor_scope(
+            "Wildflower Wedding Invitation",
+            "party printable",
+        )
+
+        self.assertFalse(result.supported)
+        self.assertIn("invitation", result.reason)
+
+    def test_wedding_printable_capability_uses_regular_four_image_listing(self) -> None:
+        result = ProductCapabilityResolver().resolve(
+            "Wildflower Wedding Invitation",
+            "wedding printable",
+            "wedding printable",
+        )
+
+        self.assertTrue(result.supported)
+        self.assertEqual(result.mode, IMAGE_ONLY)
+        self.assertEqual(result.required_deliverable_count, 4)
 
     def test_pricing_uses_fixed_default(self) -> None:
         engine = PricingEngine()
@@ -172,6 +202,38 @@ class ProductionHardeningTest(unittest.TestCase):
         self.assertEqual(calls["count"], 2)
         self.assertEqual(waits, [0])
         self.assertTrue(self.memory.list_records("etsy_upload_checkpoints"))
+
+    def test_upload_manager_retries_broken_pipe_then_success(self) -> None:
+        path = self.base_path / "file.png"
+        path.write_bytes(b"png")
+        calls = {"count": 0}
+
+        def uploader() -> dict[str, str]:
+            calls["count"] += 1
+            if calls["count"] == 1:
+                raise RuntimeError("Etsy API request failed: [Errno 32] Broken pipe")
+            return {"listing_image_id": "image-1"}
+
+        waits: list[float] = []
+        manager = EtsyUploadManager(
+            memory=self.memory,
+            policy=EtsyUploadPolicy(max_attempts=4, backoff_seconds=(0, 0, 0), delay_between_files_seconds=0),
+            sleeper=lambda seconds: waits.append(seconds),
+        )
+
+        checkpoint = manager.upload_one(
+            listing_id="listing-1",
+            job_id="job-1",
+            upload_type="listing_image",
+            file_path=path,
+            rank=1,
+            uploader=uploader,
+        )
+
+        self.assertEqual(checkpoint.status, "SUCCESS")
+        self.assertEqual(checkpoint.etsy_resource_id, "image-1")
+        self.assertEqual(calls["count"], 2)
+        self.assertEqual(waits, [0])
 
     def test_upload_manager_fails_after_repeated_disconnects(self) -> None:
         path = self.base_path / "file.png"

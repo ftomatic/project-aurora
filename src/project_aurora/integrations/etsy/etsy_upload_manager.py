@@ -156,6 +156,8 @@ def _is_transient_upload_error(error: Exception) -> bool:
         for marker in (
             "remote end closed connection",
             "remote disconnected",
+            "broken pipe",
+            "errno 32",
             "timed out",
             "http 429",
             "http 500",

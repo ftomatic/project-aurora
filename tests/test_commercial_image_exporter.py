@@ -23,6 +23,11 @@ from project_aurora.production.product_image_family import (  # noqa: E402
     STORYBOOK_SCENE,
     resolve_product_image_family,
 )
+from project_aurora.production.generation_strategy import (  # noqa: E402
+    GENERATION_MODE_CHARACTERS,
+    GENERATION_MODE_DIGITAL_PAPER,
+    GENERATION_MODE_WEDDING,
+)
 
 
 def write_png(
@@ -167,6 +172,57 @@ class CommercialImageExporterTest(unittest.TestCase):
             ),
             (),
         )
+
+    def test_character_family_requires_transparent_png(self) -> None:
+        for index in range(1, 5):
+            write_png(
+                self.source_dir / f"character_{index:02d}.png",
+                (80, 120, 160, 255),
+                size=(1024, 1024),
+            )
+
+        result = CommercialImageExporter(
+            source_dir=self.source_dir,
+            output_dir=self.output_dir,
+            product_family=GENERATION_MODE_CHARACTERS,
+        ).export()
+
+        self.assertEqual(result.status, "FAILED")
+        self.assertTrue(any("TRANSPARENCY_REQUIRED" in error for error in result.errors))
+
+    def test_digital_paper_exports_as_opaque_without_clipart_transparency_rule(self) -> None:
+        for index in range(1, 5):
+            write_png(
+                self.source_dir / f"paper_{index:02d}.png",
+                (80, 120, 160, 255),
+                size=(1024, 1024),
+            )
+
+        result = CommercialImageExporter(
+            source_dir=self.source_dir,
+            output_dir=self.output_dir,
+            product_family=GENERATION_MODE_DIGITAL_PAPER,
+        ).export()
+
+        self.assertEqual(result.status, "SUCCESS")
+        self.assertEqual(validate_commercial_png(Path(result.exported_files[0]), product_family=GENERATION_MODE_DIGITAL_PAPER), ())
+
+    def test_wedding_exports_as_opaque_without_clipart_transparency_rule(self) -> None:
+        for index in range(1, 5):
+            write_png(
+                self.source_dir / f"wedding_{index:02d}.png",
+                (245, 238, 224, 255),
+                size=(1024, 1024),
+            )
+
+        result = CommercialImageExporter(
+            source_dir=self.source_dir,
+            output_dir=self.output_dir,
+            product_family=GENERATION_MODE_WEDDING,
+        ).export()
+
+        self.assertEqual(result.status, "SUCCESS")
+        self.assertEqual(validate_commercial_png(Path(result.exported_files[0]), product_family=GENERATION_MODE_WEDDING), ())
 
     def test_product_family_resolves_clipart_and_storybook_scene(self) -> None:
         clipart = resolve_product_image_family(

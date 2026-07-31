@@ -17,6 +17,12 @@ from project_aurora.image_generation.image_inspector import (
     inspect_png,
 )
 from project_aurora.production.product_image_family import CLIPART, STORYBOOK_SCENE
+from project_aurora.production.generation_strategy import (
+    GENERATION_MODE_BOTANICAL,
+    GENERATION_MODE_CHARACTERS,
+    GENERATION_MODE_DIGITAL_PAPER,
+    GENERATION_MODE_WEDDING,
+)
 
 
 COMMERCIAL_IMAGE_COUNT = 4
@@ -25,6 +31,16 @@ COMMERCIAL_IMAGE_DPI = 300
 COMMERCIAL_FILENAME_PREFIX = "aurora_watercolor_clipart"
 COMMERCIAL_ARTWORK_RATIO = 0.85
 MAX_SINGLE_PNG_SIZE_BYTES = 4_500_000
+TRANSPARENT_PRODUCT_FAMILIES = {
+    CLIPART,
+    GENERATION_MODE_CHARACTERS,
+    GENERATION_MODE_BOTANICAL,
+}
+OPAQUE_PRODUCT_FAMILIES = {
+    STORYBOOK_SCENE,
+    GENERATION_MODE_DIGITAL_PAPER,
+    GENERATION_MODE_WEDDING,
+}
 
 
 @dataclass(frozen=True, slots=True)
@@ -116,7 +132,7 @@ class CommercialImageExporter:
     def _export_one(source_path: Path, output_path: Path, product_family: str) -> None:
         with Image.open(source_path) as image:
             working = image.convert("RGBA")
-            if product_family == STORYBOOK_SCENE:
+            if product_family in OPAQUE_PRODUCT_FAMILIES:
                 working = working.resize(COMMERCIAL_IMAGE_SIZE, Image.Resampling.LANCZOS)
                 opaque = Image.new("RGBA", COMMERCIAL_IMAGE_SIZE, (255, 255, 255, 255))
                 opaque.alpha_composite(working, dest=(0, 0))
@@ -168,14 +184,14 @@ def validate_commercial_png(
         dpi = None
     if not _dpi_is_acceptable(dpi):
         errors.append("Image must include 300-DPI metadata.")
-    if product_family == CLIPART:
+    if product_family in TRANSPARENT_PRODUCT_FAMILIES:
         transparency = validate_clipart_file(path)
         if transparency.status != "PASS":
             details = "; ".join(transparency.errors) or "Transparency validation failed."
             errors.append(f"{TRANSPARENCY_REQUIRED}: {details}")
-    elif product_family == STORYBOOK_SCENE:
+    elif product_family in OPAQUE_PRODUCT_FAMILIES:
         if inspection.alpha_minimum is not None and inspection.alpha_minimum < 255:
-            errors.append("Storybook scene must keep an opaque full background.")
+            errors.append("Opaque product image must keep a full background.")
     return tuple(errors)
 
 

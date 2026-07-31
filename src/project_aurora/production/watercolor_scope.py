@@ -15,6 +15,8 @@ SUPPORTED_CANONICAL_TYPES = {
     "watercolor_seasonal_collection",
     "signature_storybook_animal_collection",
     "watercolor_sticker_illustration_set",
+    "wedding_printable",
+    "digital_print",
 }
 
 UNSUPPORTED_TERMS = (
@@ -75,6 +77,18 @@ def resolve_watercolor_scope(
     raw_text = f"{product_name} {category} {style}".casefold()
     text = raw_text.replace("_", " ").replace("-", " ")
     category_key = category.casefold().strip().replace(" ", "_").replace("-", "_")
+    if category_key == "wedding_printable":
+        return WatercolorScopeDecision(
+            True,
+            "wedding_printable",
+            "Compatible wedding printable four-image listing.",
+        )
+    if category_key == "digital_print":
+        return WatercolorScopeDecision(
+            True,
+            "digital_print",
+            "Compatible digital print four-image listing.",
+        )
     unsupported = _first_matching(text, UNSUPPORTED_TERMS)
     if unsupported and not _is_supported_sticker_illustration(text):
         return WatercolorScopeDecision(

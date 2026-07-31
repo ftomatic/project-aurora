@@ -43,6 +43,17 @@ class FakeResponse:
         return json.dumps(self._payload).encode("utf-8")
 
 
+class EmptyFakeResponse:
+    def __enter__(self) -> "EmptyFakeResponse":
+        return self
+
+    def __exit__(self, *args: object) -> None:
+        return None
+
+    def read(self) -> bytes:
+        return b""
+
+
 def make_visible_png_bytes(color: tuple[int, int, int, int] = (255, 0, 0, 255)) -> bytes:
     output = BytesIO()
     Image.new("RGBA", (2, 2), color).save(output, format="PNG")
@@ -156,6 +167,30 @@ class EtsyImageUploadTest(unittest.TestCase):
         self.assertIn("/listings/123456789/images", calls[0][0].full_url)
         self.assertNotIn("/shops/shop-id/listings/123456789/images", calls[0][0].full_url)
 
+    def test_client_deletes_listing_image_with_shop_endpoint(self) -> None:
+        calls = []
+
+        def fake_urlopen(api_request, timeout: int):  # type: ignore[no-untyped-def]
+            calls.append((api_request, timeout))
+            return EmptyFakeResponse()
+
+        response = EtsyClient(
+            config=self.config,
+            urlopen=fake_urlopen,
+        ).delete_listing_image(
+            listing_id="123456789",
+            image_id="image-456",
+        )
+
+        self.assertEqual(response, {})
+        self.assertEqual(len(calls), 1)
+        api_request = calls[0][0]
+        self.assertEqual(api_request.get_method(), "DELETE")
+        self.assertIn(
+            "/shops/shop-id/listings/123456789/images/image-456",
+            api_request.full_url,
+        )
+
     def test_service_uploads_sorted_png_images_to_latest_draft(self) -> None:
         (self.images_dir / "b.png").write_bytes(make_visible_png_bytes())
         (self.images_dir / "a.png").write_bytes(make_visible_png_bytes())
@@ -211,6 +246,32 @@ class EtsyImageUploadTest(unittest.TestCase):
         self.assertEqual(result.images_found, 5)
         self.assertEqual(result.images_uploaded, 5)
         self.assertEqual(len(calls), 6)
+
+    def test_service_accepts_four_storybook_listing_images(self) -> None:
+        self.images_dir = self.base_path / "listing_images"
+        self.images_dir.mkdir()
+        for index in range(1, 5):
+            (self.images_dir / f"scene_{index}.png").write_bytes(make_visible_png_bytes())
+        (self.images_dir / "preview_manifest.json").write_text(
+            '{"listing_family": "STORYBOOK"}',
+            encoding="utf-8",
+        )
+        calls = []
+
+        def fake_urlopen(api_request, timeout: int):  # type: ignore[no-untyped-def]
+            calls.append(api_request)
+            return FakeResponse({"listing_image_id": len(calls)})
+
+        result = EtsyImageUploadService(
+            config=self.config,
+            memory=self.memory,
+            images_dir=self.images_dir,
+            client=EtsyClient(config=self.config, urlopen=fake_urlopen),
+        ).upload_latest_draft_images()
+
+        self.assertEqual(result.status, "SUCCESS")
+        self.assertEqual(result.images_found, 4)
+        self.assertEqual(result.images_uploaded, 4)
 
     def test_service_accepts_ten_listing_images(self) -> None:
         for index in range(10):

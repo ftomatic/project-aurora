@@ -79,7 +79,8 @@ class ListingPreviewExporter:
             return ListingPreviewExportResult(status="FAILED", errors=errors)
         self._output_dir.mkdir(parents=True, exist_ok=True)
         preview_files: list[str] = []
-        scene_file = self._storybook_scene_file()
+        scene_files = self._storybook_scene_files()
+        scene_file = scene_files[0] if scene_files else None
         decision = self._decision_engine.decide(
             listing_family=self._listing_family,
             product_category=self._product_category,
@@ -91,19 +92,31 @@ class ListingPreviewExporter:
         listing_family = decision.selected_family
         start_index = 1
         if listing_family == LISTING_FAMILY_STORYBOOK:
-            output_path = self._output_dir / f"{self._output_prefix}_preview_01.png"
-            assert scene_file is not None
-            try:
-                self.render_storybook_primary_preview(scene_file, output_path)
-            except RuntimeError as error:
-                return ListingPreviewExportResult(status="FAILED", errors=(str(error),))
-            preview_files.append(str(output_path))
-            start_index = 2
+            for index, storybook_scene in enumerate(scene_files, start=1):
+                output_path = self._output_dir / f"{self._output_prefix}_preview_{index:02d}.png"
+                try:
+                    self.render_storybook_primary_preview(storybook_scene, output_path)
+                except RuntimeError as error:
+                    return ListingPreviewExportResult(status="FAILED", errors=(str(error),))
+                preview_files.append(str(output_path))
+            self._write_manifest(preview_files, listing_family, scene_file, scene_files)
+            return ListingPreviewExportResult(
+                status="SUCCESS",
+                preview_files=tuple(preview_files),
+            )
         for index, source_path in enumerate(source_files, start=start_index):
             output_path = self._output_dir / f"{self._output_prefix}_preview_{index:02d}.png"
-            self._export_one(source_path, output_path)
+            if listing_family == LISTING_FAMILY_STORYBOOK and scene_file is not None:
+                self.render_storybook_supporting_preview(
+                    source_path,
+                    scene_file,
+                    output_path,
+                    index=index,
+                )
+            else:
+                self._export_one(source_path, output_path)
             preview_files.append(str(output_path))
-        self._write_manifest(preview_files, listing_family, scene_file)
+        self._write_manifest(preview_files, listing_family, scene_file, scene_files)
         return ListingPreviewExportResult(status="SUCCESS", preview_files=tuple(preview_files))
 
     def _source_files(self) -> tuple[Path, ...]:
@@ -112,10 +125,13 @@ class ListingPreviewExporter:
         return tuple(sorted(self._final_images_dir.glob("*.png"), key=lambda item: item.name))
 
     def _storybook_scene_file(self) -> Path | None:
+        scene_files = self._storybook_scene_files()
+        return scene_files[0] if scene_files else None
+
+    def _storybook_scene_files(self) -> tuple[Path, ...]:
         if self._storybook_scenes_dir is None or not self._storybook_scenes_dir.exists():
-            return None
-        scenes = tuple(sorted(self._storybook_scenes_dir.glob("*.png"), key=lambda item: item.name))
-        return scenes[0] if scenes else None
+            return ()
+        return tuple(sorted(self._storybook_scenes_dir.glob("*.png"), key=lambda item: item.name))
 
     def _validate_sources(self, source_files: tuple[Path, ...]) -> tuple[str, ...]:
         errors: list[str] = []
@@ -156,16 +172,37 @@ class ListingPreviewExporter:
                 )
             canvas.save(output_path, format="PNG", dpi=(PREVIEW_DPI, PREVIEW_DPI))
 
+    @staticmethod
+    def render_storybook_supporting_preview(
+        source_path: Path,
+        scene_path: Path,
+        output_path: Path,
+        *,
+        index: int,
+    ) -> None:
+        """Render supporting STORYBOOK previews as full-canvas scene imagery."""
+        del source_path
+        with Image.open(scene_path) as scene_image:
+            canvas = _storybook_scene_background(scene_image.convert("RGBA"), index=index)
+            canvas.save(output_path, format="PNG", dpi=(PREVIEW_DPI, PREVIEW_DPI))
+
     def _write_manifest(
         self,
         preview_files: list[str],
         listing_family: str,
         scene_file: Path | None,
+        scene_files: tuple[Path, ...] = (),
     ) -> None:
         manifest = {
             "listing_family": listing_family,
             "art_direction_fingerprint": self._art_direction_fingerprint,
             "primary_preview_source": str(scene_file) if scene_file else "",
+            "storybook_scene_sources": [str(path) for path in scene_files],
+            "preview_renderer": (
+                "STORYBOOK_NATURE_FULL_CANVAS"
+                if listing_family == LISTING_FAMILY_STORYBOOK
+                else "CLIPART_TRANSPARENCY_PREVIEW"
+            ),
             "preview_files": [Path(path).name for path in preview_files],
         }
         (self._output_dir / "preview_manifest.json").write_text(
@@ -198,6 +235,35 @@ def _paper_texture() -> Image.Image:
             width=1,
         )
     return canvas
+
+
+def _storybook_scene_background(scene: Image.Image, *, index: int) -> Image.Image:
+    """Create a full-canvas nature/storybook background for supporting previews."""
+    from PIL import ImageEnhance
+
+    background = _cover_image(_scene_variant(scene, index=index), PREVIEW_SIZE)
+    background = ImageEnhance.Color(background).enhance(1.03)
+    background = ImageEnhance.Brightness(background).enhance(1.01)
+    return background
+
+
+def _scene_variant(scene: Image.Image, *, index: int) -> Image.Image:
+    """Return a gentle full-scene crop variant without adding graphic elements."""
+    source = scene.convert("RGBA")
+    width, height = source.size
+    crop_ratio = 0.92 if index % 2 == 0 else 0.96
+    crop_width = max(1, int(width * crop_ratio))
+    crop_height = max(1, int(height * crop_ratio))
+    offsets = {
+        2: (0.04, 0.02),
+        3: (0.00, 0.04),
+        4: (0.08, 0.05),
+        5: (0.03, 0.08),
+    }
+    ox, oy = offsets.get(index, (0.04, 0.04))
+    left = min(width - crop_width, max(0, int(width * ox)))
+    top = min(height - crop_height, max(0, int(height * oy)))
+    return source.crop((left, top, left + crop_width, top + crop_height))
 
 
 def _cover_image(image: Image.Image, size: tuple[int, int]) -> Image.Image:

@@ -120,7 +120,7 @@ class ProductionResetTest(unittest.TestCase):
             )
 
         self.assertEqual(raised.exception.stage, "storybook_acceptance_gate")
-        self.assertIn("Expected exactly one storybook scene", str(raised.exception))
+        self.assertIn("Expected exactly 4 storybook scenes", str(raised.exception))
 
     def test_storybook_acceptance_gate_passes_complete_clean_assets(self) -> None:
         job = _acceptance_job("job-pass")
@@ -129,8 +129,9 @@ class ProductionResetTest(unittest.TestCase):
         paths.storybook_scenes_dir.mkdir(parents=True)
         for index in range(1, 5):
             _write_transparent_png(paths.final_images_dir / f"customer_{index}.png")
-        scene_path = paths.storybook_scenes_dir / "scene.png"
-        _write_opaque_scene(scene_path)
+        scene_path = paths.storybook_scenes_dir / "scene_01.png"
+        for index in range(1, 5):
+            _write_opaque_scene(paths.storybook_scenes_dir / f"scene_{index:02d}.png")
         art_package = build_art_direction_package(
             product_name=job.product_name,
             product_category=job.category,
@@ -151,10 +152,12 @@ class ProductionResetTest(unittest.TestCase):
             },
         )
 
-        self.assertEqual(len(tuple(paths.listing_images_dir.glob("*.png"))), 5)
+        self.assertEqual(len(tuple(paths.listing_images_dir.glob("*.png"))), 4)
         manifest = json.loads((paths.listing_images_dir / "preview_manifest.json").read_text())
         self.assertEqual(manifest["primary_preview_source"], str(scene_path))
         self.assertEqual(manifest["art_direction_fingerprint"], art_package.fingerprint)
+        self.assertEqual(manifest["preview_renderer"], "STORYBOOK_NATURE_FULL_CANVAS")
+        self.assertEqual(len(manifest["storybook_scene_sources"]), 4)
 
 
 def _acceptance_job(job_id: str) -> ProductionJob:

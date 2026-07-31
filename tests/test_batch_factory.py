@@ -24,6 +24,9 @@ from project_aurora.planning.production_queue_manager import (  # noqa: E402
     ProductionQueueManager,
 )
 from project_aurora.production.product_factory import REPORT_COLLECTION  # noqa: E402
+from project_aurora.production.generation_strategy import (  # noqa: E402
+    GENERATION_MODE_STORYBOOK,
+)
 from project_aurora.production.production_report import ProductionReport  # noqa: E402
 from project_aurora.storage.csv_storage import CSVStorage  # noqa: E402
 from project_aurora.storage.memory_manager import MemoryManager  # noqa: E402
@@ -31,6 +34,7 @@ from scripts.run_batch_factory import (  # noqa: E402
     BatchProductionFactory,
     BatchRuntimeConfig,
     _build_batch_report,
+    _job_with_generation_strategy,
     load_batch_runtime_config,
     parse_args,
     print_batch_report,
@@ -122,6 +126,18 @@ class FakeBatchStageRunner:
         )
 
 
+class CapturingBatchStageRunner(FakeBatchStageRunner):
+    """No-network runner that records generation evidence on each stage call."""
+
+    def __init__(self, captured: list[tuple[str, ...]]) -> None:
+        super().__init__()
+        self._captured = captured
+
+    def compose_prompts(self, job: ProductionJob) -> object:
+        self._captured.append(job.source_evidence)
+        return super().compose_prompts(job)
+
+
 class BatchFactoryTest(unittest.TestCase):
     def setUp(self) -> None:
         self.temp_dir = tempfile.TemporaryDirectory()
@@ -193,6 +209,33 @@ class BatchFactoryTest(unittest.TestCase):
         self.assertEqual(report.skipped, 0)
         self.assertEqual(report.drafts_created, 0)
         self.assertEqual(report.draft_ids, ())
+
+    def test_generation_mode_override_is_passed_to_product_factory_job(self) -> None:
+        self.add_jobs(1)
+        captured: list[tuple[str, ...]] = []
+
+        report = BatchProductionFactory(
+            queue_manager=self.queue,
+            memory=self.memory,
+            stage_runner_factory=lambda _job: CapturingBatchStageRunner(captured),
+            generation_mode="storybook",
+        ).run(1)
+
+        self.assertEqual(report.completed, 1)
+        self.assertTrue(captured)
+        self.assertIn(f"generation_mode={GENERATION_MODE_STORYBOOK}", captured[0])
+        self.assertIn(f"listing_family={GENERATION_MODE_STORYBOOK}", captured[0])
+
+    def test_mode_override_uses_compatible_effective_category(self) -> None:
+        job = make_job(1)
+
+        digital_job = _job_with_generation_strategy(job, "digital-paper")
+        character_job = _job_with_generation_strategy(job, "characters")
+        wedding_job = _job_with_generation_strategy(job, "wedding")
+
+        self.assertEqual(digital_job.category, "digital print")
+        self.assertEqual(character_job.category, "clipart")
+        self.assertEqual(wedding_job.category, "wedding printable")
 
     def test_failed_job_is_not_promoted_without_retry_policy(self) -> None:
         self.queue.add_existing_job(make_job(1, status=FAILED))

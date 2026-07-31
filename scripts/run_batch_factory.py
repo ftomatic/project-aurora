@@ -37,6 +37,16 @@ from project_aurora.production.product_factory import (  # noqa: E402
     ProductFactory,
     ProductFactoryStageRunner,
 )
+from project_aurora.production.generation_strategy import (  # noqa: E402
+    GENERATION_MODE_AUTO,
+    GENERATION_MODE_BOTANICAL,
+    GENERATION_MODE_CHARACTERS,
+    GENERATION_MODE_CLIPART,
+    GENERATION_MODE_DIGITAL_PAPER,
+    GENERATION_MODE_WEDDING,
+    GenerationStrategyResolver,
+    normalize_generation_mode,
+)
 from project_aurora.production.production_report import (  # noqa: E402
     ProductionReport,
 )
@@ -69,6 +79,7 @@ REAL_QUEUE_PATH = (
 DAILY_FACTORY_CONFIG_PATH = PROJECT_ROOT / "config" / "daily_factory.yaml"
 LOCAL_ENV_PATH = PROJECT_ROOT / "config" / "aurora.local.env"
 RESEARCH_CONFIG_PATH = PROJECT_ROOT / "config" / "research.yaml"
+GENERATION_MIX_CONFIG_PATH = PROJECT_ROOT / "config" / "generation_mix.yaml"
 
 
 @dataclass(frozen=True, slots=True)
@@ -131,6 +142,7 @@ class BatchProductionFactory:
         sleeper: Callable[[float], None] = sleep,
         auto_refill_queue: bool = True,
         queue_refill: Callable[[ProductionQueueManager, int], int] | None = None,
+        generation_mode: str = GENERATION_MODE_AUTO,
     ) -> None:
         self._queue_manager = queue_manager
         self._memory = memory
@@ -140,6 +152,7 @@ class BatchProductionFactory:
         self._sleeper = sleeper
         self._auto_refill_queue = auto_refill_queue
         self._queue_refill = queue_refill
+        self._generation_mode = normalize_generation_mode(generation_mode)
 
     def run(self, count: int) -> BatchFactoryReport:
         """Run up to count ready jobs, continuing after individual failures."""
@@ -173,14 +186,18 @@ class BatchProductionFactory:
             print(f"{job.id} - {job.product_name}")
             if previous_generated_images and self._image_delay_seconds > 0:
                 self._sleeper(self._image_delay_seconds)
+            effective_job = _job_with_generation_strategy(
+                job,
+                self._generation_mode,
+            )
             factory = ProductFactory(
                 queue_manager=self._queue_manager,
                 memory=self._memory,
-                stage_runner=self._stage_runner_factory(job),
+                stage_runner=self._stage_runner_factory(effective_job),
                 dry_run=False,
                 save_report=self._save_report,
             )
-            report = factory.execute(job)
+            report = factory.execute(effective_job)
             if not isinstance(report, ProductionReport):
                 raise RuntimeError(
                     "ProductFactory.execute() did not return a ProductionReport."
@@ -311,6 +328,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default=1,
         help="Maximum number of ready jobs to process.",
     )
+    parser.add_argument(
+        "--mode",
+        default="auto",
+        choices=("auto", "storybook", "clipart", "characters", "botanical", "digital-paper", "wedding"),
+        help="Generation mode override for this run.",
+    )
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument(
         "--dry-run",
@@ -331,13 +354,21 @@ def main(argv: list[str] | None = None) -> None:
     dry_run = not args.live
     if dry_run:
         with tempfile.TemporaryDirectory() as temp_dir:
-            report = _run_dry_batch(count=args.count, temp_dir=Path(temp_dir))
+            report = _run_dry_batch(
+                count=args.count,
+                temp_dir=Path(temp_dir),
+                generation_mode=args.mode,
+            )
     else:
-        report = _run_live_batch(count=args.count)
+        report = _run_live_batch(count=args.count, generation_mode=args.mode)
     print_batch_report(report)
 
 
-def _run_dry_batch(count: int, temp_dir: Path) -> BatchFactoryReport:
+def _run_dry_batch(
+    count: int,
+    temp_dir: Path,
+    generation_mode: str = GENERATION_MODE_AUTO,
+) -> BatchFactoryReport:
     real_queue = ProductionQueueManager(queue_path=REAL_QUEUE_PATH)
     queue_manager = ProductionQueueManager(queue_path=temp_dir / "queue.json")
     for job in real_queue.list_jobs():
@@ -348,10 +379,14 @@ def _run_dry_batch(count: int, temp_dir: Path) -> BatchFactoryReport:
         memory=memory,
         stage_runner_factory=lambda _job: DryRunProductFactoryStageRunner(),
         save_report=False,
+        generation_mode=generation_mode,
     ).run(count)
 
 
-def _run_live_batch(count: int) -> BatchFactoryReport:
+def _run_live_batch(
+    count: int,
+    generation_mode: str = GENERATION_MODE_AUTO,
+) -> BatchFactoryReport:
     loaded_env = load_local_env(LOCAL_ENV_PATH)
     print("OpenAI API Key Loaded")
     print("YES" if "OPENAI_API_KEY" in loaded_env else "NO")
@@ -394,7 +429,9 @@ def _run_live_batch(count: int) -> BatchFactoryReport:
             manager,
             memory,
             requested,
+            generation_mode=generation_mode,
         ),
+        generation_mode=generation_mode,
     ).run(count)
 
 
@@ -402,6 +439,7 @@ def refill_queue_from_research(
     queue_manager: ProductionQueueManager,
     memory: MemoryManager,
     requested_count: int,
+    generation_mode: str = GENERATION_MODE_AUTO,
 ) -> int:
     """Run Athena/Atlas and persist new READY jobs for continuous production."""
     config = ResearchPlannerConfig.from_file(RESEARCH_CONFIG_PATH)
@@ -426,6 +464,7 @@ def refill_queue_from_research(
     candidates = build_brand_profile_portfolio_candidates(
         research.opportunities,
         target_count=max(config.daily_products * 4, 50),
+        generation_mode=generation_mode,
     )
     if not candidates:
         print("Products selected")
@@ -452,7 +491,52 @@ def refill_queue_from_research(
         queue_manager,
         fallback_opportunities=candidates,
         target_new_jobs=config.daily_products,
+        generation_mode=generation_mode,
     )
+
+
+def _job_with_generation_strategy(
+    job: ProductionJob,
+    generation_mode: str,
+) -> ProductionJob:
+    """Return a job carrying a runtime generation-mode override."""
+    mode = normalize_generation_mode(generation_mode)
+    if mode == GENERATION_MODE_AUTO:
+        return job
+    decision = GenerationStrategyResolver.from_file(GENERATION_MIX_CONFIG_PATH).resolve(
+        product_name=job.product_name,
+        product_category=job.category,
+        keywords=job.keywords,
+        requested_mode=mode,
+    )
+    evidence = tuple(
+        item
+        for item in job.source_evidence
+        if not str(item).strip().casefold().startswith(
+            ("generation_mode=", "listing_family=", "generation_strategy_")
+        )
+    )
+    return replace(
+        job,
+        category=_category_for_generation_mode(job.category, mode),
+        source_evidence=evidence + decision.source_evidence(),
+    )
+
+
+def _category_for_generation_mode(current_category: str, generation_mode: str) -> str:
+    """Return a compatible effective category for runtime mode overrides."""
+    mode = normalize_generation_mode(generation_mode)
+    if mode == GENERATION_MODE_DIGITAL_PAPER:
+        return "digital print"
+    if mode == GENERATION_MODE_WEDDING:
+        return "wedding printable"
+    if mode in {
+        GENERATION_MODE_CHARACTERS,
+        GENERATION_MODE_BOTANICAL,
+        GENERATION_MODE_CLIPART,
+    }:
+        return "clipart"
+    return current_category
 
 
 def load_batch_runtime_config(path: Path) -> BatchRuntimeConfig:

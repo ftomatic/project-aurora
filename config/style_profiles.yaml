@@ -1,0 +1,38 @@
+# Reusable RainbowMilkStudio style profiles.
+
+styles:
+  woodland_whimsy:
+    name: Woodland Whimsy
+    palette: sage green, warm cream, muted blue, soft coral
+    rendering: vintage watercolor and soft gouache
+    mood: cozy storybook woodland
+  vintage_botanical:
+    name: Vintage Botanical
+    palette: cream, moss, dusty rose, sepia ink
+    rendering: delicate watercolor botanicals
+    mood: quiet cottage garden
+  french_cottage:
+    name: French Cottage
+    palette: ivory, sage, lavender, warm terracotta
+    rendering: hand-painted watercolor
+    mood: romantic countryside
+  coquette:
+    name: Coquette
+    palette: blush pink, cream, soft red, pearl
+    rendering: delicate watercolor and ribbons
+    mood: sweet vintage charm
+  pastel_halloween:
+    name: Pastel Halloween
+    palette: pumpkin cream, lavender, mint, soft black
+    rendering: cute watercolor characters
+    mood: gentle seasonal magic
+  vintage_christmas:
+    name: Vintage Christmas
+    palette: cranberry, pine, cream, antique gold
+    rendering: nostalgic watercolor storybook
+    mood: warm holiday nostalgia
+  watercolor_nursery:
+    name: Watercolor Nursery
+    palette: warm cream, sage, muted blue, soft peach
+    rendering: soft watercolor baby animals
+    mood: tender nursery storybook

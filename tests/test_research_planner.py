@@ -20,6 +20,9 @@ from project_aurora.planning.production_queue_manager import (  # noqa: E402
     FAILED,
     ProductionQueueManager,
 )
+from project_aurora.production.generation_strategy import (  # noqa: E402
+    GENERATION_MODE_STORYBOOK,
+)
 from project_aurora.portfolio.atlas_portfolio_manager import (  # noqa: E402
     AtlasPortfolioManager,
 )
@@ -333,11 +336,17 @@ class ResearchPlannerTest(unittest.TestCase):
             memory=self.memory,
         ).build_portfolio(opportunities)
 
-        created = handoff_to_forge(plan, self.queue)
+        created = handoff_to_forge(plan, self.queue, generation_mode="storybook")
 
         self.assertEqual(created, 5)
         self.assertEqual(len(self.queue.list_jobs()), 5)
         self.assertTrue(all(job.status == "READY" for job in self.queue.list_jobs()))
+        self.assertTrue(
+            all(
+                f"generation_mode={GENERATION_MODE_STORYBOOK}" in job.source_evidence
+                for job in self.queue.list_jobs()
+            )
+        )
 
     def test_handoff_uses_fallback_candidates_when_selected_products_already_exist(self) -> None:
         existing = opportunity(
@@ -417,6 +426,42 @@ class ResearchPlannerTest(unittest.TestCase):
         self.assertIn("Teacher Boho Rainbow Decor", output.getvalue())
         self.assertIn("Products Filtered", output.getvalue())
 
+    def test_explicit_digital_paper_mode_selects_digital_paper_candidates(self) -> None:
+        opportunities = (
+            opportunity(
+                0,
+                product_name="Rabbit Gardening Watercolor Clipart",
+                niche="Woodland",
+                product_type="clipart",
+                style="Storybook Watercolor",
+            ),
+            opportunity(
+                1,
+                product_name="Vintage Lace Digital Paper",
+                niche="Digital Paper",
+                product_type="digital paper",
+                style="Vintage Botanical",
+            ),
+            opportunity(
+                2,
+                product_name="Moon Star Digital Paper",
+                niche="Digital Paper",
+                product_type="digital paper",
+                style="Soft Nursery",
+            ),
+        )
+
+        candidates = build_brand_profile_portfolio_candidates(
+            opportunities,
+            target_count=5,
+            generation_mode="digital-paper",
+        )
+
+        names = {candidate.keyword for candidate in candidates}
+        self.assertIn("Vintage Lace Digital Paper", names)
+        self.assertIn("Moon Star Digital Paper", names)
+        self.assertNotIn("Rabbit Gardening Watercolor Clipart", names)
+
     def test_handoff_logs_skipped_products_and_counts_attempts(self) -> None:
         opportunities = (
             opportunity(
@@ -440,6 +485,85 @@ class ResearchPlannerTest(unittest.TestCase):
         self.assertIn("Teacher Boho Rainbow Decor", output.getvalue())
         self.assertIn("SKIPPED", output.getvalue())
         self.assertIn("Unsupported recovery product type: teacher", output.getvalue())
+
+    def test_handoff_explicit_digital_paper_uses_digital_print_category(self) -> None:
+        opportunities = (
+            opportunity(
+                1,
+                product_name="Vintage Lace Digital Paper",
+                niche="Digital Paper",
+                product_type="digital paper",
+                style="Vintage Botanical",
+            ),
+        )
+        plan = AtlasPortfolioManager(
+            config=self.config(daily_products=1, minimum_confidence=85),
+            queue_manager=self.queue,
+            memory=self.memory,
+        ).build_portfolio(opportunities)
+
+        created = handoff_to_forge(
+            plan,
+            self.queue,
+            generation_mode="digital-paper",
+        )
+
+        self.assertEqual(created, 1)
+        job = self.queue.list_jobs()[0]
+        self.assertEqual(job.category, "digital print")
+        self.assertIn("generation_mode=DIGITAL_PAPER", job.source_evidence)
+
+    def test_explicit_wedding_mode_selects_printable_wedding_candidates(self) -> None:
+        opportunities = (
+            opportunity(
+                0,
+                product_name="Hedgehog Tea Party Watercolor Clipart",
+                niche="Woodland",
+                product_type="clipart",
+                style="Storybook Watercolor",
+            ),
+            opportunity(
+                1,
+                product_name="Coquette Bow Bridal Clipart",
+                niche="Wedding",
+                product_type="clipart",
+                style="Coquette",
+            ),
+            opportunity(
+                2,
+                product_name="Vintage Lace Digital Paper",
+                niche="Wedding",
+                product_type="digital paper",
+                style="Victorian",
+            ),
+            opportunity(
+                3,
+                product_name="Wildflower Wedding Invitation",
+                niche="Wedding",
+                product_type="party printable",
+                style="Vintage Botanical",
+            ),
+            opportunity(
+                4,
+                product_name="French Country Wedding Menu",
+                niche="Wedding",
+                product_type="party printable",
+                style="French Country",
+            ),
+        )
+
+        candidates = build_brand_profile_portfolio_candidates(
+            opportunities,
+            target_count=5,
+            generation_mode="wedding",
+        )
+
+        names = {candidate.keyword for candidate in candidates}
+        self.assertIn("Wildflower Wedding Invitation", names)
+        self.assertIn("French Country Wedding Menu", names)
+        self.assertNotIn("Hedgehog Tea Party Watercolor Clipart", names)
+        self.assertNotIn("Coquette Bow Bridal Clipart", names)
+        self.assertNotIn("Vintage Lace Digital Paper", names)
 
     def test_four_selected_with_confidence_pass_uses_replacement_search(self) -> None:
         opportunities = (

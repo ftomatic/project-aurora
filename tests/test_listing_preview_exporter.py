@@ -5,6 +5,7 @@ from __future__ import annotations
 import sys
 import tempfile
 import unittest
+import json
 from pathlib import Path
 
 from PIL import Image, ImageDraw
@@ -81,7 +82,8 @@ class ListingPreviewExporterTest(unittest.TestCase):
     def test_storybook_scene_becomes_primary_listing_preview(self) -> None:
         scene_dir = self.base_path / "storybook_scenes"
         scene_dir.mkdir()
-        write_storybook_scene(scene_dir / "fox_garden_scene.png")
+        for index in range(1, 5):
+            write_storybook_scene(scene_dir / f"fox_garden_scene_{index}.png")
 
         result = ListingPreviewExporter(
             final_images_dir=self.final_dir,
@@ -91,9 +93,8 @@ class ListingPreviewExporterTest(unittest.TestCase):
         ).export()
 
         self.assertEqual(result.status, "SUCCESS")
-        self.assertEqual(len(result.preview_files), 5)
+        self.assertEqual(len(result.preview_files), 4)
         self.assertEqual(Path(result.preview_files[0]).name, "fox_garden_preview_01.png")
-        self.assertEqual(Path(result.preview_files[1]).name, "fox_garden_preview_02.png")
 
     def test_clipart_family_ignores_existing_storybook_scene(self) -> None:
         scene_dir = self.base_path / "storybook_scenes"
@@ -126,7 +127,8 @@ class ListingPreviewExporterTest(unittest.TestCase):
     def test_storybook_primary_scene_occupies_most_canvas(self) -> None:
         scene_dir = self.base_path / "storybook_scenes"
         scene_dir.mkdir()
-        write_storybook_scene(scene_dir / "fox_garden_scene.png")
+        for index in range(1, 5):
+            write_storybook_scene(scene_dir / f"fox_garden_scene_{index}.png")
 
         result = ListingPreviewExporter(
             final_images_dir=self.final_dir,
@@ -146,7 +148,8 @@ class ListingPreviewExporterTest(unittest.TestCase):
     def test_storybook_primary_preview_uses_full_canvas_without_grid_template(self) -> None:
         scene_dir = self.base_path / "storybook_scenes"
         scene_dir.mkdir()
-        write_storybook_scene(scene_dir / "fox_garden_scene.png")
+        for index in range(1, 5):
+            write_storybook_scene(scene_dir / f"fox_garden_scene_{index}.png")
 
         result = ListingPreviewExporter(
             final_images_dir=self.final_dir,
@@ -180,6 +183,26 @@ class ListingPreviewExporterTest(unittest.TestCase):
         self.assertGreater(corner[0], 230)
         self.assertGreater(corner[1], 220)
         self.assertGreater(corner[2], 200)
+
+    def test_storybook_listing_uses_four_scene_previews(self) -> None:
+        scene_dir = self.base_path / "storybook_scenes"
+        scene_dir.mkdir()
+        for index in range(1, 5):
+            write_storybook_scene(scene_dir / f"fox_garden_scene_{index}.png")
+
+        result = ListingPreviewExporter(
+            final_images_dir=self.final_dir,
+            storybook_scenes_dir=scene_dir,
+            output_dir=self.preview_dir,
+            output_prefix="fox_garden",
+            listing_family=LISTING_FAMILY_STORYBOOK,
+        ).export()
+
+        self.assertEqual(result.status, "SUCCESS")
+        manifest = json.loads((self.preview_dir / "preview_manifest.json").read_text())
+        self.assertEqual(manifest["preview_renderer"], "STORYBOOK_NATURE_FULL_CANVAS")
+        self.assertEqual(len(result.preview_files), 4)
+        self.assertEqual(len(manifest["storybook_scene_sources"]), 4)
 
 
 if __name__ == "__main__":

@@ -26,6 +26,13 @@ from project_aurora.planning.production_queue_manager import (  # noqa: E402
     ProductionQueueManager,
 )
 from project_aurora.production.watercolor_scope import resolve_watercolor_scope  # noqa: E402
+from project_aurora.production.generation_strategy import (  # noqa: E402
+    GENERATION_MODE_AUTO,
+    GENERATION_MODE_DIGITAL_PAPER,
+    GENERATION_MODE_WEDDING,
+    GenerationStrategyResolver,
+    normalize_generation_mode,
+)
 from project_aurora.portfolio.atlas_portfolio_manager import (  # noqa: E402
     AtlasPortfolioManager,
     AtlasPortfolioPlan,
@@ -41,6 +48,7 @@ from project_aurora.research.research_config import ResearchPlannerConfig  # noq
 QUEUE_PATH = PROJECT_ROOT / "data" / "aurora" / "production_queue" / "queue.json"
 RESEARCH_CONFIG_PATH = PROJECT_ROOT / "config" / "research.yaml"
 OPENAI_CONFIG_PATH = PROJECT_ROOT / "config" / "openai.yaml"
+GENERATION_MIX_CONFIG_PATH = PROJECT_ROOT / "config" / "generation_mix.yaml"
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -57,6 +65,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         type=int,
         default=None,
         help="Number of production jobs required for this planner run.",
+    )
+    parser.add_argument(
+        "--mode",
+        default="auto",
+        choices=("auto", "storybook", "clipart", "characters", "botanical", "digital-paper", "wedding"),
+        help="Generation mode override for queued jobs.",
     )
     return parser.parse_args(argv)
 
@@ -85,6 +99,7 @@ def main(argv: list[str] | None = None) -> None:
     brand_candidates = build_brand_profile_portfolio_candidates(
         research.opportunities,
         target_count=max(config.daily_products * 4, 50),
+        generation_mode=args.mode,
     )
     plan = atlas.build_portfolio(
         brand_candidates,
@@ -119,6 +134,7 @@ def main(argv: list[str] | None = None) -> None:
         queue_manager,
         fallback_opportunities=brand_candidates,
         target_new_jobs=config.daily_products,
+        generation_mode=args.mode,
     )
     print("")
     print("Forge Handoff")
@@ -218,8 +234,16 @@ def build_brand_profile_portfolio_candidates(
     research_opportunities: tuple[MarketOpportunity, ...],
     *,
     target_count: int = 10,
+    generation_mode: str = GENERATION_MODE_AUTO,
 ) -> tuple[MarketOpportunity, ...]:
     """Build Atlas input from RainbowMilkStudio brand-fit opportunities."""
+    requested_mode = normalize_generation_mode(generation_mode)
+    if requested_mode in {GENERATION_MODE_DIGITAL_PAPER, GENERATION_MODE_WEDDING}:
+        return _mode_specific_portfolio_candidates(
+            research_opportunities,
+            requested_mode,
+            target_count=target_count,
+        )
     profile = load_brand_profile()
     pool = _dedupe_opportunities(
         research_opportunities
@@ -268,6 +292,64 @@ def build_brand_profile_portfolio_candidates(
     )
     print_brand_candidate_diagnostics(accepted, filtered)
     return tuple(accepted[:target_count])
+
+
+def _mode_specific_portfolio_candidates(
+    research_opportunities: tuple[MarketOpportunity, ...],
+    generation_mode: str,
+    *,
+    target_count: int,
+) -> tuple[MarketOpportunity, ...]:
+    """Build candidates for an explicit non-clipart generation mode."""
+    mode = normalize_generation_mode(generation_mode)
+    pool = _dedupe_opportunities(research_opportunities)
+    accepted: list[MarketOpportunity] = []
+    filtered: list[tuple[MarketOpportunity, str]] = []
+    for opportunity in pool:
+        if _opportunity_matches_generation_mode(opportunity, mode):
+            accepted.append(opportunity)
+        else:
+            filtered.append(
+                (
+                    opportunity,
+                    f"Skipped because it does not match explicit {mode} mode.",
+                )
+            )
+    accepted = sorted(
+        accepted,
+        key=lambda item: (-item.confidence, -item.trend_score, item.keyword.casefold()),
+    )
+    print_brand_candidate_diagnostics(accepted, filtered)
+    return tuple(accepted[:target_count])
+
+
+def _opportunity_matches_generation_mode(
+    opportunity: MarketOpportunity,
+    generation_mode: str,
+) -> bool:
+    text = (
+        f"{opportunity.keyword} {opportunity.product_type} "
+        f"{opportunity.primary_niche} {opportunity.subcategory}"
+    ).casefold().replace("_", " ").replace("-", " ")
+    if generation_mode == GENERATION_MODE_DIGITAL_PAPER:
+        return any(
+            term in text
+            for term in ("digital paper", "paper pack", "scrapbook paper")
+        )
+    if generation_mode == GENERATION_MODE_WEDDING:
+        if any(term in text for term in ("clipart", "digital paper", "paper pack", "sticker")):
+            return False
+        return any(term in text for term in ("wedding", "bridal", "bride"))
+    return True
+
+
+def _canonical_type_for_generation_mode(generation_mode: str) -> str:
+    mode = normalize_generation_mode(generation_mode)
+    if mode == GENERATION_MODE_DIGITAL_PAPER:
+        return "digital print"
+    if mode == GENERATION_MODE_WEDDING:
+        return "wedding printable"
+    return "watercolor_clipart_bundle"
 
 
 def brand_profile_opportunities(profile: dict[str, object]) -> tuple[MarketOpportunity, ...]:
@@ -474,8 +556,11 @@ def handoff_to_forge(
     queue_manager: ProductionQueueManager,
     fallback_opportunities: tuple[MarketOpportunity, ...] = (),
     target_new_jobs: int | None = None,
+    generation_mode: str = GENERATION_MODE_AUTO,
 ) -> int:
     """Persist approved products as READY jobs for Forge."""
+    requested_generation_mode = normalize_generation_mode(generation_mode)
+    strategy_resolver = GenerationStrategyResolver.from_file(GENERATION_MIX_CONFIG_PATH)
     created = 0
     queue_before = len(queue_manager.list_jobs())
     ready_before = sum(1 for job in queue_manager.list_jobs() if job.status == READY)
@@ -493,35 +578,50 @@ def handoff_to_forge(
         if created >= target:
             break
         enqueue_attempted += 1
-        decision = resolve_watercolor_scope(
-            opportunity.keyword,
-            opportunity.product_type,
-            opportunity.recommended_artistic_style,
+        generation_decision = strategy_resolver.resolve(
+            product_name=opportunity.keyword.title(),
+            product_category=opportunity.product_type,
+            keywords=tuple(opportunity.keyword.casefold().split()),
+            requested_mode=requested_generation_mode,
         )
-        if not decision.supported:
-            decision_logs.append(
-                (opportunity.keyword.title(), "SKIPPED", decision.reason)
+        if requested_generation_mode in {
+            GENERATION_MODE_DIGITAL_PAPER,
+            GENERATION_MODE_WEDDING,
+        }:
+            canonical_product_type = _canonical_type_for_generation_mode(
+                requested_generation_mode
             )
-            continue
-        brand_score = score_brand_fit(
-            opportunity.keyword,
-            opportunity.product_type,
-            opportunity.recommended_artistic_style,
-        )
-        if not brand_score.accepted:
-            decision_logs.append(
-                (
-                    opportunity.keyword.title(),
-                    "SKIPPED",
-                    f"{brand_score.reason} Brand score {brand_score.score}.",
+        else:
+            decision = resolve_watercolor_scope(
+                opportunity.keyword,
+                opportunity.product_type,
+                opportunity.recommended_artistic_style,
+            )
+            if not decision.supported:
+                decision_logs.append(
+                    (opportunity.keyword.title(), "SKIPPED", decision.reason)
                 )
+                continue
+            brand_score = score_brand_fit(
+                opportunity.keyword,
+                opportunity.product_type,
+                opportunity.recommended_artistic_style,
             )
-            continue
+            if not brand_score.accepted:
+                decision_logs.append(
+                    (
+                        opportunity.keyword.title(),
+                        "SKIPPED",
+                        f"{brand_score.reason} Brand score {brand_score.score}.",
+                    )
+                )
+                continue
+            canonical_product_type = decision.canonical_product_type
         try:
             job = queue_manager.add_job(
                 priority="High" if opportunity.confidence >= 90 else "Medium",
                 product_name=opportunity.keyword.title(),
-                category=decision.canonical_product_type,
+                category=canonical_product_type,
                 style=opportunity.recommended_artistic_style,
                 seasonal_theme=opportunity.season,
                 keywords=tuple(opportunity.keyword.casefold().split()),
@@ -533,7 +633,10 @@ def handoff_to_forge(
                 target_customer=opportunity.target_audience,
                 demand_score=round(opportunity.trend_score / 100, 3),
                 competition_score=round(opportunity.competition_score / 100, 3),
-                source_evidence=opportunity.research_sources,
+                source_evidence=(
+                    tuple(opportunity.research_sources)
+                    + generation_decision.source_evidence()
+                ),
             )
         except ValueError:
             decision_logs.append(
@@ -549,7 +652,10 @@ def handoff_to_forge(
             (
                 opportunity.keyword.title(),
                 "ENQUEUED",
-                f"Queue write succeeded with READY status for job {job.id}.",
+                (
+                    f"Queue write succeeded with READY status for job {job.id}. "
+                    f"Generation mode {generation_decision.generation_mode}."
+                ),
             )
         )
     queue_after = len(queue_manager.list_jobs())
