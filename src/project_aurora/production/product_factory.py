@@ -182,7 +182,7 @@ class DefaultProductFactoryStageRunner:
         if not scope.supported:
             raise ProductFactoryStageError("product_capability", (scope.reason,))
         brand_score = score_brand_fit(job.product_name, job.category, job.style)
-        if not brand_score.accepted:
+        if not brand_score.accepted and not _bypasses_brand_score(job):
             raise ProductFactoryStageError("product_capability", (brand_score.reason,))
         art_direction = MuseEngine(memory=self._memory).select_style(
             product=job.product_name,
@@ -976,7 +976,7 @@ class ProductFactory:
                 self._save_report(report)
             return report
         brand_score = score_brand_fit(job.product_name, job.category, job.style)
-        if not brand_score.accepted:
+        if not brand_score.accepted and not _bypasses_brand_score(job):
             if not self._dry_run and hasattr(self._queue_manager, "mark_unsupported_product_type"):
                 self._queue_manager.mark_unsupported_product_type(job.id, brand_score.reason)
             report = ProductionReport(
@@ -1307,6 +1307,11 @@ def _job_generation_override(job: ProductionJob) -> str:
         if key.strip().casefold() in {"listing_family", "generation_mode"}:
             return normalize_generation_mode(value.strip())
     return "AUTO"
+
+
+def _bypasses_brand_score(job: ProductionJob) -> bool:
+    """Return whether an explicit production mode owns its own product fit rules."""
+    return _job_generation_override(job) == GENERATION_MODE_WEDDING
 
 
 def _set_prompt_generation_mode(

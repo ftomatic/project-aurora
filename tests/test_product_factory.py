@@ -31,6 +31,7 @@ from project_aurora.image_generation.provider_registry import (  # noqa: E402
 from project_aurora.image_generation.image_result import ImageResult  # noqa: E402
 from project_aurora.production.generation_plan import (  # noqa: E402
     GENERATION_MODE_STORYBOOK,
+    GENERATION_MODE_WEDDING,
 )
 from project_aurora.production.art_direction_package import (  # noqa: E402
     build_art_direction_package,
@@ -742,6 +743,38 @@ class ProductFactoryTest(unittest.TestCase):
         self.assertEqual(runner._etsy_config.shop_id, "987654")
         self.assertEqual(runner._etsy_config.taxonomy_id, 123)
         self.assertFalse(runner._etsy_config.is_mock_mode)
+
+    def test_explicit_wedding_mode_bypasses_clipart_brand_score_gate(self) -> None:
+        wedding_job = ProductionJob(
+            id="wedding-job",
+            priority="High",
+            product_name="French Country Wedding Invitation",
+            category="wedding printable",
+            style="Pressed Flowers",
+            seasonal_theme="Wedding Season",
+            keywords=("wedding", "invitation", "printable"),
+            confidence_score=0.96,
+            estimated_competition="Low",
+            estimated_demand="High",
+            estimated_revenue=120,
+            status=READY,
+            source_evidence=(f"generation_mode={GENERATION_MODE_WEDDING}",),
+        )
+        queue = ProductionQueueManager(queue_path=self.base_path / "wedding_queue.json")
+        queue.add_existing_job(wedding_job)
+        runner = FakeStageRunner()
+
+        report = ProductFactory(
+            queue_manager=queue,
+            memory=self.memory,
+            stage_runner=runner,
+            dry_run=False,
+            save_report=False,
+        ).execute(wedding_job)
+
+        self.assertTrue(report.success)
+        self.assertIn("prompt_composition", runner.calls)
+        self.assertEqual(queue.list_jobs()[0].status, COMPLETED)
 
     def test_etsy_diagnostics_do_not_print_secret_values(self) -> None:
         config = EtsyConfig(
