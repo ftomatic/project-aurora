@@ -5,6 +5,7 @@ from __future__ import annotations
 import sys
 import tempfile
 import unittest
+from dataclasses import replace
 from io import StringIO
 from pathlib import Path
 from types import SimpleNamespace
@@ -211,7 +212,13 @@ class BatchFactoryTest(unittest.TestCase):
         self.assertEqual(report.draft_ids, ())
 
     def test_generation_mode_override_is_passed_to_product_factory_job(self) -> None:
-        self.add_jobs(1)
+        self.queue.add_existing_job(
+            replace(
+                make_job(1),
+                product_name="Woodland Storybook Animals",
+                keywords=("woodland", "storybook", "animals"),
+            )
+        )
         captured: list[tuple[str, ...]] = []
 
         report = BatchProductionFactory(
@@ -225,6 +232,45 @@ class BatchFactoryTest(unittest.TestCase):
         self.assertTrue(captured)
         self.assertIn(f"generation_mode={GENERATION_MODE_STORYBOOK}", captured[0])
         self.assertIn(f"listing_family={GENERATION_MODE_STORYBOOK}", captured[0])
+
+    def test_explicit_mode_does_not_repurpose_unrelated_ready_job(self) -> None:
+        self.add_jobs(1)
+        captured: list[tuple[str, ...]] = []
+
+        def refill(queue_manager: ProductionQueueManager, _count: int) -> int:
+            queue_manager.add_existing_job(
+                ProductionJob(
+                    id="storybook-job",
+                    priority="High",
+                    product_name="Woodland Storybook Animals",
+                    category="Digital Clipart",
+                    style="Storybook Watercolor",
+                    seasonal_theme="Evergreen",
+                    keywords=("woodland", "storybook", "animals"),
+                    confidence_score=0.96,
+                    estimated_competition="Low",
+                    estimated_demand="High",
+                    estimated_revenue=100,
+                    status=READY,
+                    source_evidence=(f"generation_mode={GENERATION_MODE_STORYBOOK}",),
+                )
+            )
+            return 1
+
+        report = BatchProductionFactory(
+            queue_manager=self.queue,
+            memory=self.memory,
+            stage_runner_factory=lambda _job: CapturingBatchStageRunner(captured),
+            generation_mode="storybook",
+            queue_refill=refill,
+        ).run(1)
+
+        self.assertEqual(report.completed, 1)
+        self.assertTrue(captured)
+        self.assertIn(f"generation_mode={GENERATION_MODE_STORYBOOK}", captured[0])
+        statuses = {job.id: job.status for job in self.queue.list_jobs()}
+        self.assertEqual(statuses["job-1"], READY)
+        self.assertEqual(statuses["storybook-job"], COMPLETED)
 
     def test_mode_override_uses_compatible_effective_category(self) -> None:
         job = make_job(1)

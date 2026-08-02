@@ -43,6 +43,7 @@ from project_aurora.production.generation_strategy import (  # noqa: E402
     GENERATION_MODE_CHARACTERS,
     GENERATION_MODE_CLIPART,
     GENERATION_MODE_DIGITAL_PAPER,
+    GENERATION_MODE_STORYBOOK,
     GENERATION_MODE_WEDDING,
     GenerationStrategyResolver,
     normalize_generation_mode,
@@ -171,7 +172,7 @@ class BatchProductionFactory:
         print_queue_selection_diagnostics(self._queue_manager)
         self._refill_queue_when_ready_is_empty(count)
         while completed + failed < count:
-            job = self._queue_manager.next_ready_job()
+            job = self._next_ready_job_for_mode(count)
             if job is None:
                 print("")
                 print("Queue Selection")
@@ -248,6 +249,32 @@ class BatchProductionFactory:
         if self._save_report:
             self._save_batch_report(batch_report)
         return batch_report
+
+    def _next_ready_job_for_mode(self, count: int) -> ProductionJob | None:
+        """Return a READY job compatible with the requested explicit mode."""
+        if self._generation_mode == GENERATION_MODE_AUTO:
+            return self._queue_manager.next_ready_job()
+        match = _first_ready_job_matching_generation_mode(
+            self._queue_manager.list_jobs(),
+            self._generation_mode,
+        )
+        if match is not None:
+            return match
+        print("")
+        print("Explicit Mode Selection")
+        print("Requested Mode")
+        print(self._generation_mode)
+        print("Matching READY Jobs")
+        print("0")
+        if self._auto_refill_queue and self._queue_refill is not None:
+            print("Running research planner for requested mode...")
+            created = self._queue_refill(self._queue_manager, count)
+            print(f"Generated {created} new mode-specific jobs.")
+            return _first_ready_job_matching_generation_mode(
+                self._queue_manager.list_jobs(),
+                self._generation_mode,
+            )
+        return None
 
     def _refill_queue_when_ready_is_empty(self, count: int) -> None:
         """Run planning when no READY work exists."""
@@ -537,6 +564,68 @@ def _category_for_generation_mode(current_category: str, generation_mode: str) -
     }:
         return "clipart"
     return current_category
+
+
+def _first_ready_job_matching_generation_mode(
+    jobs: tuple[ProductionJob, ...] | list[ProductionJob],
+    generation_mode: str,
+) -> ProductionJob | None:
+    """Find the first READY job that belongs to an explicit generation mode."""
+    mode = normalize_generation_mode(generation_mode)
+    for job in jobs:
+        if job.status != READY:
+            continue
+        if _job_matches_generation_mode(job, mode):
+            return job
+        print("READY Job Skipped For Mode")
+        print(f"{job.id} - {job.product_name}")
+        print("Requested Mode")
+        print(mode)
+        print("Reason")
+        print("READY job does not match the requested generation mode.")
+    return None
+
+
+def _job_matches_generation_mode(job: ProductionJob, generation_mode: str) -> bool:
+    """Return whether a READY job should run under the requested explicit mode."""
+    mode = normalize_generation_mode(generation_mode)
+    if mode == GENERATION_MODE_AUTO:
+        return True
+    evidence_mode = _generation_mode_from_source_evidence(job)
+    if evidence_mode:
+        return evidence_mode == mode
+    context = (
+        f"{job.product_name} {job.category} {' '.join(job.keywords)}"
+        .casefold()
+        .replace("_", " ")
+        .replace("-", " ")
+    )
+    if mode == GENERATION_MODE_DIGITAL_PAPER:
+        return any(term in context for term in ("digital paper", "paper pack", "scrapbook paper", "digital print"))
+    if mode == GENERATION_MODE_WEDDING:
+        return any(term in context for term in ("wedding", "bridal", "bride"))
+    if mode == GENERATION_MODE_BOTANICAL:
+        return any(term in context for term in ("botanical", "floral", "flower", "tree", "blossom"))
+    if mode == GENERATION_MODE_CHARACTERS:
+        return any(term in context for term in ("character", "characters", "kid", "kids", "children", "people", "fairy", "magical"))
+    if mode == GENERATION_MODE_STORYBOOK:
+        return any(term in context for term in ("storybook", "woodland", "nursery", "tea party", "picnic", "garden", "bakery", "rabbit", "fox", "mouse", "bear", "hedgehog"))
+    if mode == GENERATION_MODE_CLIPART:
+        return any(term in context for term in ("clipart", "clip art", "elements", "bundle"))
+    return False
+
+
+def _generation_mode_from_source_evidence(job: ProductionJob) -> str:
+    """Read persisted generation_mode source evidence when present."""
+    for item in job.source_evidence:
+        raw = str(item).strip()
+        if not raw.casefold().startswith("generation_mode="):
+            continue
+        try:
+            return normalize_generation_mode(raw.split("=", maxsplit=1)[1])
+        except ValueError:
+            return ""
+    return ""
 
 
 def load_batch_runtime_config(path: Path) -> BatchRuntimeConfig:

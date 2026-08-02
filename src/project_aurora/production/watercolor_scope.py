@@ -15,6 +15,7 @@ SUPPORTED_CANONICAL_TYPES = {
     "watercolor_seasonal_collection",
     "signature_storybook_animal_collection",
     "watercolor_sticker_illustration_set",
+    "watercolor_character_collection",
     "wedding_printable",
     "digital_print",
 }
@@ -56,6 +57,22 @@ SUPPORTED_TERMS = (
     "seasonal watercolor",
     "digital illustration collection",
     "illustration collection",
+    "character",
+    "characters",
+    "kid",
+    "kids",
+    "children",
+    "people",
+    "bird",
+    "birds",
+    "tree",
+    "trees",
+    "flower",
+    "flowers",
+    "event",
+    "events",
+    "magical",
+    "fairy",
 )
 
 
@@ -109,6 +126,12 @@ def resolve_watercolor_scope(
             True,
             "watercolor_sticker_illustration_set",
             "Compatible watercolor sticker illustration set.",
+        )
+    if any(term in text for term in ("character", "characters", "kid", "kids", "children", "people", "fairy", "magical")):
+        return WatercolorScopeDecision(
+            True,
+            "watercolor_character_collection",
+            "Compatible watercolor character collection.",
         )
     if "storybook" in text and ("animal" in text or "woodland" in text):
         return WatercolorScopeDecision(

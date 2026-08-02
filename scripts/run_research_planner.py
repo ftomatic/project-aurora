@@ -28,6 +28,9 @@ from project_aurora.planning.production_queue_manager import (  # noqa: E402
 from project_aurora.production.watercolor_scope import resolve_watercolor_scope  # noqa: E402
 from project_aurora.production.generation_strategy import (  # noqa: E402
     GENERATION_MODE_AUTO,
+    GENERATION_MODE_BOTANICAL,
+    GENERATION_MODE_CHARACTERS,
+    GENERATION_MODE_CLIPART,
     GENERATION_MODE_DIGITAL_PAPER,
     GENERATION_MODE_WEDDING,
     GenerationStrategyResolver,
@@ -238,7 +241,13 @@ def build_brand_profile_portfolio_candidates(
 ) -> tuple[MarketOpportunity, ...]:
     """Build Atlas input from RainbowMilkStudio brand-fit opportunities."""
     requested_mode = normalize_generation_mode(generation_mode)
-    if requested_mode in {GENERATION_MODE_DIGITAL_PAPER, GENERATION_MODE_WEDDING}:
+    if requested_mode in {
+        GENERATION_MODE_CLIPART,
+        GENERATION_MODE_CHARACTERS,
+        GENERATION_MODE_BOTANICAL,
+        GENERATION_MODE_DIGITAL_PAPER,
+        GENERATION_MODE_WEDDING,
+    }:
         return _mode_specific_portfolio_candidates(
             research_opportunities,
             requested_mode,
@@ -302,7 +311,9 @@ def _mode_specific_portfolio_candidates(
 ) -> tuple[MarketOpportunity, ...]:
     """Build candidates for an explicit non-clipart generation mode."""
     mode = normalize_generation_mode(generation_mode)
-    pool = _dedupe_opportunities(research_opportunities)
+    pool = _dedupe_opportunities(
+        mode_specific_opportunities(mode) + research_opportunities
+    )
     accepted: list[MarketOpportunity] = []
     filtered: list[tuple[MarketOpportunity, str]] = []
     for opportunity in pool:
@@ -340,7 +351,94 @@ def _opportunity_matches_generation_mode(
         if any(term in text for term in ("clipart", "digital paper", "paper pack", "sticker")):
             return False
         return any(term in text for term in ("wedding", "bridal", "bride"))
+    if generation_mode == GENERATION_MODE_CHARACTERS:
+        return any(
+            term in text
+            for term in (
+                "character",
+                "characters",
+                "kid",
+                "kids",
+                "children",
+                "people",
+                "fairy",
+                "magical",
+                "cartoon style",
+            )
+        )
+    if generation_mode == GENERATION_MODE_BOTANICAL:
+        return any(
+            term in text
+            for term in (
+                "botanical",
+                "floral",
+                "flower",
+                "flowers",
+                "wildflower",
+                "tree",
+                "trees",
+                "garden",
+                "blossom",
+            )
+        )
+    if generation_mode == GENERATION_MODE_CLIPART:
+        return any(term in text for term in ("clipart", "clip art", "elements", "bundle"))
     return True
+
+
+def mode_specific_opportunities(generation_mode: str) -> tuple[MarketOpportunity, ...]:
+    """Return curated RainbowMilkStudio-fit opportunities for explicit modes."""
+    mode = normalize_generation_mode(generation_mode)
+    specs_by_mode: dict[str, tuple[tuple[str, str, str, str, str, str, str], ...]] = {
+        GENERATION_MODE_CLIPART: (
+            ("Bird Garden Watercolor Clipart", "storybook garden", "bird flower clipart", "crafters and nursery buyers", "Spring", "watercolor_clipart_bundle", "Storybook Watercolor"),
+            ("Magical Tree House Watercolor Clipart", "magical woodland", "tree house clipart", "kids party and craft buyers", "Evergreen", "watercolor_clipart_bundle", "Whimsical Storybook"),
+            ("Cottage Flower Market Watercolor Clipart", "cottage flowers", "flower market clipart", "scrapbook and craft buyers", "Spring", "watercolor_clipart_bundle", "Cottagecore"),
+            ("Kids Birthday Event Watercolor Clipart", "storybook events", "children party clipart", "parents and party printable buyers", "Summer", "watercolor_clipart_bundle", "Loose Watercolor"),
+            ("Moonlit Fairy Garden Watercolor Clipart", "fairy garden", "magical fairy clipart", "kids decor and craft buyers", "Evergreen", "watercolor_clipart_bundle", "Whimsical Storybook"),
+        ),
+        GENERATION_MODE_CHARACTERS: (
+            ("Magical Garden Kids Watercolor Character Clipart", "magical garden characters", "kids character clipart", "parents and children's craft buyers", "Spring", "watercolor_character_collection", "Whimsical Storybook"),
+            ("Bird Keeper Storybook Character Clipart", "bird keeper characters", "bird character clipart", "storybook nursery buyers", "Evergreen", "watercolor_character_collection", "Storybook Watercolor"),
+            ("Flower Fairy Watercolor Character Clipart", "fairy flower characters", "fairy character clipart", "kids decor and craft buyers", "Spring", "watercolor_character_collection", "Loose Watercolor"),
+            ("Little Baker Kids Watercolor Character Clipart", "bakery characters", "children baking clipart", "party and craft buyers", "Evergreen", "watercolor_character_collection", "Cottagecore"),
+            ("Storybook Event Kids Watercolor Character Clipart", "event characters", "children event clipart", "parents and printable buyers", "Summer", "watercolor_character_collection", "Storybook Watercolor"),
+        ),
+        GENERATION_MODE_BOTANICAL: (
+            ("Wildflower Meadow Botanical Clipart", "wildflower botanical", "flower meadow clipart", "junk journal and craft buyers", "Spring", "watercolor_botanical_collection", "Vintage Botanical"),
+            ("Flowering Tree Branch Botanical Clipart", "flowering trees", "tree branch clipart", "crafters and nursery buyers", "Spring", "watercolor_botanical_collection", "Storybook Watercolor"),
+            ("Cottage Rose Botanical Clipart", "cottage roses", "rose flower clipart", "scrapbook and craft buyers", "Summer", "watercolor_botanical_collection", "Cottagecore"),
+            ("Bird And Blossom Botanical Clipart", "birds and blossoms", "bird blossom clipart", "nursery and craft buyers", "Spring", "watercolor_botanical_collection", "Soft Nursery"),
+            ("Magical Garden Floral Elements", "magical flowers", "garden floral elements", "kids craft and junk journal buyers", "Evergreen", "watercolor_botanical_collection", "Whimsical Storybook"),
+        ),
+        GENERATION_MODE_DIGITAL_PAPER: (
+            ("Sage Botanical Digital Paper", "botanical digital paper", "sage scrapbook paper", "digital printable buyers", "Evergreen", "digital print", "Vintage Botanical"),
+            ("Teacher Digital Paper", "teacher digital paper", "classroom scrapbook paper", "teachers and crafters", "Back To School", "digital print", "Flat Vector"),
+        ),
+        GENERATION_MODE_WEDDING: (
+            ("Wildflower Wedding Menu", "wildflower wedding", "wedding menu printable", "brides and wedding planners", "Wedding Season", "wedding printable", "Luxury Wedding"),
+            ("French Country Wedding Invitation", "french country wedding", "wedding invitation printable", "brides and wedding planners", "Wedding Season", "wedding printable", "Pressed Flowers"),
+            ("Pressed Flower Bridal Shower Sign", "bridal shower", "bridal shower printable", "bridal shower hosts", "Wedding Season", "wedding printable", "Pressed Flowers"),
+        ),
+    }
+    specs = specs_by_mode.get(mode, ())
+    return tuple(
+        MarketOpportunity(
+            keyword=keyword,
+            primary_niche=niche,
+            subcategory=subcategory,
+            target_audience=audience,
+            season=season,
+            product_type=product_type,
+            recommended_artistic_style=style,
+            trend_score=96 - index,
+            competition_score=32 + index,
+            commercial_potential=96 - index,
+            confidence=96 - index,
+            research_sources=("Aurora Explicit Generation Mode",),
+        )
+        for index, (keyword, niche, subcategory, audience, season, product_type, style) in enumerate(specs)
+    )
 
 
 def _canonical_type_for_generation_mode(generation_mode: str) -> str:

@@ -302,15 +302,6 @@ class DefaultProductFactoryStageRunner:
         if not capability.supported:
             raise ProductFactoryStageError("product_capability", (capability.reason,))
         job_paths = self.job_paths(job)
-        reused = self._reuse_completed_generated_images(job, job_paths)
-        if reused is not None:
-            return reused
-        self._prepare_generated_images_dir(job_paths)
-
-        from project_aurora.image_generation.image_generation_engine import (
-            ImageGenerationEngine,
-        )
-
         try:
             prompt_package = self._memory.load_prompt_package(job.id)
         except FileNotFoundError:
@@ -321,6 +312,15 @@ class DefaultProductFactoryStageRunner:
         customer_family = _customer_product_family_for_generation_mode(
             generation_plan.resolved_mode
         )
+        reused = self._reuse_completed_generated_images(job, job_paths, customer_family)
+        if reused is not None:
+            return reused
+        self._prepare_generated_images_dir(job_paths)
+
+        from project_aurora.image_generation.image_generation_engine import (
+            ImageGenerationEngine,
+        )
+
         transparent_background = _family_requires_transparency(customer_family)
         openai_background = "transparent" if transparent_background else "opaque"
         _print_generation_plan(
@@ -754,6 +754,7 @@ class DefaultProductFactoryStageRunner:
         self,
         job: ProductionJob,
         job_paths: ProductFactoryJobPaths,
+        product_family: str,
     ) -> Any | None:
         from project_aurora.image_generation.image_inspector import inspect_png
         from project_aurora.image_generation.image_result import ImageResult
@@ -765,13 +766,17 @@ class DefaultProductFactoryStageRunner:
         )
         if not pngs:
             return None
-        valid_pngs = tuple(path for path in pngs if inspect_png(path).is_valid)
+        invalid_reuse = tuple(
+            error
+            for path in pngs
+            for error in _generated_image_reuse_errors(path, product_family)
+        )
         expected = int(self._image_config.number_of_images)
-        if len(pngs) == expected and len(valid_pngs) == expected:
+        if len(pngs) == expected and not invalid_reuse:
             result = ImageResult(
                 status="SUCCESS",
                 provider="OpenAI GPT Image",
-                generated_files=tuple(str(path) for path in valid_pngs),
+                generated_files=tuple(str(path) for path in pngs),
                 generation_time=0.0,
                 cost_estimate=0.0,
                 warnings=("Reused existing valid job generated images.",),
@@ -780,11 +785,19 @@ class DefaultProductFactoryStageRunner:
                     "job_id": job.id,
                     "job_paths": job_paths.to_dict(),
                 },
-                image_paths=tuple(str(path) for path in valid_pngs),
+                image_paths=tuple(str(path) for path in pngs),
                 prompt_version=self._image_config.prompt_version,
             )
             self._memory.save_image_result(result)
             return result
+        if invalid_reuse:
+            rejected_dir = _move_stale_generated_images(job_paths, pngs)
+            print("Generated images rejected before reuse")
+            print(f"Moved to: {rejected_dir}")
+            for error in invalid_reuse:
+                print(error)
+            return None
+        valid_pngs = tuple(path for path in pngs if inspect_png(path).is_valid)
         raise RuntimeError(
             "Generated images directory contains incomplete or unexpected PNG files; "
             f"expected exactly {expected} valid PNGs, found {len(valid_pngs)} valid "
@@ -1696,7 +1709,7 @@ def _simple_clipart_prompt(
     art_package: ArtDirectionPackage | None = None,
 ) -> str:
     subjects = _prompt_subjects(job)
-    palette = _prompt_palette(job)
+    palette = _prompt_palette(job, CLIPART)
     profile = load_brand_profile()
     art_descriptor = art_package.descriptor() if art_package else ""
     return (
@@ -1706,15 +1719,14 @@ def _simple_clipart_prompt(
         f"Show: {subjects}. "
         f"Canonical art direction: {art_descriptor} "
         f"Brand direction: {profile.get('primary_brand', 'storybook watercolor woodland illustrations')}. "
-        "Whimsical vintage watercolor storybook illustrations with warm watercolor, "
-        "rich storybook scenes, cottagecore details, woodland atmosphere, cozy interiors "
-        "when appropriate, soft natural lighting, beautiful composition, expressive "
-        "woodland or farm animals, classic country clothing where relevant, gentle "
-        "human-like activities, delicate botanicals, hand-painted watercolor texture, "
-        "warm nostalgic charm. "
+        "Whimsical vintage watercolor storybook illustration style applied to separate "
+        "commercial cutout assets, expressive animals, birds, flowers, trees, magical "
+        "original characters, children-friendly event props, delicate botanicals, "
+        "hand-painted watercolor/gouache texture, bright cheerful charm. "
         f"Palette: {palette}. "
         "Each subject must be isolated, fully visible, centered, separate, and clean edged "
         "on a true transparent background as an RGBA PNG with alpha channel. "
+        "Transparent background is mandatory. The canvas outside the artwork must have alpha 0. "
         "No paper. No watercolor-paper texture. No grid. No checkerboard pattern. "
         "No beige canvas. No white canvas. No frame. No border. No drop shadow. "
         "No background decoration. Entire body visible. Head visible. Ears visible. "
@@ -1735,7 +1747,10 @@ def _character_prompt(
     base = _simple_clipart_prompt(job, canonical_product_type, art_package)
     return (
         "Create transparent watercolor character assets only. "
-        "Focus on expressive full-body woodland characters, clothing, poses, and accessories. "
+        "Each image should contain one or several separated full-body original characters: "
+        "storybook children, magical fairy-garden characters, bird keepers, bakers, garden friends, "
+        "or cozy woodland people. Use brighter cheerful colors, not only orange autumn tones. "
+        "No copyrighted movie/cartoon characters; create original cartoon/storybook-like characters. "
         "No scenery, no room, no landscape, no background. "
         f"{base}"
     )
@@ -1749,8 +1764,10 @@ def _botanical_prompt(
     base = _simple_clipart_prompt(job, canonical_product_type, art_package)
     return (
         "Create transparent watercolor botanical assets only. "
-        "Focus on flowers, leaves, berries, branches, garden sprigs, wreath components, "
-        "and delicate cottagecore botanical details. No characters unless the product name explicitly requires them. "
+        "Focus on vibrant flowers, blossoms, flowering trees, birds with branches, leaves, berries, "
+        "garden sprigs, wreath components, and delicate cottagecore botanical details. "
+        "Use fresh pink, blue, green, lavender, coral, and yellow accents. "
+        "No characters unless the product name explicitly requires them. "
         f"{base}"
     )
 
@@ -1761,7 +1778,7 @@ def _digital_paper_prompt(
     art_package: ArtDirectionPackage | None = None,
 ) -> str:
     subjects = _prompt_subjects(job)
-    palette = _prompt_palette(job)
+    palette = _prompt_palette(job, GENERATION_MODE_DIGITAL_PAPER)
     art_descriptor = art_package.descriptor() if art_package else ""
     return (
         "Create one seamless digital paper pattern tile. "
@@ -1780,7 +1797,7 @@ def _wedding_prompt(
     canonical_product_type: str,
     art_package: ArtDirectionPackage | None = None,
 ) -> str:
-    palette = _prompt_palette(job)
+    palette = _prompt_palette(job, GENERATION_MODE_WEDDING)
     art_descriptor = art_package.descriptor() if art_package else ""
     return (
         "Create one polished wedding stationery printable design. "
@@ -1813,6 +1830,42 @@ def _family_requires_transparency(product_family: str) -> bool:
         GENERATION_MODE_CHARACTERS,
         GENERATION_MODE_BOTANICAL,
     }
+
+
+def _generated_image_reuse_errors(path: Path, product_family: str) -> tuple[str, ...]:
+    """Return reasons an existing generated PNG cannot be reused for this family."""
+    from project_aurora.image_generation.clipart_transparency import validate_clipart_file
+    from project_aurora.image_generation.image_inspector import inspect_png
+
+    inspection = inspect_png(path)
+    if not inspection.is_valid:
+        return (f"{path.name}: invalid or unreadable PNG.",)
+    if _family_requires_transparency(product_family):
+        transparency = validate_clipart_file(path)
+        if transparency.status != "PASS":
+            return tuple(
+                f"{path.name}: transparent {product_family} reuse rejected: {error}"
+                for error in transparency.errors
+            ) or (f"{path.name}: transparent {product_family} reuse rejected.",)
+    return ()
+
+
+def _move_stale_generated_images(
+    job_paths: ProductFactoryJobPaths,
+    pngs: tuple[Path, ...],
+) -> Path:
+    """Preserve unsuitable generated files outside the active generation folder."""
+    stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    rejected_dir = job_paths.job_root / "rejected" / f"generated_images_{stamp}"
+    rejected_dir.mkdir(parents=True, exist_ok=True)
+    for path in pngs:
+        destination = rejected_dir / path.name
+        counter = 1
+        while destination.exists():
+            destination = rejected_dir / f"{path.stem}_{counter}{path.suffix}"
+            counter += 1
+        path.rename(destination)
+    return rejected_dir
 
 
 def _prompt_package_product_family(
@@ -1890,7 +1943,7 @@ def _storybook_scene_prompt(
     art_package: ArtDirectionPackage | None = None,
 ) -> str:
     subjects = _prompt_subjects(job)
-    palette = _prompt_palette(job)
+    palette = _prompt_palette(job, STORYBOOK_SCENE)
     profile = load_brand_profile()
     art_descriptor = art_package.descriptor() if art_package else ""
     return (
@@ -1944,6 +1997,16 @@ def _product_family_negative_prompt(product_family: str) -> str:
 
 def _prompt_subjects(job: ProductionJob) -> str:
     text = f"{job.product_name} {' '.join(job.keywords)}".casefold()
+    if "bird" in text:
+        return "song birds, nests, flowering tree branches, garden flowers, ribbons, and tiny nature props"
+    if "fairy" in text or "magical" in text:
+        return "original magical garden characters, fairy cottages, flowers, mushrooms, butterflies, and sparkling nature props"
+    if "kid" in text or "children" in text or "people" in text:
+        return "original storybook children characters, event props, flowers, trees, party details, and cheerful accessories"
+    if "event" in text or "birthday" in text or "party" in text:
+        return "children-friendly party props, flowers, banners, cakes, balloons, birds, and storybook celebration details"
+    if "tree" in text:
+        return "flowering trees, branches, leaves, birds, blossoms, nests, and cottage garden accents"
     if "bakery" in text:
         return "rabbit baking bread, fox reading a recipe book, mouse painting at a tiny easel, bear holding a pie"
     if "mushroom" in text:
@@ -1957,15 +2020,24 @@ def _prompt_subjects(job: ProductionJob) -> str:
     return "coordinated watercolor clipart elements matching the product theme"
 
 
-def _prompt_palette(job: ProductionJob) -> str:
+def _prompt_palette(job: ProductionJob, product_family: str = "") -> str:
     text = f"{job.product_name} {job.seasonal_theme}".casefold()
+    family = product_family.upper()
+    if family == GENERATION_MODE_CHARACTERS:
+        return "sky blue, grass green, cherry red, sunshine yellow, lavender, blush pink, warm cream"
+    if family == GENERATION_MODE_BOTANICAL:
+        return "leaf green, rose pink, peony coral, lilac, butter yellow, sky blue, fresh cream"
+    if family == GENERATION_MODE_WEDDING:
+        return "ivory, blush pink, sage green, dusty blue, champagne, soft lavender"
+    if family == CLIPART:
+        return "sage green, sky blue, blush pink, butter yellow, lavender, berry red, warm cream"
     if "autumn" in text or "mushroom" in text:
         return "warm cream, muted rust, sage green, soft brown, dusty berry"
     if "spring" in text:
         return "warm cream, fresh sage, blush pink, butter yellow, soft blue"
     if "christmas" in text or "winter" in text:
         return "warm cream, evergreen, cranberry, soft brown, muted gold"
-    return "warm cream, sage green, soft brown, muted red, pale blue"
+    return "sage green, sky blue, blush pink, butter yellow, lavender, berry red, warm cream"
 
 
 def _composer_style(style: str) -> str:

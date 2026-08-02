@@ -90,6 +90,16 @@ def make_visible_png_base64() -> str:
     return base64.b64encode(output.getvalue()).decode("ascii")
 
 
+def make_transparent_clipart_png_base64() -> str:
+    output = BytesIO()
+    image = Image.new("RGBA", (64, 64), (255, 255, 255, 0))
+    for x in range(12, 52):
+        for y in range(10, 54):
+            image.putpixel((x, y), (120, 70, 30, 255))
+    image.save(output, format="PNG")
+    return base64.b64encode(output.getvalue()).decode("ascii")
+
+
 def write_visible_png(path: Path, size: tuple[int, int] = (2, 2)) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     Image.new("RGBA", size, (255, 0, 0, 255)).save(path, format="PNG")
@@ -122,7 +132,7 @@ class FakeOpenAIImagesClient:
         count = int(kwargs["n"])
         return SimpleNamespace(
             data=[
-                {"b64_json": make_visible_png_base64()}
+                {"b64_json": make_transparent_clipart_png_base64()}
                 for _ in range(count)
             ]
         )

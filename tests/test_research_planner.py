@@ -565,6 +565,46 @@ class ResearchPlannerTest(unittest.TestCase):
         self.assertNotIn("Coquette Bow Bridal Clipart", names)
         self.assertNotIn("Vintage Lace Digital Paper", names)
 
+    def test_explicit_character_mode_uses_character_candidates(self) -> None:
+        candidates = build_brand_profile_portfolio_candidates(
+            (),
+            target_count=5,
+            generation_mode="characters",
+        )
+
+        self.assertTrue(candidates)
+        self.assertTrue(all("character" in item.keyword.casefold() for item in candidates))
+        self.assertTrue(
+            any("Kids" in item.keyword or "Fairy" in item.keyword for item in candidates)
+        )
+        self.assertTrue(
+            all(item.product_type == "watercolor_character_collection" for item in candidates)
+        )
+
+    def test_explicit_botanical_mode_uses_botanical_candidates(self) -> None:
+        candidates = build_brand_profile_portfolio_candidates(
+            (),
+            target_count=5,
+            generation_mode="botanical",
+        )
+
+        names = {item.keyword for item in candidates}
+        self.assertIn("Wildflower Meadow Botanical Clipart", names)
+        self.assertIn("Flowering Tree Branch Botanical Clipart", names)
+        self.assertTrue(all(item.product_type == "watercolor_botanical_collection" for item in candidates))
+
+    def test_explicit_clipart_mode_uses_distinct_clipart_candidates(self) -> None:
+        candidates = build_brand_profile_portfolio_candidates(
+            (),
+            target_count=5,
+            generation_mode="clipart",
+        )
+
+        names = {item.keyword for item in candidates}
+        self.assertIn("Bird Garden Watercolor Clipart", names)
+        self.assertIn("Magical Tree House Watercolor Clipart", names)
+        self.assertFalse(all("character" in item.keyword.casefold() for item in candidates))
+
     def test_four_selected_with_confidence_pass_uses_replacement_search(self) -> None:
         opportunities = (
             opportunity(0, confidence=88),
