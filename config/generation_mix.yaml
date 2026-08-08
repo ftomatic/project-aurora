@@ -7,3 +7,6 @@ generation_mix:
   botanical: 10
   digital_paper: 5
   wedding: 0
+  # ORIGINAL uses the four-scene storybook pipeline with RainbowMilkStudio's
+  # detailed anthropomorphic-animal art direction. Raise this to include it in AUTO.
+  original: 0

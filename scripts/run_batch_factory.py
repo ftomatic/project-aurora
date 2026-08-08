@@ -43,6 +43,7 @@ from project_aurora.production.generation_strategy import (  # noqa: E402
     GENERATION_MODE_CHARACTERS,
     GENERATION_MODE_CLIPART,
     GENERATION_MODE_DIGITAL_PAPER,
+    GENERATION_MODE_ORIGINAL,
     GENERATION_MODE_STORYBOOK,
     GENERATION_MODE_WEDDING,
     GenerationStrategyResolver,
@@ -171,7 +172,9 @@ class BatchProductionFactory:
         previous_generated_images = False
         print_queue_selection_diagnostics(self._queue_manager)
         self._refill_queue_when_ready_is_empty(count)
-        while completed + failed < count:
+        # A skipped capability check is still one attempted queue job. Counting it
+        # prevents explicit-mode auto-refill from planning and rejecting forever.
+        while completed + failed + skipped < count:
             job = self._next_ready_job_for_mode(count)
             if job is None:
                 print("")
@@ -358,7 +361,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--mode",
         default="auto",
-        choices=("auto", "storybook", "clipart", "characters", "botanical", "digital-paper", "wedding"),
+        choices=("auto", "storybook", "original", "clipart", "characters", "botanical", "digital-paper", "wedding"),
         help="Generation mode override for this run.",
     )
     mode = parser.add_mutually_exclusive_group()
@@ -557,6 +560,8 @@ def _category_for_generation_mode(current_category: str, generation_mode: str) -
         return "digital print"
     if mode == GENERATION_MODE_WEDDING:
         return "wedding printable"
+    if mode == GENERATION_MODE_ORIGINAL:
+        return "signature_storybook_animal_collection"
     if mode in {
         GENERATION_MODE_CHARACTERS,
         GENERATION_MODE_BOTANICAL,
@@ -610,6 +615,8 @@ def _job_matches_generation_mode(job: ProductionJob, generation_mode: str) -> bo
         return any(term in context for term in ("character", "characters", "kid", "kids", "children", "people", "fairy", "magical"))
     if mode == GENERATION_MODE_STORYBOOK:
         return any(term in context for term in ("storybook", "woodland", "nursery", "tea party", "picnic", "garden", "bakery", "rabbit", "fox", "mouse", "bear", "hedgehog"))
+    if mode == GENERATION_MODE_ORIGINAL:
+        return any(term in context for term in ("original", "rabbit", "bunny", "mouse", "mice", "kitten", "cat", "bear", "fox", "hedgehog", "bird"))
     if mode == GENERATION_MODE_CLIPART:
         return any(term in context for term in ("clipart", "clip art", "elements", "bundle"))
     return False

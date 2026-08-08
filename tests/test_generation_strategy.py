@@ -17,6 +17,7 @@ from project_aurora.production.generation_strategy import (  # noqa: E402
     GENERATION_MODE_CHARACTERS,
     GENERATION_MODE_CLIPART,
     GENERATION_MODE_DIGITAL_PAPER,
+    GENERATION_MODE_ORIGINAL,
     GENERATION_MODE_STORYBOOK,
     GENERATION_MODE_WEDDING,
     GenerationStrategyConfig,
@@ -32,6 +33,7 @@ class GenerationStrategyTest(unittest.TestCase):
         self.assertEqual(normalize_generation_mode("digital-paper"), GENERATION_MODE_DIGITAL_PAPER)
         self.assertEqual(normalize_generation_mode("digital_paper"), GENERATION_MODE_DIGITAL_PAPER)
         self.assertEqual(normalize_generation_mode("wedding"), GENERATION_MODE_WEDDING)
+        self.assertEqual(normalize_generation_mode("original"), GENERATION_MODE_ORIGINAL)
 
     def test_loads_generation_mix_config(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -97,6 +99,10 @@ class GenerationStrategyTest(unittest.TestCase):
         self.assertEqual(
             listing_family_for_generation_mode(GENERATION_MODE_BOTANICAL),
             GENERATION_MODE_CLIPART,
+        )
+        self.assertEqual(
+            listing_family_for_generation_mode(GENERATION_MODE_ORIGINAL),
+            GENERATION_MODE_STORYBOOK,
         )
 
 

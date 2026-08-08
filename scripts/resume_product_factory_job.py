@@ -50,6 +50,9 @@ from project_aurora.production.product_factory import (  # noqa: E402
     _generation_plan_from_prompt,
     _ensure_listing_previews,
 )
+from project_aurora.production.product_image_family import (  # noqa: E402
+    resolve_product_image_family,
+)
 from project_aurora.production.digital_download_builder import (  # noqa: E402
     DigitalDownloadBuilder,
 )
@@ -133,13 +136,18 @@ class ProductFactoryResumeService:
         failed_stage: str,
     ) -> ResumeResult:
         final_images_dir = _final_images_dir_from_report(report_data)
-        _valid_final_image_files(final_images_dir)
-        listing_images_dir = _listing_images_dir_from_report(report_data)
         job = _job_by_id(self._queue_manager, job_id)
         try:
             prompt_package = self._memory.load_prompt_package(job_id)
         except FileNotFoundError:
             prompt_package = {}
+        product_family = resolve_product_image_family(
+            job.product_name,
+            str(prompt_package.get("product_type") or job.category),
+            job.category,
+        ).family
+        _valid_final_image_files(final_images_dir, product_family=product_family)
+        listing_images_dir = _listing_images_dir_from_report(report_data)
         generation_plan = _generation_plan_from_prompt(job, prompt_package)
         if generation_plan.scene_required:
             StageAwareResumeRunner(
@@ -299,8 +307,13 @@ class ProductFactoryResumeService:
         listing_id: str,
     ) -> ResumeResult:
         final_images_dir = _final_images_dir_from_report(report_data)
-        _valid_final_image_files(final_images_dir)
-        digital_result = self._sync_customer_downloads(listing_id, final_images_dir)
+        product_family = self._product_family(job_id)
+        _valid_final_image_files(final_images_dir, product_family=product_family)
+        digital_result = self._sync_customer_downloads(
+            listing_id,
+            final_images_dir,
+            product_family=product_family,
+        )
         digital_total = len(
             self._poll_digital_files(
                 listing_id=listing_id,
@@ -337,7 +350,24 @@ class ProductFactoryResumeService:
             errors=updated_report.errors,
         )
 
-    def _sync_customer_downloads(self, listing_id: str, final_images_dir: Path) -> Any:
+    def _product_family(self, job_id: str) -> str:
+        job = _job_by_id(self._queue_manager, job_id)
+        try:
+            prompt_package = self._memory.load_prompt_package(job_id)
+        except FileNotFoundError:
+            prompt_package = {}
+        return resolve_product_image_family(
+            job.product_name,
+            str(prompt_package.get("product_type") or job.category),
+            job.category,
+        ).family
+
+    def _sync_customer_downloads(
+        self,
+        listing_id: str,
+        final_images_dir: Path,
+        product_family: str = "",
+    ) -> Any:
         digital_service = EtsyDigitalFileService(
             config=self._config,
             memory=self._memory,
@@ -346,6 +376,7 @@ class ProductFactoryResumeService:
         png_result = digital_service.sync_digital_files(
             listing_id=listing_id,
             final_images_dir=final_images_dir,
+            product_family=product_family,
         )
         _print_etsy_trace(
             heading="ETSY UPLOAD TRACE",
@@ -364,6 +395,7 @@ class ProductFactoryResumeService:
             listing_id=listing_id,
             final_images_dir=final_images_dir,
             digital_service=digital_service,
+            product_family=product_family,
         )
         _print_etsy_trace(
             heading="ETSY UPLOAD TRACE",
@@ -397,6 +429,7 @@ class ProductFactoryResumeService:
         listing_id: str,
         final_images_dir: Path,
         digital_service: EtsyDigitalFileService,
+        product_family: str = "",
     ) -> Any:
         existing = self._poll_digital_files(
             listing_id=listing_id,
@@ -404,7 +437,10 @@ class ProductFactoryResumeService:
             endpoint_label="Pre-repair digital file lookup",
             timeout_seconds=0,
         )
-        zip_path = _ensure_customer_zip(final_images_dir)
+        zip_path = _ensure_customer_zip(
+            final_images_dir,
+            product_family=product_family,
+        )
         if any(_digital_record_filename(record) == zip_path.name for record in existing):
             return SimpleNamespace(status="SUCCESS", files_uploaded=0, errors=())
         if len(existing) >= 5:
@@ -680,11 +716,19 @@ class StageAwareResumeRunner(DefaultProductFactoryStageRunner):
         listing_id = self._existing_draft_id or _latest_draft_id(self._memory)
         if not listing_id:
             raise RuntimeError("Existing Etsy draft ID is required for image sync.")
-        _valid_final_image_files(self.job_paths(job).final_images_dir)
         try:
             prompt_package = self._memory.load_prompt_package(job.id)
         except FileNotFoundError:
             prompt_package = {}
+        product_family = resolve_product_image_family(
+            job.product_name,
+            str(prompt_package.get("product_type") or job.category),
+            job.category,
+        ).family
+        _valid_final_image_files(
+            self.job_paths(job).final_images_dir,
+            product_family=product_family,
+        )
         generation_plan = _generation_plan_from_prompt(job, prompt_package)
         if generation_plan.scene_required:
             self._generate_validated_storybook_scene(job, prompt_package, self.job_paths(job))
@@ -739,6 +783,15 @@ class StageAwareResumeRunner(DefaultProductFactoryStageRunner):
 
     def upload_customer_downloads(self, job: ProductionJob, listing_id: str | None) -> Any:
         resolved_listing_id = listing_id or self._existing_draft_id or _latest_draft_id(self._memory)
+        try:
+            prompt_package = self._memory.load_prompt_package(job.id)
+        except FileNotFoundError:
+            prompt_package = {}
+        product_family = resolve_product_image_family(
+            job.product_name,
+            str(prompt_package.get("product_type") or job.category),
+            job.category,
+        ).family
         return EtsyDigitalFileService(
             config=self._etsy_config,
             memory=self._memory,
@@ -746,6 +799,7 @@ class StageAwareResumeRunner(DefaultProductFactoryStageRunner):
         ).sync_digital_files(
             listing_id=resolved_listing_id,
             final_images_dir=self.job_paths(job).final_images_dir,
+            product_family=product_family,
         )
 
 
@@ -888,7 +942,10 @@ def _job_paths_from_report(report_data: dict[str, Any]) -> ProductFactoryJobPath
     )
 
 
-def _valid_final_image_files(final_images_dir: Path) -> tuple[Path, ...]:
+def _valid_final_image_files(
+    final_images_dir: Path,
+    product_family: str = "",
+) -> tuple[Path, ...]:
     if final_images_dir.name != "final_product_images":
         raise RuntimeError("Resume must use job final_product_images directory.")
     files = tuple(sorted(final_images_dir.glob("*.png"), key=lambda path: path.name))
@@ -900,7 +957,7 @@ def _valid_final_image_files(final_images_dir: Path) -> tuple[Path, ...]:
     errors = tuple(
         f"{path.name}: {error}"
         for path in files
-        for error in validate_commercial_png(path)
+        for error in validate_commercial_png(path, product_family=product_family)
     )
     if errors:
         raise RuntimeError("Invalid final image files: " + "; ".join(errors))
@@ -944,7 +1001,10 @@ def _listing_manifest_family(listing_images_dir: Path) -> str:
     return str(manifest.get("listing_family") or "").strip().upper()
 
 
-def _ensure_customer_zip(final_images_dir: Path) -> Path:
+def _ensure_customer_zip(
+    final_images_dir: Path,
+    product_family: str = "",
+) -> Path:
     digital_downloads_dir = final_images_dir.parent / "digital_downloads"
     safe_name = _safe_customer_zip_name(final_images_dir.parent.name)
     existing_zips = tuple(sorted(digital_downloads_dir.glob("*.zip"), key=lambda path: path.name))
@@ -960,6 +1020,7 @@ def _ensure_customer_zip(final_images_dir: Path) -> Path:
         final_images_dir=final_images_dir,
         output_dir=digital_downloads_dir,
         zip_filename=safe_name,
+        product_family=product_family,
     ).build()
     if result.status != "SUCCESS" or not result.zip_path:
         raise RuntimeError(

@@ -160,7 +160,9 @@ class ResumeProductFactoryJobTest(unittest.TestCase):
     def write_final_images(self) -> None:
         self.final_dir.mkdir(parents=True)
         for index in range(1, 5):
-            Image.new("RGBA", (4000, 4000), (255, index, 0, 255)).save(
+            image = Image.new("RGBA", (4000, 4000), (255, 255, 255, 0))
+            image.paste((255, index, 0, 255), (800, 800, 3200, 3200))
+            image.save(
                 self.final_dir / f"strawberry_birthday_party_printable_{index:02d}.png",
                 format="PNG",
                 dpi=(300, 300),

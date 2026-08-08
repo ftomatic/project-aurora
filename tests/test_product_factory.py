@@ -30,6 +30,9 @@ from project_aurora.image_generation.provider_registry import (  # noqa: E402
 )
 from project_aurora.image_generation.image_result import ImageResult  # noqa: E402
 from project_aurora.production.generation_plan import (  # noqa: E402
+    GENERATION_MODE_BOTANICAL,
+    GENERATION_MODE_DIGITAL_PAPER,
+    GENERATION_MODE_ORIGINAL,
     GENERATION_MODE_STORYBOOK,
     GENERATION_MODE_WEDDING,
 )
@@ -44,6 +47,7 @@ from project_aurora.production.product_factory import (  # noqa: E402
     ProductFactory,
     ProductFactoryStageError,
     _product_family_prompt,
+    _original_scene_prompt,
     _raise_if_failed,
     _storybook_scene_prompt,
     _valid_existing_listing_previews,
@@ -111,6 +115,18 @@ def write_transparent_clipart_png(path: Path, size: tuple[int, int] = (64, 64)) 
     image = Image.new("RGBA", size, (255, 255, 255, 0))
     for x in range(12, 52):
         for y in range(10, 54):
+            image.putpixel((x, y), (120, 70, 30, 255))
+    image.save(path, format="PNG")
+
+
+def write_edge_touching_clipart_png(
+    path: Path,
+    size: tuple[int, int] = (64, 64),
+) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    image = Image.new("RGBA", size, (255, 255, 255, 0))
+    for x in range(0, 52):
+        for y in range(10, 64):
             image.putpixel((x, y), (120, 70, 30, 255))
     image.save(path, format="PNG")
 
@@ -526,6 +542,65 @@ class ProductFactoryTest(unittest.TestCase):
         self.assertEqual(captured["run_kwargs"]["background"], "transparent")
         self.assertEqual(captured["run_kwargs"]["number_of_images"], 4)
 
+    def test_clipped_transparent_generation_is_regenerated_with_safe_area(self) -> None:
+        calls: list[dict[str, object]] = []
+
+        class FakeImageGenerationEngine:
+            def __init__(self, **kwargs: object) -> None:
+                self._output_dir = Path(str(kwargs["output_dir"]))
+
+            def run(self, **kwargs: object) -> ImageResult:
+                calls.append(kwargs)
+                files: list[str] = []
+                for index in range(1, 5):
+                    path = self._output_dir / f"customer_{index}.png"
+                    if len(calls) == 1:
+                        write_edge_touching_clipart_png(path)
+                    else:
+                        write_transparent_clipart_png(path)
+                    files.append(str(path))
+                return ImageResult(
+                    status="SUCCESS",
+                    provider="fake",
+                    generated_files=tuple(files),
+                    generation_time=0,
+                    cost_estimate=0,
+                )
+
+        self.memory.save_prompt_package(
+            {
+                "product_name": self.job.product_name,
+                "collection": self.job.product_name,
+                "product_type": self.job.category,
+                "style": self.job.style,
+                "image_prompt": "Transparent clipart.",
+            },
+            package_id=self.job.id,
+        )
+        runner = DefaultProductFactoryStageRunner(
+            memory=self.memory,
+            etsy_config=SimpleNamespace(),
+            paths=ProductFactoryPaths(jobs_dir=self.base_path / "jobs"),
+            image_config=ImageProviderConfig(provider="openai", number_of_images=4),
+        )
+
+        with patch(
+            "project_aurora.image_generation.image_generation_engine.ImageGenerationEngine",
+            FakeImageGenerationEngine,
+        ):
+            result = runner.generate_images(self.job)
+
+        retry_package = self.memory.load_prompt_package(self.job.id)
+        self.assertEqual(result.status, "SUCCESS")
+        self.assertEqual(len(calls), 2)
+        self.assertEqual(calls[1]["image_type"], "product_asset_safe_area_retry")
+        self.assertIn("15 percent", retry_package["image_prompt"])
+        self.assertTrue(any("safe-area" in warning for warning in result.warnings))
+        self.assertEqual(
+            len(tuple((runner.job_paths(self.job).job_root / "rejected").rglob("*.png"))),
+            4,
+        )
+
     def test_storybook_generates_four_customer_pngs_plus_separate_scene(self) -> None:
         calls: list[dict[str, object]] = []
 
@@ -602,6 +677,83 @@ class ProductFactoryTest(unittest.TestCase):
         self.assertFalse(calls[1]["transparent_background"])
         self.assertEqual(calls[1]["background"], "opaque")
 
+    def test_storybook_reuses_existing_customer_pngs_after_safe_area_padding(self) -> None:
+        calls: list[dict[str, object]] = []
+
+        class FakeImageGenerationEngine:
+            def __init__(self, **kwargs: object) -> None:
+                self._output_dir = Path(str(kwargs["output_dir"]))
+
+            def run(self, **kwargs: object) -> ImageResult:
+                calls.append(kwargs)
+                self._output_dir.mkdir(parents=True, exist_ok=True)
+                files: list[str] = []
+                for index in range(1, 5):
+                    path = self._output_dir / f"scene_{index}.png"
+                    write_full_scene_png(path)
+                    files.append(str(path))
+                return ImageResult(
+                    status="SUCCESS",
+                    provider="fake",
+                    generated_files=tuple(files),
+                    generation_time=0,
+                    cost_estimate=0,
+                    warnings=(),
+                    errors=(),
+                )
+
+        self.memory.save_prompt_package(
+            {
+                "product_name": self.job.product_name,
+                "collection": self.job.product_name,
+                "product_type": "watercolor_animal_collection",
+                "style": self.job.style,
+                "image_prompt": "Transparent customer clipart prompt.",
+                "listing_family": GENERATION_MODE_STORYBOOK,
+                "generation_mode": GENERATION_MODE_STORYBOOK,
+                "generation_plan": {
+                    "resolved_mode": GENERATION_MODE_STORYBOOK,
+                    "decision_reason": "test",
+                    "customer_png_count": 4,
+                    "scene_required": True,
+                    "matched_terms": ["woodland"],
+                },
+                "storybook_scene_prompt": "Full frame storybook scene.",
+            },
+            package_id=self.job.id,
+        )
+        runner = DefaultProductFactoryStageRunner(
+            memory=self.memory,
+            etsy_config=SimpleNamespace(),
+            paths=ProductFactoryPaths(jobs_dir=self.base_path / "jobs"),
+            image_config=ImageProviderConfig(provider="openai", number_of_images=4),
+        )
+        job_paths = runner.job_paths(self.job)
+        for index in range(1, 5):
+            write_edge_touching_clipart_png(
+                job_paths.generated_images_dir / f"customer_{index}.png"
+            )
+
+        with patch(
+            "project_aurora.image_generation.image_generation_engine.ImageGenerationEngine",
+            FakeImageGenerationEngine,
+        ):
+            result = runner.generate_images(self.job)
+
+        from project_aurora.image_generation.clipart_safe_area import (
+            validate_clipart_safe_area,
+        )
+
+        self.assertEqual(result.status, "SUCCESS")
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(calls[0]["image_type"], "storybook_scene")
+        self.assertTrue(
+            any("Normalized existing" in warning for warning in result.warnings)
+        )
+        for path in job_paths.generated_images_dir.glob("*.png"):
+            self.assertEqual(validate_clipart_safe_area(path), ())
+        self.assertEqual(len(tuple(job_paths.storybook_scenes_dir.glob("*.png"))), 4)
+
     def test_scene_and_clipart_prompts_share_art_direction_package(self) -> None:
         art_package = build_art_direction_package(
             product_name="Rabbit Tea Party Watercolor Clipart",
@@ -648,6 +800,96 @@ class ProductFactoryTest(unittest.TestCase):
         ):
             self.assertIn(expected, clipart_prompt)
             self.assertIn(expected, scene_prompt)
+
+    def test_original_scene_prompt_requires_four_cohesive_original_scenes(self) -> None:
+        job = ProductionJob(
+            id="original-job",
+            priority="High",
+            product_name="Bunny Garden Tea Original Watercolor Collection",
+            category="signature_storybook_animal_collection",
+            style="Whimsical Storybook",
+            seasonal_theme="Spring",
+            keywords=("bunny", "garden", "tea", "original"),
+            confidence_score=0.96,
+            estimated_competition="Low",
+            estimated_demand="High",
+            estimated_revenue=150,
+            status=READY,
+            source_evidence=(f"generation_mode={GENERATION_MODE_ORIGINAL}",),
+        )
+
+        prompt = _original_scene_prompt(
+            job,
+            "signature_storybook_animal_collection",
+        )
+
+        self.assertIn("ORIGINAL RainbowMilkStudio", prompt)
+        self.assertIn("two to four expressive anthropomorphic animals", prompt)
+        self.assertIn("four clearly different moments", prompt)
+        self.assertIn("complete edge-to-edge scenic illustration", prompt)
+        self.assertIn("Avoid an all-orange", prompt)
+        self.assertIn("Do not reproduce copyrighted characters", prompt)
+
+    def test_character_prompt_requires_humans_without_animals_or_wings(self) -> None:
+        job = ProductionJob(
+            id="kids_job",
+            priority="High",
+            product_name="Magical Garden Kids Watercolor Character Clipart",
+            category="watercolor_character_collection",
+            style="Whimsical Storybook",
+            seasonal_theme="Spring",
+            keywords=("magical", "garden", "kids", "characters"),
+            confidence_score=0.95,
+            estimated_competition="Low",
+            estimated_demand="High",
+            estimated_revenue=150,
+            status=READY,
+        )
+
+        prompt = _product_family_prompt(
+            job,
+            "watercolor character collection",
+            "CHARACTERS",
+        )
+
+        self.assertIn("Human children characters only", prompt)
+        self.assertIn("No animals", prompt)
+        self.assertIn("No wings", prompt)
+        self.assertIn("No fairy wings", prompt)
+        self.assertIn("true transparent background", prompt)
+        self.assertIn("exactly one small complete full-body child", prompt)
+        self.assertIn("no more than 55 percent", prompt)
+        self.assertIn("not above the child's head", prompt)
+        self.assertNotIn("rabbit baking bread", prompt)
+        self.assertNotIn("fairy-garden characters", prompt)
+
+    def test_botanical_prompt_requires_one_complete_central_composition(self) -> None:
+        botanical_job = ProductionJob(
+            id="botanical-job",
+            priority="High",
+            product_name="Flowering Tree Branch Botanical Clipart",
+            category="watercolor_botanical_collection",
+            style="Vintage Botanical",
+            seasonal_theme="Spring",
+            keywords=("flowering", "tree", "branch", "botanical"),
+            confidence_score=0.95,
+            estimated_competition="Low",
+            estimated_demand="High",
+            estimated_revenue=120,
+            status=READY,
+        )
+
+        prompt = _product_family_prompt(
+            botanical_job,
+            "watercolor botanical collection",
+            "BOTANICAL",
+        )
+
+        self.assertIn("exactly one cohesive isolated botanical composition", prompt)
+        self.assertIn("both natural endpoints of every branch", prompt)
+        self.assertIn("central 65 percent", prompt)
+        self.assertIn("Do not create a collection sheet", prompt)
+        self.assertNotIn("birds, blossoms, nests", prompt)
 
     def test_listing_preview_fingerprint_mismatch_invalidates_existing_previews(self) -> None:
         preview_dir = self.base_path / "listing_images"
@@ -771,6 +1013,70 @@ class ProductFactoryTest(unittest.TestCase):
             dry_run=False,
             save_report=False,
         ).execute(wedding_job)
+
+        self.assertTrue(report.success)
+        self.assertIn("prompt_composition", runner.calls)
+        self.assertEqual(queue.list_jobs()[0].status, COMPLETED)
+
+    def test_explicit_digital_paper_mode_bypasses_clipart_brand_score_gate(self) -> None:
+        paper_job = ProductionJob(
+            id="digital-paper-job",
+            priority="High",
+            product_name="Sage Botanical Digital Paper",
+            category="digital print",
+            style="Vintage Botanical",
+            seasonal_theme="Evergreen",
+            keywords=("sage", "botanical", "digital", "paper"),
+            confidence_score=0.96,
+            estimated_competition="Low",
+            estimated_demand="High",
+            estimated_revenue=120,
+            status=READY,
+            source_evidence=(f"generation_mode={GENERATION_MODE_DIGITAL_PAPER}",),
+        )
+        queue = ProductionQueueManager(queue_path=self.base_path / "paper_queue.json")
+        queue.add_existing_job(paper_job)
+        runner = FakeStageRunner()
+
+        report = ProductFactory(
+            queue_manager=queue,
+            memory=self.memory,
+            stage_runner=runner,
+            dry_run=False,
+            save_report=False,
+        ).execute(paper_job)
+
+        self.assertTrue(report.success)
+        self.assertIn("prompt_composition", runner.calls)
+        self.assertEqual(queue.list_jobs()[0].status, COMPLETED)
+
+    def test_explicit_botanical_mode_bypasses_generic_brand_score_gate(self) -> None:
+        botanical_job = ProductionJob(
+            id="botanical-brand-job",
+            priority="High",
+            product_name="Cottage Rose Botanical Clipart",
+            category="watercolor_botanical_collection",
+            style="Cottagecore",
+            seasonal_theme="Summer",
+            keywords=("cottage", "rose", "botanical", "clipart"),
+            confidence_score=0.94,
+            estimated_competition="Low",
+            estimated_demand="High",
+            estimated_revenue=174,
+            status=READY,
+            source_evidence=(f"generation_mode={GENERATION_MODE_BOTANICAL}",),
+        )
+        queue = ProductionQueueManager(queue_path=self.base_path / "botanical_queue.json")
+        queue.add_existing_job(botanical_job)
+        runner = FakeStageRunner()
+
+        report = ProductFactory(
+            queue_manager=queue,
+            memory=self.memory,
+            stage_runner=runner,
+            dry_run=False,
+            save_report=False,
+        ).execute(botanical_job)
 
         self.assertTrue(report.success)
         self.assertIn("prompt_composition", runner.calls)
@@ -953,9 +1259,11 @@ class ProductFactoryTest(unittest.TestCase):
                 self,
                 listing_id: str | None,
                 final_images_dir: Path,
+                product_family: str = "",
             ) -> object:
                 captured["sync_listing_id"] = listing_id
                 captured["sync_dir"] = final_images_dir
+                captured["product_family"] = product_family
                 return SimpleNamespace(
                     status="SUCCESS",
                     files_uploaded=4,
@@ -989,6 +1297,7 @@ class ProductFactoryTest(unittest.TestCase):
         self.assertEqual(result.files_uploaded, 5)
         self.assertEqual(captured["sync_listing_id"], "listing-123")
         self.assertEqual(captured["sync_dir"], job_paths.final_images_dir)
+        self.assertEqual(captured["product_family"], "CLIPART")
         self.assertEqual(captured["zip_listing_id"], "listing-123")
         self.assertEqual(Path(captured["zip_path"]).parent, job_paths.digital_downloads_dir)
 
@@ -1024,6 +1333,32 @@ class ProductFactoryTest(unittest.TestCase):
         self.assertEqual(len(fake_client.images.calls), 1)
         self.assertEqual(len(tuple(job_paths.generated_images_dir.glob("*.png"))), 4)
         self.assertEqual(len(tuple(job_paths.storybook_scenes_dir.glob("*.png"))), 0)
+
+    def test_invalid_final_exports_are_archived_and_rebuilt(self) -> None:
+        runner = DefaultProductFactoryStageRunner(
+            memory=self.memory,
+            etsy_config=SimpleNamespace(),
+            paths=ProductFactoryPaths(jobs_dir=self.base_path / "jobs"),
+        )
+        job_paths = runner.job_paths(self.job)
+        for index in range(1, 5):
+            write_transparent_clipart_png(
+                job_paths.generated_images_dir / f"source_{index}.png"
+            )
+            write_visible_png(
+                job_paths.final_images_dir / f"invalid_{index}.png",
+                size=(64, 64),
+            )
+
+        result = runner.export_commercial_images(self.job)
+
+        self.assertEqual(result.status, "SUCCESS")
+        self.assertEqual(len(result.exported_files), 4)
+        self.assertEqual(len(tuple(job_paths.final_images_dir.glob("*.png"))), 4)
+        self.assertEqual(
+            len(tuple((job_paths.job_root / "rejected").rglob("invalid_*.png"))),
+            4,
+        )
 
     def test_failed_listing_upload_reports_attempt_error(self) -> None:
         result = EtsyImageUploadResult(

@@ -23,6 +23,7 @@ from project_aurora.image_generation.provider_registry import (  # noqa: E402
 )
 from project_aurora.planning.production_queue_manager import (  # noqa: E402
     READY,
+    UNSUPPORTED_PRODUCT_TYPE,
     ProductionQueueManager,
 )
 from project_aurora.production.watercolor_scope import resolve_watercolor_scope  # noqa: E402
@@ -32,6 +33,8 @@ from project_aurora.production.generation_strategy import (  # noqa: E402
     GENERATION_MODE_CHARACTERS,
     GENERATION_MODE_CLIPART,
     GENERATION_MODE_DIGITAL_PAPER,
+    GENERATION_MODE_ORIGINAL,
+    GENERATION_MODE_STORYBOOK,
     GENERATION_MODE_WEDDING,
     GenerationStrategyResolver,
     normalize_generation_mode,
@@ -72,7 +75,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--mode",
         default="auto",
-        choices=("auto", "storybook", "clipart", "characters", "botanical", "digital-paper", "wedding"),
+        choices=("auto", "storybook", "original", "clipart", "characters", "botanical", "digital-paper", "wedding"),
         help="Generation mode override for queued jobs.",
     )
     return parser.parse_args(argv)
@@ -246,6 +249,7 @@ def build_brand_profile_portfolio_candidates(
         GENERATION_MODE_CHARACTERS,
         GENERATION_MODE_BOTANICAL,
         GENERATION_MODE_DIGITAL_PAPER,
+        GENERATION_MODE_ORIGINAL,
         GENERATION_MODE_WEDDING,
     }:
         return _mode_specific_portfolio_candidates(
@@ -361,7 +365,6 @@ def _opportunity_matches_generation_mode(
                 "kids",
                 "children",
                 "people",
-                "fairy",
                 "magical",
                 "cartoon style",
             )
@@ -383,6 +386,11 @@ def _opportunity_matches_generation_mode(
         )
     if generation_mode == GENERATION_MODE_CLIPART:
         return any(term in text for term in ("clipart", "clip art", "elements", "bundle"))
+    if generation_mode == GENERATION_MODE_ORIGINAL:
+        return "original" in text or any(
+            term in text
+            for term in ("rabbit", "bunny", "mouse", "mice", "kitten", "cat", "bear", "fox", "hedgehog", "bird")
+        )
     return True
 
 
@@ -400,7 +408,7 @@ def mode_specific_opportunities(generation_mode: str) -> tuple[MarketOpportunity
         GENERATION_MODE_CHARACTERS: (
             ("Magical Garden Kids Watercolor Character Clipart", "magical garden characters", "kids character clipart", "parents and children's craft buyers", "Spring", "watercolor_character_collection", "Whimsical Storybook"),
             ("Bird Keeper Storybook Character Clipart", "bird keeper characters", "bird character clipart", "storybook nursery buyers", "Evergreen", "watercolor_character_collection", "Storybook Watercolor"),
-            ("Flower Fairy Watercolor Character Clipart", "fairy flower characters", "fairy character clipart", "kids decor and craft buyers", "Spring", "watercolor_character_collection", "Loose Watercolor"),
+            ("Flower Garden Kids Watercolor Character Clipart", "flower garden characters", "kids flower character clipart", "kids decor and craft buyers", "Spring", "watercolor_character_collection", "Loose Watercolor"),
             ("Little Baker Kids Watercolor Character Clipart", "bakery characters", "children baking clipart", "party and craft buyers", "Evergreen", "watercolor_character_collection", "Cottagecore"),
             ("Storybook Event Kids Watercolor Character Clipart", "event characters", "children event clipart", "parents and printable buyers", "Summer", "watercolor_character_collection", "Storybook Watercolor"),
         ),
@@ -419,6 +427,13 @@ def mode_specific_opportunities(generation_mode: str) -> tuple[MarketOpportunity
             ("Wildflower Wedding Menu", "wildflower wedding", "wedding menu printable", "brides and wedding planners", "Wedding Season", "wedding printable", "Luxury Wedding"),
             ("French Country Wedding Invitation", "french country wedding", "wedding invitation printable", "brides and wedding planners", "Wedding Season", "wedding printable", "Pressed Flowers"),
             ("Pressed Flower Bridal Shower Sign", "bridal shower", "bridal shower printable", "bridal shower hosts", "Wedding Season", "wedding printable", "Pressed Flowers"),
+        ),
+        GENERATION_MODE_ORIGINAL: (
+            ("Bunny Garden Tea Original Watercolor Collection", "original cottage animals", "bunny garden tea scenes", "storybook and craft buyers", "Spring", "signature_storybook_animal_collection", "Whimsical Storybook"),
+            ("Rabbit Flower Walk Original Watercolor Collection", "original cottage animals", "rabbit flower walk scenes", "storybook and nursery buyers", "Spring", "signature_storybook_animal_collection", "Storybook Watercolor"),
+            ("Mice Country Lunch Original Watercolor Collection", "original cottage animals", "mice country lunch scenes", "storybook and craft buyers", "Evergreen", "signature_storybook_animal_collection", "French Cottage"),
+            ("Kittens Garden Tea Original Watercolor Collection", "original cottage animals", "kitten garden tea scenes", "storybook and nursery buyers", "Summer", "signature_storybook_animal_collection", "Whimsical Storybook"),
+            ("Bear Cottage Picnic Original Watercolor Collection", "original cottage animals", "bear cottage picnic scenes", "storybook and craft buyers", "Autumn", "signature_storybook_animal_collection", "Cottagecore"),
         ),
     }
     specs = specs_by_mode.get(mode, ())
@@ -447,6 +462,8 @@ def _canonical_type_for_generation_mode(generation_mode: str) -> str:
         return "digital print"
     if mode == GENERATION_MODE_WEDDING:
         return "wedding printable"
+    if mode == GENERATION_MODE_ORIGINAL:
+        return "signature_storybook_animal_collection"
     return "watercolor_clipart_bundle"
 
 
@@ -664,7 +681,16 @@ def handoff_to_forge(
     ready_before = sum(1 for job in queue_manager.list_jobs() if job.status == READY)
     enqueue_attempted = 0
     decision_logs: list[tuple[str, str, str]] = []
-    opportunities = list(plan.selected)
+    opportunities: list[MarketOpportunity] = []
+    if requested_generation_mode != GENERATION_MODE_AUTO:
+        for opportunity in fallback_opportunities:
+            existing_job = queue_manager.find_product(opportunity.keyword.title())
+            if (
+                existing_job is not None
+                and existing_job.status == UNSUPPORTED_PRODUCT_TYPE
+            ):
+                opportunities.append(opportunity)
+    opportunities.extend(plan.selected)
     opportunity_ids = {item.id for item in opportunities}
     for opportunity in fallback_opportunities:
         if opportunity.id not in opportunity_ids:
@@ -684,6 +710,7 @@ def handoff_to_forge(
         )
         if requested_generation_mode in {
             GENERATION_MODE_DIGITAL_PAPER,
+            GENERATION_MODE_ORIGINAL,
             GENERATION_MODE_WEDDING,
         }:
             canonical_product_type = _canonical_type_for_generation_mode(
@@ -715,6 +742,34 @@ def handoff_to_forge(
                 )
                 continue
             canonical_product_type = decision.canonical_product_type
+        source_evidence = (
+            tuple(opportunity.research_sources)
+            + generation_decision.source_evidence()
+        )
+        existing_job = queue_manager.find_product(opportunity.keyword.title())
+        if (
+            existing_job is not None
+            and existing_job.status == UNSUPPORTED_PRODUCT_TYPE
+            and requested_generation_mode != GENERATION_MODE_AUTO
+            and generation_decision.generation_mode == requested_generation_mode
+        ):
+            job = queue_manager.reactivate_unsupported_job(
+                existing_job.id,
+                category=canonical_product_type,
+                source_evidence=source_evidence,
+            )
+            created += 1
+            decision_logs.append(
+                (
+                    opportunity.keyword.title(),
+                    "REACTIVATED",
+                    (
+                        f"Previously unsupported job {job.id} returned to READY after "
+                        f"explicit {generation_decision.generation_mode} replanning."
+                    ),
+                )
+            )
+            continue
         try:
             job = queue_manager.add_job(
                 priority="High" if opportunity.confidence >= 90 else "Medium",
@@ -731,10 +786,7 @@ def handoff_to_forge(
                 target_customer=opportunity.target_audience,
                 demand_score=round(opportunity.trend_score / 100, 3),
                 competition_score=round(opportunity.competition_score / 100, 3),
-                source_evidence=(
-                    tuple(opportunity.research_sources)
-                    + generation_decision.source_evidence()
-                ),
+                source_evidence=source_evidence,
             )
         except ValueError:
             decision_logs.append(

@@ -120,6 +120,8 @@ def _taxonomy_key(*values: str) -> str:
         return "seamless pattern"
     if "nursery" in lowered and ("wall art" in lowered or "art" in lowered):
         return "nursery wall art"
+    if "clipart" in lowered or "clip art" in lowered or "graphics" in lowered:
+        return "clipart"
     if "botanical" in lowered or "floral art" in lowered:
         return "botanical print"
     if "wall art" in lowered or "poster" in lowered or "print" in lowered:
@@ -134,8 +136,6 @@ def _taxonomy_key(*values: str) -> str:
         return "stationery"
     if "party" in lowered or "birthday" in lowered:
         return "party printable"
-    if "clipart" in lowered or "graphics" in lowered:
-        return "clipart"
     return "unknown"
 
 

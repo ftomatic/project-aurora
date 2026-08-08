@@ -40,6 +40,7 @@ from project_aurora.production.generation_plan import (
     GENERATION_MODE_CHARACTERS,
     GENERATION_MODE_CLIPART,
     GENERATION_MODE_DIGITAL_PAPER,
+    GENERATION_MODE_ORIGINAL,
     GENERATION_MODE_STORYBOOK,
     GENERATION_MODE_WEDDING,
     GenerationPlan,
@@ -256,7 +257,8 @@ class DefaultProductFactoryStageRunner:
                 "product_family_requirements": _product_family_requirements(
                     customer_family
                 ),
-                "storybook_scene_prompt": _storybook_scene_prompt(
+                "storybook_scene_prompt": _scene_prompt_for_generation_mode(
+                    generation_plan.resolved_mode,
                     job,
                     scope.canonical_product_type,
                     art_package,
@@ -312,8 +314,39 @@ class DefaultProductFactoryStageRunner:
         customer_family = _customer_product_family_for_generation_mode(
             generation_plan.resolved_mode
         )
+        normalized_existing = False
+        if generation_plan.scene_required:
+            normalized_existing = _normalize_existing_storybook_customer_safe_area(
+                job_paths,
+                expected_count=int(self._image_config.number_of_images),
+            )
         reused = self._reuse_completed_generated_images(job, job_paths, customer_family)
         if reused is not None:
+            if normalized_existing:
+                reused = _with_extra_warning(
+                    reused,
+                    "Normalized existing transparent customer artwork into the required safe area.",
+                )
+            if generation_plan.scene_required:
+                scene_result = self._generate_validated_storybook_scene(
+                    job,
+                    prompt_package,
+                    job_paths,
+                )
+                if scene_result.status != "SUCCESS":
+                    return _failed_image_result(
+                        reused,
+                        tuple(getattr(scene_result, "errors", ()) or ())
+                        or ("Storybook scene generation failed.",),
+                    )
+                _print_generation_plan(
+                    job=job,
+                    generation_plan=generation_plan,
+                    job_paths=job_paths,
+                    scene_generated=True,
+                    transparency_validation="CUSTOMER_PNGS_REUSED_AND_VALIDATED",
+                    primary_preview_source="storybook_scenes_dir",
+                )
             return reused
         self._prepare_generated_images_dir(job_paths)
 
@@ -331,11 +364,12 @@ class DefaultProductFactoryStageRunner:
             transparency_validation="PENDING",
             primary_preview_source="storybook_scenes_dir" if generation_plan.scene_required else "listing_images_dir",
         )
-        customer_result = ImageGenerationEngine(
+        image_engine = ImageGenerationEngine(
             memory=self._memory,
             output_dir=job_paths.generated_images_dir,
             provider_config=self._image_config,
-        ).run(
+        )
+        customer_result = image_engine.run(
             prompt_package_id=job.id,
             provider=self._image_config.provider,
             image_type="product_asset",
@@ -351,6 +385,64 @@ class DefaultProductFactoryStageRunner:
         )
         if customer_result.status != "SUCCESS":
             return customer_result
+        if transparent_background:
+            safe_area_errors = _generated_clipart_safe_area_errors(customer_result)
+            if safe_area_errors and generation_plan.scene_required:
+                _normalize_complete_clipart_safe_area(customer_result)
+                safe_area_errors = _generated_clipart_safe_area_errors(customer_result)
+                if not safe_area_errors:
+                    customer_result = _with_extra_warning(
+                        customer_result,
+                        "Normalized transparent customer artwork into the required safe area without another paid generation.",
+                    )
+            if safe_area_errors:
+                rejected_dir = _move_stale_generated_images(
+                    job_paths,
+                    tuple(
+                        Path(str(path))
+                        for path in getattr(customer_result, "generated_files", ())
+                    ),
+                )
+                retry_package = dict(prompt_package)
+                retry_package["image_prompt"] = (
+                    str(retry_package.get("image_prompt") or "")
+                    + _safe_area_retry_instruction(customer_family)
+                )
+                self._memory.save_prompt_package(retry_package, package_id=job.id)
+                customer_result = image_engine.run(
+                    prompt_package_id=job.id,
+                    provider=self._image_config.provider,
+                    image_type="product_asset_safe_area_retry",
+                    width=1024,
+                    height=1024,
+                    dpi=300,
+                    size=self._image_config.size,
+                    quality=self._image_config.quality,
+                    transparent_background=True,
+                    background="transparent",
+                    output_format=self._image_config.output_format,
+                    number_of_images=self._image_config.number_of_images,
+                )
+                retry_errors = _generated_clipart_safe_area_errors(customer_result)
+                if (
+                    customer_result.status == "SUCCESS"
+                    and retry_errors
+                    and customer_family == GENERATION_MODE_BOTANICAL
+                ):
+                    _normalize_complete_clipart_safe_area(customer_result)
+                    retry_errors = _generated_clipart_safe_area_errors(customer_result)
+                if customer_result.status != "SUCCESS" or retry_errors:
+                    return _failed_image_result(
+                        customer_result,
+                        (
+                            *retry_errors,
+                            f"Rejected first clipped generation in {rejected_dir}.",
+                        ),
+                    )
+                customer_result = _with_extra_warning(
+                    customer_result,
+                    "Regenerated transparent artwork after safe-area validation rejected clipped subjects.",
+                )
         if generation_plan.scene_required:
             scene_result = self._generate_validated_storybook_scene(
                 job,
@@ -395,7 +487,8 @@ class DefaultProductFactoryStageRunner:
                 pass
         retry_package = dict(prompt_package)
         retry_package["storybook_scene_prompt"] = (
-            _storybook_scene_prompt(
+            _scene_prompt_for_generation_mode(
+                _generation_plan_from_prompt(job, prompt_package).resolved_mode,
                 job,
                 job.category,
                 _art_direction_package_from_prompt(job, prompt_package),
@@ -444,7 +537,8 @@ class DefaultProductFactoryStageRunner:
         scene_package = dict(prompt_package)
         scene_package["image_prompt"] = str(
             prompt_package.get("storybook_scene_prompt")
-            or _storybook_scene_prompt(
+            or _scene_prompt_for_generation_mode(
+                _generation_plan_from_prompt(job, prompt_package).resolved_mode,
                 job,
                 job.category,
                 _art_direction_package_from_prompt(job, prompt_package),
@@ -686,6 +780,7 @@ class DefaultProductFactoryStageRunner:
         png_result = service.sync_digital_files(
             listing_id=listing_id,
             final_images_dir=job_paths.final_images_dir,
+            product_family=image_family.family,
         )
         if getattr(png_result, "status", "").upper() != "SUCCESS":
             return png_result
@@ -843,12 +938,14 @@ class DefaultProductFactoryStageRunner:
                 warnings=("Reused existing valid final commercial images.",),
                 inspections=tuple(inspect_png(path) for path in valid_pngs),
             )
-        raise RuntimeError(
-            "Final product images directory contains incomplete or unexpected PNG files; "
-            f"expected exactly {COMMERCIAL_IMAGE_COUNT} valid PNGs, found "
-            f"{len(valid_pngs)} valid out of {len(pngs)} total in "
-            f"{job_paths.final_images_dir}."
+        rejected_dir = _move_stale_final_images(job_paths, pngs)
+        print("Final commercial images rejected before reuse")
+        print(f"Moved to: {rejected_dir}")
+        print(
+            f"Expected {COMMERCIAL_IMAGE_COUNT} valid PNGs, found "
+            f"{len(valid_pngs)} valid out of {len(pngs)}."
         )
+        return None
 
 
 class DryRunProductFactoryStageRunner:
@@ -1275,7 +1372,7 @@ def _generation_plan_from_prompt(
             resolved_mode=mode,
             decision_reason=str(stored.get("decision_reason") or "Loaded from persisted prompt package."),
             customer_png_count=int(stored.get("customer_png_count") or 4),
-            scene_required=bool(stored.get("scene_required") or mode == GENERATION_MODE_STORYBOOK),
+            scene_required=bool(stored.get("scene_required") or _is_storybook_mode(mode)),
             matched_terms=tuple(str(item) for item in stored.get("matched_terms", ())),
         )
     if "listing_family" not in prompt_package and "generation_mode" not in prompt_package:
@@ -1311,7 +1408,15 @@ def _job_generation_override(job: ProductionJob) -> str:
 
 def _bypasses_brand_score(job: ProductionJob) -> bool:
     """Return whether an explicit production mode owns its own product fit rules."""
-    return _job_generation_override(job) == GENERATION_MODE_WEDDING
+    return _job_generation_override(job) in {
+        GENERATION_MODE_BOTANICAL,
+        GENERATION_MODE_CHARACTERS,
+        GENERATION_MODE_CLIPART,
+        GENERATION_MODE_DIGITAL_PAPER,
+        GENERATION_MODE_ORIGINAL,
+        GENERATION_MODE_STORYBOOK,
+        GENERATION_MODE_WEDDING,
+    }
 
 
 def _set_prompt_generation_mode(
@@ -1329,9 +1434,17 @@ def _set_prompt_generation_mode(
     package["generation_plan"] = GenerationPlan(
         resolved_mode=generation_mode,
         decision_reason=reason,
-        scene_required=generation_mode == GENERATION_MODE_STORYBOOK,
+        scene_required=_is_storybook_mode(generation_mode),
     ).to_dict()
     memory.save_prompt_package(package, package_id=package_id)
+
+
+def _is_storybook_mode(generation_mode: str) -> bool:
+    """Return whether a mode uses Aurora's full-scene STORYBOOK pipeline."""
+    return normalize_generation_mode(generation_mode) in {
+        GENERATION_MODE_STORYBOOK,
+        GENERATION_MODE_ORIGINAL,
+    }
 
 
 def _verify_storybook_acceptance_gate(
@@ -1340,7 +1453,7 @@ def _verify_storybook_acceptance_gate(
     prompt_package: dict[str, Any],
 ) -> None:
     generation_plan = _generation_plan_from_prompt(job, prompt_package)
-    if generation_plan.resolved_mode != GENERATION_MODE_STORYBOOK:
+    if not _is_storybook_mode(generation_plan.resolved_mode):
         return
     errors: list[str] = []
     fingerprint = str(prompt_package.get("art_direction_fingerprint") or "")
@@ -1660,7 +1773,7 @@ def _ensure_listing_previews(
         required_count=4,
         listing_family=(
             GENERATION_MODE_STORYBOOK
-            if generation_mode == GENERATION_MODE_STORYBOOK
+            if _is_storybook_mode(generation_mode)
             else GENERATION_MODE_CLIPART
         ),
         product_category=job.category,
@@ -1729,6 +1842,8 @@ def _simple_clipart_prompt(
         "original characters, children-friendly event props, delicate botanicals, "
         "hand-painted watercolor/gouache texture, bright cheerful charm. "
         f"Palette: {palette}. "
+        "Show no more than four separated subjects in one image. Keep the complete group inside "
+        "the central 70 percent of the canvas; do not make a crowded collection sheet. "
         "Each subject must be isolated, fully visible, centered, separate, and clean edged "
         "on a true transparent background as an RGBA PNG with alpha channel. "
         "Transparent background is mandatory. The canvas outside the artwork must have alpha 0. "
@@ -1749,15 +1864,41 @@ def _character_prompt(
     canonical_product_type: str,
     art_package: ArtDirectionPackage | None = None,
 ) -> str:
-    base = _simple_clipart_prompt(job, canonical_product_type, art_package)
+    subjects = _prompt_subjects(job, GENERATION_MODE_CHARACTERS)
+    palette = _prompt_palette(job, GENERATION_MODE_CHARACTERS)
+    profile = load_brand_profile()
+    art_descriptor = art_package.descriptor() if art_package else ""
     return (
-        "Create transparent watercolor character assets only. "
-        "Each image should contain one or several separated full-body original characters: "
-        "storybook children, magical fairy-garden characters, bird keepers, bakers, garden friends, "
-        "or cozy woodland people. Use brighter cheerful colors, not only orange autumn tones. "
-        "No copyrighted movie/cartoon characters; create original cartoon/storybook-like characters. "
-        "No scenery, no room, no landscape, no background. "
-        f"{base}"
+        "Create actual customer character clipart illustrations only. "
+        f"Product: {job.product_name}. "
+        f"Product type: {canonical_product_type}. "
+        f"Show: {subjects}. "
+        f"Canonical art direction: {art_descriptor} "
+        f"Brand direction: {profile.get('primary_brand', 'storybook watercolor illustrations')}. "
+        "Human children characters only. No animals. No animal heads. No animal masks. "
+        "No wings. No fairy wings. No angel wings. No insect wings. No tails. No ears. "
+        "No rabbit, bunny, fox, bear, mouse, hedgehog, bird, pet, or creature characters. "
+        "Each character must be a separated full-body original child or kid character, "
+        "front-facing or gentle three-quarter pose, cheerful storybook/cartoon watercolor style. "
+        "Use brighter cheerful colors, not only orange autumn tones. "
+        f"Palette: {palette}. "
+        "Show exactly one small complete full-body child in each image. Do not create a row, "
+        "grid, contact sheet, or crowded character collection. The complete child and every prop "
+        "together must occupy no more than 55 percent of the canvas height and width, centered "
+        "inside the middle of the canvas. Use a distant camera and a generously zoomed-out view. "
+        "Keep balloons, party hats, signs, flowers, and other tall props beside the child's torso, "
+        "not above the child's head and not below the child's feet. "
+        "Each subject must be isolated, fully visible, centered, separate, and clean edged "
+        "on a true transparent background as an RGBA PNG with alpha channel. "
+        "Transparent background is mandatory. The canvas outside the artwork must have alpha 0. "
+        "No paper. No watercolor-paper texture. No grid. No checkerboard pattern. "
+        "No beige canvas. No white canvas. No frame. No border. No drop shadow. "
+        "No background decoration. Entire body visible. Head visible. Hands visible. Feet visible. "
+        "Accessories visible. Leave at least 10 percent transparent padding around every subject. "
+        "Do not crop, clip, cut off, zoom in too close, or let any character touch the edge. "
+        "No Etsy cover, no collection overview, no scene, no room, no garden background, "
+        "no landscape, no poster layout, no packaging, no title card, no product label, no typography. "
+        "No text, no words, no letters, no numbers, no logo, no watermark, no border."
     )
 
 
@@ -1769,8 +1910,12 @@ def _botanical_prompt(
     base = _simple_clipart_prompt(job, canonical_product_type, art_package)
     return (
         "Create transparent watercolor botanical assets only. "
-        "Focus on vibrant flowers, blossoms, flowering trees, birds with branches, leaves, berries, "
-        "garden sprigs, wreath components, and delicate cottagecore botanical details. "
+        "Generate exactly one cohesive isolated botanical composition per image: one main complete "
+        "flowering branch, flowering-tree sprig, or blossom cluster, optionally accompanied by one "
+        "small bird and no more than two tiny botanical accents. Do not create a collection sheet, "
+        "scatter pattern, grid, border, or background arrangement. Every leaf, flower, bird, twig, "
+        "and both natural endpoints of every branch must be fully visible. Keep the entire composition "
+        "inside the central 65 percent of the canvas. "
         "Use fresh pink, blue, green, lavender, coral, and yellow accents. "
         "No characters unless the product name explicitly requires them. "
         f"{base}"
@@ -1837,6 +1982,41 @@ def _family_requires_transparency(product_family: str) -> bool:
     }
 
 
+def _safe_area_retry_instruction(product_family: str) -> str:
+    """Return a family-specific correction after source artwork touches an edge."""
+    common = (
+        " IMPORTANT REGENERATION CORRECTION: The previous artwork was rejected because "
+        "visible artwork touched or crossed the canvas boundary. Scale the entire composition "
+        "down. Preserve generous completely transparent empty space on all four outer edges. "
+        "No visible pixel may touch an edge. "
+    )
+    if product_family == GENERATION_MODE_BOTANICAL:
+        return (
+            common
+            + "Preserve at least 15 percent transparent space on all four sides. Create one "
+            "central flowering branch or blossom cluster only, with at most one "
+            "small bird and two tiny accents. No collection sheet or scattered edge elements. "
+            "Show every branch endpoint, leaf, petal, and bird fully and naturally; nothing may "
+            "continue beyond the canvas."
+        )
+    if product_family == GENERATION_MODE_CHARACTERS:
+        return (
+            common
+            + "Show exactly one small complete full-body child using a distant, zoomed-out camera. "
+            "The child and every prop together must occupy no more than 40 percent of the canvas "
+            "height and width. Preserve at least 30 percent completely transparent space on all "
+            "four sides. Keep balloons and tall party props beside the torso, never above the head "
+            "or below the feet. Keep every head, hat, hand, accessory, body, and foot fully inside "
+            "the canvas. No row or character grid."
+        )
+    return (
+        common
+        + "Preserve at least 15 percent transparent space on all four sides. Show no more than "
+        "four complete separated subjects. No collection sheet, edge "
+        "decoration, or partially visible subject."
+    )
+
+
 def _generated_image_reuse_errors(path: Path, product_family: str) -> tuple[str, ...]:
     """Return reasons an existing generated PNG cannot be reused for this family."""
     from project_aurora.image_generation.clipart_transparency import validate_clipart_file
@@ -1846,13 +2026,104 @@ def _generated_image_reuse_errors(path: Path, product_family: str) -> tuple[str,
     if not inspection.is_valid:
         return (f"{path.name}: invalid or unreadable PNG.",)
     if _family_requires_transparency(product_family):
+        from project_aurora.image_generation.clipart_safe_area import (
+            validate_clipart_safe_area,
+        )
+
         transparency = validate_clipart_file(path)
         if transparency.status != "PASS":
             return tuple(
                 f"{path.name}: transparent {product_family} reuse rejected: {error}"
                 for error in transparency.errors
             ) or (f"{path.name}: transparent {product_family} reuse rejected.",)
+        safe_area_errors = validate_clipart_safe_area(path)
+        if safe_area_errors:
+            return tuple(
+                f"{path.name}: transparent {product_family} reuse rejected: {error}"
+                for error in safe_area_errors
+            )
     return ()
+
+
+def _generated_clipart_safe_area_errors(result: Any) -> tuple[str, ...]:
+    """Return source-image crop risks for a successful transparent generation."""
+    from project_aurora.image_generation.clipart_safe_area import (
+        validate_clipart_safe_area,
+    )
+
+    files = tuple(Path(str(path)) for path in getattr(result, "generated_files", ()))
+    errors: list[str] = []
+    for path in files:
+        errors.extend(validate_clipart_safe_area(path))
+    return tuple(errors)
+
+
+def _normalize_complete_clipart_safe_area(result: Any) -> None:
+    """Center complete transparent artwork inside a verified transparent border."""
+    from project_aurora.image_generation.clipart_safe_area import (
+        normalize_complete_clipart_safe_area,
+    )
+
+    for value in getattr(result, "generated_files", ()):
+        path = Path(str(value))
+        if _clipart_is_safe_to_pad(path):
+            normalize_complete_clipart_safe_area(path)
+
+
+def _normalize_existing_storybook_customer_safe_area(
+    job_paths: ProductFactoryJobPaths,
+    *,
+    expected_count: int,
+) -> bool:
+    """Repair margin-only issues in reusable STORYBOOK companion clipart."""
+    from project_aurora.image_generation.clipart_safe_area import (
+        normalize_complete_clipart_safe_area,
+        validate_clipart_safe_area,
+    )
+    from project_aurora.image_generation.clipart_transparency import (
+        validate_clipart_file,
+    )
+
+    files = tuple(
+        sorted(job_paths.generated_images_dir.glob("*.png"), key=lambda path: path.name)
+    )
+    if len(files) != expected_count:
+        return False
+    if any(not _clipart_is_safe_to_pad(path) for path in files):
+        return False
+    if not any(validate_clipart_safe_area(path) for path in files):
+        return False
+
+    for path in files:
+        if validate_clipart_safe_area(path):
+            normalize_complete_clipart_safe_area(path)
+    return not any(validate_clipart_safe_area(path) for path in files) and all(
+        validate_clipart_file(path).status == "PASS" for path in files
+    )
+
+
+def _clipart_is_safe_to_pad(path: Path) -> bool:
+    """Allow padding only when real alpha exists and no background defect was found."""
+    from project_aurora.image_generation.clipart_transparency import (
+        MIN_TRANSPARENT_PIXEL_RATIO,
+        validate_clipart_file,
+    )
+
+    result = validate_clipart_file(path)
+    if result.transparent_pixel_percentage < MIN_TRANSPARENT_PIXEL_RATIO * 100:
+        return False
+    allowed_errors = {"All four corners must be transparent or nearly transparent."}
+    return not set(result.errors).difference(allowed_errors)
+
+
+def _failed_image_result(result: Any, errors: tuple[str, ...]) -> Any:
+    """Return a provider result marked failed with additional validation errors."""
+    combined = tuple(getattr(result, "errors", ()) or ()) + tuple(errors)
+    if hasattr(result, "__dataclass_fields__"):
+        return replace(result, status="FAILED", errors=combined)
+    setattr(result, "status", "FAILED")
+    setattr(result, "errors", combined)
+    return result
 
 
 def _move_stale_generated_images(
@@ -1862,6 +2133,24 @@ def _move_stale_generated_images(
     """Preserve unsuitable generated files outside the active generation folder."""
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     rejected_dir = job_paths.job_root / "rejected" / f"generated_images_{stamp}"
+    rejected_dir.mkdir(parents=True, exist_ok=True)
+    for path in pngs:
+        destination = rejected_dir / path.name
+        counter = 1
+        while destination.exists():
+            destination = rejected_dir / f"{path.stem}_{counter}{path.suffix}"
+            counter += 1
+        path.rename(destination)
+    return rejected_dir
+
+
+def _move_stale_final_images(
+    job_paths: ProductFactoryJobPaths,
+    pngs: tuple[Path, ...],
+) -> Path:
+    """Preserve invalid commercial exports before rebuilding them."""
+    stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    rejected_dir = job_paths.job_root / "rejected" / f"final_product_images_{stamp}"
     rejected_dir.mkdir(parents=True, exist_ok=True)
     for path in pngs:
         destination = rejected_dir / path.name
@@ -1942,6 +2231,85 @@ def _product_family_prompt(
     return _simple_clipart_prompt(job, canonical_product_type, art_package)
 
 
+def _scene_prompt_for_generation_mode(
+    generation_mode: str,
+    job: ProductionJob,
+    canonical_product_type: str,
+    art_package: ArtDirectionPackage | None = None,
+) -> str:
+    """Compose the full-scene prompt owned by the selected scene mode."""
+    if normalize_generation_mode(generation_mode) == GENERATION_MODE_ORIGINAL:
+        return _original_scene_prompt(job, canonical_product_type, art_package)
+    return _storybook_scene_prompt(job, canonical_product_type, art_package)
+
+
+def _original_scene_prompt(
+    job: ProductionJob,
+    canonical_product_type: str,
+    art_package: ArtDirectionPackage | None = None,
+) -> str:
+    """Create an original RainbowMilkStudio heritage-style animal scene."""
+    profile = load_brand_profile()
+    art_descriptor = art_package.descriptor() if art_package else ""
+    return (
+        "Create one complete ORIGINAL RainbowMilkStudio watercolor storybook illustration. "
+        f"Product: {job.product_name}. "
+        f"Product type: {canonical_product_type}. "
+        f"Activity and subject: {_original_scene_subject(job)}. "
+        f"Canonical art direction: {art_descriptor} "
+        f"Brand direction: {profile.get('primary_brand', 'warm storybook watercolor animal illustrations')}. "
+        "Use two to four expressive anthropomorphic animals of one coherent species or a deliberately "
+        "named animal family. Dress them in detailed vintage-inspired cottage clothing with varied colors, "
+        "natural fabric texture, hats, aprons, jackets, dresses, or overalls suited to the activity. "
+        "Show a specific joyful everyday story moment in a lush garden, woodland path, cozy cottage, "
+        "bakery, picnic, or tea setting. Include meaningful props that support the activity. "
+        "Use sophisticated hand-painted watercolor and gentle gouache, delicate linework, rich botanical "
+        "detail, natural depth, luminous soft daylight, and a polished vintage children's-book mood. "
+        f"Use this vibrant balanced palette: {_original_scene_palette(job)}. "
+        "Avoid an all-orange, all-brown, or generic autumn palette. Across the four generated images, "
+        "create four clearly different moments, poses, arrangements, settings, and camera viewpoints "
+        "while preserving the same characters, clothing, activity theme, palette, and painting language. "
+        "Every image must be a complete edge-to-edge scenic illustration, never a character sheet. "
+        "Keep all heads, ears, paws, feet, tails, clothing, and important props fully visible with at least "
+        "10 percent breathing room around the principal characters. No cropped characters. "
+        "Opaque painted background. No transparency, isolated elements, grid, collage, geometric backdrop, "
+        "mockup, product cover, label, typography, text, words, letters, numbers, logo, or watermark. "
+        "Create original characters only. Do not reproduce copyrighted characters, existing artwork, "
+        "living artists' styles, shop listings, or recognizable compositions."
+    )
+
+
+def _original_scene_subject(job: ProductionJob) -> str:
+    text = f"{job.product_name} {' '.join(job.keywords)}".casefold()
+    animal = next(
+        (name for name in ("rabbit", "bunny", "mouse", "mice", "kitten", "cat", "bear", "fox", "hedgehog", "bird") if name in text),
+        "woodland animal",
+    )
+    activities = (
+        ("tea", "hosting a garden tea party with a porcelain tea set, cakes, flowers, and conversation"),
+        ("bak", "baking and sharing bread, pastries, mixing bowls, recipe books, and kitchen tools"),
+        ("picnic", "preparing and enjoying a country picnic with baskets, fruit, flowers, and a checked cloth"),
+        ("garden", "gardening together with watering cans, seedlings, baskets, flowers, and small tools"),
+        ("dance", "dancing together on a flower-lined woodland path with ribbons and baskets"),
+        ("play", "playing imaginative outdoor games with handmade toys, flowers, and woodland treasures"),
+        ("read", "reading and sharing books in a cozy garden or cottage reading place"),
+        ("lunch", "sharing a cheerful country lunch around a beautifully arranged table"),
+    )
+    activity = next((description for term, description in activities if term in text), "sharing a warm, specific cottage-garden activity together")
+    return f"a consistent group of {animal} characters {activity}"
+
+
+def _original_scene_palette(job: ProductionJob) -> str:
+    palettes = (
+        "cornflower blue, rose pink, leafy green, butter yellow, ivory, and small berry-red accents",
+        "sage green, lavender, dusty blue, soft coral, warm cream, and raspberry accents",
+        "teal blue, peony pink, moss green, marigold yellow, porcelain white, and plum accents",
+        "sky blue, fresh fern green, blush, lilac, soft apricot, and clean warm cream",
+    )
+    key = f"{job.product_name}|{job.id}"
+    return palettes[sum(ord(character) for character in key) % len(palettes)]
+
+
 def _storybook_scene_prompt(
     job: ProductionJob,
     canonical_product_type: str,
@@ -2000,8 +2368,18 @@ def _product_family_negative_prompt(product_family: str) -> str:
     )
 
 
-def _prompt_subjects(job: ProductionJob) -> str:
+def _prompt_subjects(job: ProductionJob, product_family: str = "") -> str:
     text = f"{job.product_name} {' '.join(job.keywords)}".casefold()
+    if product_family.upper() == GENERATION_MODE_CHARACTERS:
+        if "bak" in text:
+            return "separated full-body human kid baker characters with aprons, mixing bowls, recipe cards, bread baskets, and cheerful bakery accessories"
+        if "garden" in text:
+            return "separated full-body human kid gardener characters with hats, watering cans, seed packets, flower pots, tiny tools, and colorful clothing"
+        if "bird" in text:
+            return "separated full-body human kid bird-watcher characters with binoculars, notebooks, garden hats, flowers, and nature-study accessories"
+        if "event" in text or "party" in text or "birthday" in text:
+            return "separated full-body human kid party characters with balloons, cakes, wrapped gifts, banners, and cheerful event accessories"
+        return "separated full-body human kid characters with colorful clothing, gentle expressions, craft props, flowers, and everyday storybook accessories"
     if "bird" in text:
         return "song birds, nests, flowering tree branches, garden flowers, ribbons, and tiny nature props"
     if "fairy" in text or "magical" in text:
@@ -2011,7 +2389,7 @@ def _prompt_subjects(job: ProductionJob) -> str:
     if "event" in text or "birthday" in text or "party" in text:
         return "children-friendly party props, flowers, banners, cakes, balloons, birds, and storybook celebration details"
     if "tree" in text:
-        return "flowering trees, branches, leaves, birds, blossoms, nests, and cottage garden accents"
+        return "one complete flowering-tree branch with leaves and blossoms, plus no more than two tiny cottage-garden botanical accents"
     if "bakery" in text:
         return "rabbit baking bread, fox reading a recipe book, mouse painting at a tiny easel, bear holding a pie"
     if "mushroom" in text:

@@ -96,6 +96,17 @@ class ProductionHardeningTest(unittest.TestCase):
         self.assertFalse(result.resolved)
         self.assertIn("No verified taxonomy", result.resolution_reason)
 
+    def test_botanical_clipart_uses_clip_art_taxonomy_not_digital_prints(self) -> None:
+        result = EtsyTaxonomyResolver().resolve(
+            product_name="Flowering Tree Branch Botanical Clipart",
+            product_type="watercolor_botanical_collection",
+            category="watercolor_botanical_collection",
+        )
+
+        self.assertTrue(result.resolved)
+        self.assertEqual(result.taxonomy_id, 6844)
+        self.assertEqual(result.taxonomy_name, "Clip Art & Image Files")
+
     def test_wedding_printable_scope_allows_invitation_name(self) -> None:
         result = resolve_watercolor_scope(
             "Wildflower Wedding Invitation",

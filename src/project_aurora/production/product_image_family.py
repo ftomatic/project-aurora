@@ -7,6 +7,7 @@ from dataclasses import dataclass
 
 STORYBOOK_SCENE = "STORYBOOK_SCENE"
 CLIPART = "CLIPART"
+DIGITAL_PAPER = "DIGITAL_PAPER"
 
 
 @dataclass(frozen=True, slots=True)
@@ -27,6 +28,23 @@ def resolve_product_image_family(
 ) -> ProductImageFamily:
     """Resolve image behavior from product type, not visual guessing."""
     text = f"{product_name} {product_type} {category}".casefold().replace("_", " ")
+    if "digital paper" in text or "seamless pattern" in text:
+        return ProductImageFamily(
+            family=DIGITAL_PAPER,
+            transparent_background=False,
+            openai_background="opaque",
+            prompt_requirements=(
+                "complete edge-to-edge pattern",
+                "opaque background",
+                "seamless repeat",
+                "no transparent margins",
+            ),
+            quality_requirements=(
+                "opaque background",
+                "complete pattern coverage",
+                "no clipping or empty margins",
+            ),
+        )
     if any(term in text for term in ("clipart", "clip art", "clipart bundle", "png bundle")):
         return ProductImageFamily(
             family=CLIPART,

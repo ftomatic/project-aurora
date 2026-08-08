@@ -1,4 +1,4 @@
-"""Create Etsy listing preview images from transparent customer PNGs."""
+"""Create Etsy listing preview images from product customer PNGs."""
 
 from __future__ import annotations
 
@@ -41,7 +41,7 @@ class ListingPreviewExportResult:
 
 
 class ListingPreviewExporter:
-    """Export warm cream-background Etsy listing previews."""
+    """Export Etsy listing previews without changing product-family semantics."""
 
     def __init__(
         self,
@@ -152,7 +152,7 @@ class ListingPreviewExporter:
             artwork = _trim_transparent_bounds(artwork)
             max_art = int(PREVIEW_SIZE[0] * ARTWORK_FRAME_RATIO)
             artwork.thumbnail((max_art, max_art), Image.Resampling.LANCZOS)
-            canvas = _paper_texture()
+            canvas = Image.new("RGBA", PREVIEW_SIZE, (255, 255, 255, 0))
             left = (PREVIEW_SIZE[0] - artwork.width) // 2
             top = (PREVIEW_SIZE[1] - artwork.height) // 2
             canvas.alpha_composite(artwork, (left, top))

@@ -228,7 +228,7 @@ class ProductionQueueManager:
 
     def mark_ready(self, job_id: str) -> ProductionJob:
         """Mark a job ready for production."""
-        return self._mark_status(job_id, READY)
+        return self._mark_status_and_reason(job_id, READY, "")
 
     def mark_completed(self, job_id: str) -> ProductionJob:
         """Mark a job completed."""
@@ -261,6 +261,38 @@ class ProductionQueueManager:
         self._save()
         return changed_job
 
+    def reactivate_unsupported_job(
+        self,
+        job_id: str,
+        *,
+        category: str,
+        source_evidence: tuple[str, ...],
+    ) -> ProductionJob:
+        """Reactivate a capability-blocked job after explicit replanning."""
+        updated: list[ProductionJob] = []
+        changed_job: ProductionJob | None = None
+        for job in self._jobs:
+            if job.id != job_id:
+                updated.append(job)
+                continue
+            if job.status != UNSUPPORTED_PRODUCT_TYPE:
+                raise ValueError(
+                    "Only UNSUPPORTED_PRODUCT_TYPE jobs can be reactivated."
+                )
+            changed_job = replace(
+                job,
+                category=category,
+                source_evidence=source_evidence,
+                status=READY,
+                blocking_reason="",
+            )
+            updated.append(changed_job)
+        if changed_job is None:
+            raise ValueError(f"Production job not found: {job_id}.")
+        self._jobs = self._sorted_jobs(tuple(updated))
+        self._save()
+        return changed_job
+
     def next_ready_job(self) -> ProductionJob | None:
         """Return the highest-confidence ready job."""
         for job in self._sorted_jobs(self._jobs):
@@ -276,12 +308,36 @@ class ProductionQueueManager:
         """Return normalized product names already in the queue."""
         return {_normalize_product_name(job.product_name) for job in self._jobs}
 
+    def find_product(self, product_name: str) -> ProductionJob | None:
+        """Return an existing product job by normalized product name."""
+        normalized = _normalize_product_name(product_name)
+        return next(
+            (
+                job
+                for job in self._jobs
+                if _normalize_product_name(job.product_name) == normalized
+            ),
+            None,
+        )
+
     def _mark_status(self, job_id: str, status: str) -> ProductionJob:
+        return self._mark_status_and_reason(job_id, status, None)
+
+    def _mark_status_and_reason(
+        self,
+        job_id: str,
+        status: str,
+        blocking_reason: str | None,
+    ) -> ProductionJob:
         updated: list[ProductionJob] = []
         changed_job: ProductionJob | None = None
         for job in self._jobs:
             if job.id == job_id:
-                changed_job = job.with_status(status)
+                changed_job = (
+                    job.with_status(status)
+                    if blocking_reason is None
+                    else job.with_status_and_reason(status, blocking_reason)
+                )
                 updated.append(changed_job)
             else:
                 updated.append(job)

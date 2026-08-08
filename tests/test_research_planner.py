@@ -8,6 +8,7 @@ import unittest
 from contextlib import redirect_stdout
 from io import StringIO
 from pathlib import Path
+from types import SimpleNamespace
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 SRC_PATH = PROJECT_ROOT / "src"
@@ -18,10 +19,14 @@ sys.path.insert(0, str(PROJECT_ROOT))
 from project_aurora.planning.production_queue_manager import (  # noqa: E402
     COMPLETED,
     FAILED,
+    READY,
+    UNSUPPORTED_PRODUCT_TYPE,
     ProductionQueueManager,
 )
 from project_aurora.production.generation_strategy import (  # noqa: E402
+    GENERATION_MODE_ORIGINAL,
     GENERATION_MODE_STORYBOOK,
+    GENERATION_MODE_WEDDING,
 )
 from project_aurora.portfolio.atlas_portfolio_manager import (  # noqa: E402
     AtlasPortfolioManager,
@@ -39,6 +44,7 @@ from scripts.run_research_planner import (  # noqa: E402
     parse_args,
     print_quality_gate,
     request_production_approval,
+    mode_specific_opportunities,
 )
 
 
@@ -227,6 +233,20 @@ class ResearchPlannerTest(unittest.TestCase):
 
         self.assertTrue(args.auto_approve)
         self.assertEqual(args.count, 1)
+
+    def test_original_mode_has_dedicated_brand_aligned_candidates(self) -> None:
+        args = parse_args(["--count", "1", "--mode", "original"])
+        candidates = mode_specific_opportunities(GENERATION_MODE_ORIGINAL)
+
+        self.assertEqual(args.mode, "original")
+        self.assertGreaterEqual(len(candidates), 5)
+        self.assertTrue(all("Original" in item.keyword for item in candidates))
+        self.assertTrue(
+            all(
+                item.product_type == "signature_storybook_animal_collection"
+                for item in candidates
+            )
+        )
 
     def test_confidence_threshold_warns_for_weak_portfolio(self) -> None:
         opportunities = tuple(opportunity(index, confidence=70) for index in range(8))
@@ -564,6 +584,101 @@ class ResearchPlannerTest(unittest.TestCase):
         self.assertNotIn("Hedgehog Tea Party Watercolor Clipart", names)
         self.assertNotIn("Coquette Bow Bridal Clipart", names)
         self.assertNotIn("Vintage Lace Digital Paper", names)
+
+    def test_explicit_wedding_handoff_reactivates_stale_unsupported_job(self) -> None:
+        candidate = opportunity(
+            0,
+            product_name="French Country Wedding Invitation",
+            niche="Wedding",
+            product_type="wedding printable",
+            style="Pressed Flowers",
+        )
+        self.queue.add_job(
+            priority="High",
+            product_name=candidate.keyword,
+            category="wedding printable",
+            style=candidate.recommended_artistic_style,
+            seasonal_theme=candidate.season,
+            keywords=("wedding", "invitation"),
+            confidence_score=0.91,
+            estimated_competition="Low",
+            estimated_demand="High",
+            estimated_revenue=120,
+            status=UNSUPPORTED_PRODUCT_TYPE,
+        )
+        stale_job = self.queue.list_jobs()[0]
+        self.queue.mark_unsupported_product_type(
+            stale_job.id,
+            "Rejected because brand score is below threshold.",
+        )
+        plan = AtlasPortfolioManager(
+            config=self.config(daily_products=1),
+            queue_manager=ProductionQueueManager(
+                queue_path=self.base_path / "portfolio_queue.json"
+            ),
+            memory=self.memory,
+        ).build_portfolio((candidate,))
+
+        with redirect_stdout(StringIO()) as output:
+            recovered = handoff_to_forge(
+                plan,
+                self.queue,
+                generation_mode="wedding",
+            )
+
+        self.assertEqual(recovered, 1)
+        jobs = self.queue.list_jobs()
+        self.assertEqual(len(jobs), 1)
+        self.assertEqual(jobs[0].status, READY)
+        self.assertEqual(jobs[0].blocking_reason, "")
+        self.assertIn(
+            f"generation_mode={GENERATION_MODE_WEDDING}",
+            jobs[0].source_evidence,
+        )
+        self.assertIn("REACTIVATED", output.getvalue())
+
+    def test_explicit_mode_prioritizes_stale_unsupported_fallback_before_replacement(self) -> None:
+        stale = opportunity(
+            0,
+            product_name="Sage Botanical Digital Paper",
+            niche="Digital Paper",
+            product_type="digital print",
+            style="Vintage Botanical",
+        )
+        replacement = opportunity(
+            1,
+            product_name="Teacher Digital Paper",
+            niche="Digital Paper",
+            product_type="digital print",
+            style="Flat Vector",
+        )
+        self.queue.add_job(
+            priority="High",
+            product_name=stale.keyword,
+            category="digital print",
+            style=stale.recommended_artistic_style,
+            seasonal_theme=stale.season,
+            keywords=("sage", "botanical", "digital", "paper"),
+            confidence_score=0.95,
+            estimated_competition="Low",
+            estimated_demand="High",
+            estimated_revenue=120,
+            status=UNSUPPORTED_PRODUCT_TYPE,
+        )
+
+        recovered = handoff_to_forge(
+            SimpleNamespace(selected=(replacement,)),
+            self.queue,
+            fallback_opportunities=(stale, replacement),
+            target_new_jobs=1,
+            generation_mode="digital-paper",
+        )
+
+        self.assertEqual(recovered, 1)
+        jobs = self.queue.list_jobs()
+        self.assertEqual(len(jobs), 1)
+        self.assertEqual(jobs[0].product_name, stale.keyword)
+        self.assertEqual(jobs[0].status, READY)
 
     def test_explicit_character_mode_uses_character_candidates(self) -> None:
         candidates = build_brand_profile_portfolio_candidates(

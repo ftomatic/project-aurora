@@ -52,7 +52,7 @@ class ListingPreviewExporterTest(unittest.TestCase):
     def tearDown(self) -> None:
         self.temp_dir.cleanup()
 
-    def test_creates_cream_background_preview_images(self) -> None:
+    def test_creates_transparent_clipart_preview_images(self) -> None:
         result = ListingPreviewExporter(
             final_images_dir=self.final_dir,
             output_dir=self.preview_dir,
@@ -64,9 +64,7 @@ class ListingPreviewExporterTest(unittest.TestCase):
         with Image.open(result.preview_files[0]) as image:
             self.assertEqual(image.size, PREVIEW_SIZE)
             corner = image.convert("RGBA").getpixel((5, 5))
-        self.assertGreater(corner[0], 230)
-        self.assertGreater(corner[1], 220)
-        self.assertGreater(corner[2], 200)
+        self.assertEqual(corner[3], 0)
         self.assertEqual(Path(result.preview_files[0]).parent.name, "listing_images")
 
     def test_rejects_missing_customer_files(self) -> None:
@@ -180,9 +178,7 @@ class ListingPreviewExporterTest(unittest.TestCase):
         self.assertEqual(result.status, "SUCCESS")
         with Image.open(result.preview_files[0]) as image:
             corner = image.convert("RGBA").getpixel((10, 10))
-        self.assertGreater(corner[0], 230)
-        self.assertGreater(corner[1], 220)
-        self.assertGreater(corner[2], 200)
+        self.assertEqual(corner[3], 0)
 
     def test_storybook_listing_uses_four_scene_previews(self) -> None:
         scene_dir = self.base_path / "storybook_scenes"

@@ -31,6 +31,9 @@ from project_aurora.integrations.etsy.etsy_result import (  # noqa: E402
     EtsyDigitalFileUploadAttempt,
     EtsyDigitalFileUploadResult,
 )
+from project_aurora.production.generation_strategy import (  # noqa: E402
+    GENERATION_MODE_DIGITAL_PAPER,
+)
 from project_aurora.seo.description_builder import (  # noqa: E402
     PURCHASE_SECTION,
     RAINBOW_MILK_STUDIO_DESCRIPTION,
@@ -634,6 +637,25 @@ class CompleteEtsyDraftTest(unittest.TestCase):
         saved = self.memory.load_etsy_digital_file_upload_result()
         self.assertEqual(saved["status"], "SUCCESS")
         self.assertEqual(saved["metadata"]["total_present"], 4)
+
+    def test_sync_digital_files_accepts_opaque_digital_paper(self) -> None:
+        client = FakeCompleteEtsyClient(self.config)
+
+        result = EtsyDigitalFileService(
+            config=self.config,
+            memory=self.memory,
+            client=client,
+        ).sync_digital_files(
+            listing_id="123456789",
+            final_images_dir=self.final_images_dir,
+            product_family=GENERATION_MODE_DIGITAL_PAPER,
+        )
+
+        self.assertEqual(result.status, "SUCCESS")
+        self.assertEqual(result.files_uploaded, 4)
+        self.assertFalse(
+            any("TRANSPARENCY_REQUIRED" in error for error in result.errors)
+        )
 
     def test_sync_digital_files_is_safe_to_rerun_without_duplicates(self) -> None:
         client = FakeCompleteEtsyClient(self.config)

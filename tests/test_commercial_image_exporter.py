@@ -6,6 +6,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from PIL import Image
 
@@ -207,6 +208,36 @@ class CommercialImageExporterTest(unittest.TestCase):
         self.assertEqual(result.status, "SUCCESS")
         self.assertEqual(validate_commercial_png(Path(result.exported_files[0]), product_family=GENERATION_MODE_DIGITAL_PAPER), ())
 
+    def test_optimized_digital_paper_does_not_reintroduce_palette_alpha(self) -> None:
+        for index in range(1, 5):
+            write_png(
+                self.source_dir / f"paper_{index:02d}.png",
+                (80, 120, 160, 255),
+                size=(64, 64),
+            )
+
+        with patch(
+            "project_aurora.image_generation.commercial_image_exporter.MAX_SINGLE_PNG_SIZE_BYTES",
+            1,
+        ):
+            result = CommercialImageExporter(
+                source_dir=self.source_dir,
+                output_dir=self.output_dir,
+                product_family=GENERATION_MODE_DIGITAL_PAPER,
+            ).export()
+
+        self.assertEqual(result.status, "SUCCESS")
+        output = Path(result.exported_files[0])
+        with Image.open(output) as image:
+            self.assertNotIn("transparency", image.info)
+        self.assertEqual(
+            validate_commercial_png(
+                output,
+                product_family=GENERATION_MODE_DIGITAL_PAPER,
+            ),
+            (),
+        )
+
     def test_wedding_exports_as_opaque_without_clipart_transparency_rule(self) -> None:
         for index in range(1, 5):
             write_png(
@@ -224,7 +255,7 @@ class CommercialImageExporterTest(unittest.TestCase):
         self.assertEqual(result.status, "SUCCESS")
         self.assertEqual(validate_commercial_png(Path(result.exported_files[0]), product_family=GENERATION_MODE_WEDDING), ())
 
-    def test_product_family_resolves_clipart_and_storybook_scene(self) -> None:
+    def test_product_family_resolves_clipart_storybook_scene_and_digital_paper(self) -> None:
         clipart = resolve_product_image_family(
             "Woodland Animal Clipart",
             "clipart collection",
@@ -233,11 +264,18 @@ class CommercialImageExporterTest(unittest.TestCase):
             "Woodland Tea Party",
             "storybook scene collection",
         )
+        digital_paper = resolve_product_image_family(
+            "Sage Botanical Digital Paper",
+            "digital_paper",
+        )
 
         self.assertTrue(clipart.transparent_background)
         self.assertEqual(clipart.openai_background, "transparent")
         self.assertFalse(scene.transparent_background)
         self.assertEqual(scene.openai_background, "opaque")
+        self.assertEqual(digital_paper.family, GENERATION_MODE_DIGITAL_PAPER)
+        self.assertFalse(digital_paper.transparent_background)
+        self.assertEqual(digital_paper.openai_background, "opaque")
 
 
 if __name__ == "__main__":

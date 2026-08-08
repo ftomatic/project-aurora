@@ -16,6 +16,9 @@ from project_aurora.image_generation.image_inspector import (
     GeneratedImageInspection,
     inspect_png,
 )
+from project_aurora.image_generation.clipart_safe_area import (
+    validate_clipart_safe_area,
+)
 from project_aurora.production.product_image_family import CLIPART, STORYBOOK_SCENE
 from project_aurora.production.generation_strategy import (
     GENERATION_MODE_BOTANICAL,
@@ -96,6 +99,8 @@ class CommercialImageExporter:
         inspections: list[GeneratedImageInspection] = []
         errors: list[str] = []
         for index, source_path in enumerate(source_files, start=1):
+            if self._product_family in TRANSPARENT_PRODUCT_FAMILIES:
+                errors.extend(validate_clipart_safe_area(source_path))
             output_path = self._output_path(index)
             self._export_one(source_path, output_path, self._product_family)
             validation_errors = validate_commercial_png(
@@ -218,7 +223,10 @@ def _trim_transparent_bounds(image: Image.Image) -> Image.Image:
 
 
 def _save_optimized_png(image: Image.Image, output_path: Path) -> None:
-    image.save(
+    save_image = image
+    if image.mode == "RGBA" and image.getchannel("A").getextrema() == (255, 255):
+        save_image = image.convert("RGB")
+    save_image.save(
         output_path,
         format="PNG",
         dpi=(COMMERCIAL_IMAGE_DPI, COMMERCIAL_IMAGE_DPI),
@@ -227,7 +235,7 @@ def _save_optimized_png(image: Image.Image, output_path: Path) -> None:
     )
     if output_path.stat().st_size <= MAX_SINGLE_PNG_SIZE_BYTES:
         return
-    image.quantize(colors=192, method=Image.Quantize.FASTOCTREE).save(
+    save_image.quantize(colors=192, method=Image.Quantize.FASTOCTREE).save(
         output_path,
         format="PNG",
         dpi=(COMMERCIAL_IMAGE_DPI, COMMERCIAL_IMAGE_DPI),

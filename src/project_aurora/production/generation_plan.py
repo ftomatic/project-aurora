@@ -16,6 +16,7 @@ from project_aurora.production.generation_strategy import (
     GENERATION_MODE_CHARACTERS,
     GENERATION_MODE_CLIPART,
     GENERATION_MODE_DIGITAL_PAPER,
+    GENERATION_MODE_ORIGINAL,
     GENERATION_MODE_STORYBOOK,
     GENERATION_MODE_WEDDING,
     SUPPORTED_GENERATION_STRATEGIES,
@@ -70,9 +71,9 @@ class GenerationPlanResolver:
     ) -> GenerationPlan:
         """Resolve one generation plan from product business context."""
         requested = _normalize_mode(listing_family)
-        if requested == GENERATION_MODE_STORYBOOK:
+        if requested in {GENERATION_MODE_STORYBOOK, GENERATION_MODE_ORIGINAL}:
             return GenerationPlan(
-                resolved_mode=GENERATION_MODE_STORYBOOK,
+                resolved_mode=requested,
                 decision_reason="Explicit per-product generation mode override.",
                 scene_required=True,
             )

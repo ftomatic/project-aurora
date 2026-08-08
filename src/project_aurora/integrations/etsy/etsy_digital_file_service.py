@@ -235,11 +235,19 @@ class EtsyDigitalFileService:
         self,
         listing_id: str | None,
         final_images_dir: Path,
+        product_family: str = "",
     ) -> EtsyDigitalFileUploadResult:
         """Idempotently sync expected digital PNG files to an Etsy draft."""
         files = self._find_pngs(final_images_dir)
         file_by_name = {file_path.name: file_path for file_path in files}
-        errors = list(self._preflight_errors(listing_id, final_images_dir, files))
+        errors = list(
+            self._preflight_errors(
+                listing_id,
+                final_images_dir,
+                files,
+                product_family=product_family,
+            )
+        )
         if errors:
             result = EtsyDigitalFileUploadResult(
                 status="CONFIGURATION_REQUIRED",
@@ -394,6 +402,7 @@ class EtsyDigitalFileService:
         listing_id: str | None,
         final_images_dir: Path,
         files: tuple[Path, ...],
+        product_family: str = "",
     ) -> tuple[str, ...]:
         errors: list[str] = []
         missing = self._missing_config()
@@ -417,7 +426,10 @@ class EtsyDigitalFileService:
                 )
             errors.extend(
                 f"{file_path.name}: {error}"
-                for error in validate_commercial_png(file_path)
+                for error in validate_commercial_png(
+                    file_path,
+                    product_family=product_family,
+                )
             )
         return tuple(errors)
 

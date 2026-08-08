@@ -16,6 +16,7 @@ from project_aurora.production.generation_plan import (  # noqa: E402
     GENERATION_MODE_CHARACTERS,
     GENERATION_MODE_CLIPART,
     GENERATION_MODE_DIGITAL_PAPER,
+    GENERATION_MODE_ORIGINAL,
     GENERATION_MODE_STORYBOOK,
     GENERATION_MODE_WEDDING,
     GenerationPlanResolver,
@@ -78,6 +79,15 @@ class GenerationPlanResolverTest(unittest.TestCase):
 
                 self.assertEqual(plan.resolved_mode, mode)
                 self.assertFalse(plan.scene_required)
+
+    def test_explicit_original_mode_uses_storybook_scene_pipeline(self) -> None:
+        plan = self.resolver.resolve(
+            product_name="Bunny Garden Tea Original Watercolor Collection",
+            listing_family=GENERATION_MODE_ORIGINAL,
+        )
+
+        self.assertEqual(plan.resolved_mode, GENERATION_MODE_ORIGINAL)
+        self.assertTrue(plan.scene_required)
 
 
 if __name__ == "__main__":

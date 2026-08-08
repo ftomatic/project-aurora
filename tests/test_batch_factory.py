@@ -26,6 +26,7 @@ from project_aurora.planning.production_queue_manager import (  # noqa: E402
 )
 from project_aurora.production.product_factory import REPORT_COLLECTION  # noqa: E402
 from project_aurora.production.generation_strategy import (  # noqa: E402
+    GENERATION_MODE_ORIGINAL,
     GENERATION_MODE_STORYBOOK,
 )
 from project_aurora.production.production_report import ProductionReport  # noqa: E402
@@ -278,10 +279,19 @@ class BatchFactoryTest(unittest.TestCase):
         digital_job = _job_with_generation_strategy(job, "digital-paper")
         character_job = _job_with_generation_strategy(job, "characters")
         wedding_job = _job_with_generation_strategy(job, "wedding")
+        original_job = _job_with_generation_strategy(job, "original")
 
         self.assertEqual(digital_job.category, "digital print")
         self.assertEqual(character_job.category, "clipart")
         self.assertEqual(wedding_job.category, "wedding printable")
+        self.assertEqual(
+            original_job.category,
+            "signature_storybook_animal_collection",
+        )
+        self.assertIn(
+            f"generation_mode={GENERATION_MODE_ORIGINAL}",
+            original_job.source_evidence,
+        )
 
     def test_failed_job_is_not_promoted_without_retry_policy(self) -> None:
         self.queue.add_existing_job(make_job(1, status=FAILED))
@@ -364,6 +374,10 @@ class BatchFactoryTest(unittest.TestCase):
                 queue_manager=self.queue,
                 memory=self.memory,
                 stage_runner_factory=lambda _job: FakeBatchStageRunner(),
+                auto_refill_queue=True,
+                queue_refill=lambda *_args: self.fail(
+                    "A skipped count=1 job must not trigger another refill."
+                ),
             ).run(1)
 
         self.assertEqual(report.attempted, 1)
