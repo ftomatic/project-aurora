@@ -49,9 +49,7 @@ from project_aurora.production.product_factory import (  # noqa: E402
     ProductFactoryJobPaths,
     _generation_plan_from_prompt,
     _ensure_listing_previews,
-)
-from project_aurora.production.product_image_family import (  # noqa: E402
-    resolve_product_image_family,
+    _prompt_package_product_family,
 )
 from project_aurora.production.digital_download_builder import (  # noqa: E402
     DigitalDownloadBuilder,
@@ -142,11 +140,7 @@ class ProductFactoryResumeService:
             prompt_package = self._memory.load_prompt_package(job_id)
         except FileNotFoundError:
             prompt_package = {}
-        product_family = resolve_product_image_family(
-            job.product_name,
-            str(prompt_package.get("product_type") or job.category),
-            job.category,
-        ).family
+        product_family = _prompt_package_product_family(job, prompt_package)
         _valid_final_image_files(final_images_dir, product_family=product_family)
         listing_images_dir = _listing_images_dir_from_report(report_data)
         generation_plan = _generation_plan_from_prompt(job, prompt_package)
@@ -357,11 +351,7 @@ class ProductFactoryResumeService:
             prompt_package = self._memory.load_prompt_package(job_id)
         except FileNotFoundError:
             prompt_package = {}
-        return resolve_product_image_family(
-            job.product_name,
-            str(prompt_package.get("product_type") or job.category),
-            job.category,
-        ).family
+        return _prompt_package_product_family(job, prompt_package)
 
     def _sync_customer_downloads(
         self,
@@ -733,11 +723,7 @@ class StageAwareResumeRunner(DefaultProductFactoryStageRunner):
             prompt_package = self._memory.load_prompt_package(job.id)
         except FileNotFoundError:
             prompt_package = {}
-        product_family = resolve_product_image_family(
-            job.product_name,
-            str(prompt_package.get("product_type") or job.category),
-            job.category,
-        ).family
+        product_family = _prompt_package_product_family(job, prompt_package)
         _valid_final_image_files(
             self.job_paths(job).final_images_dir,
             product_family=product_family,
@@ -800,11 +786,7 @@ class StageAwareResumeRunner(DefaultProductFactoryStageRunner):
             prompt_package = self._memory.load_prompt_package(job.id)
         except FileNotFoundError:
             prompt_package = {}
-        product_family = resolve_product_image_family(
-            job.product_name,
-            str(prompt_package.get("product_type") or job.category),
-            job.category,
-        ).family
+        product_family = _prompt_package_product_family(job, prompt_package)
         return EtsyDigitalFileService(
             config=self._etsy_config,
             memory=self._memory,

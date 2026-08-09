@@ -1244,6 +1244,15 @@ class ProductFactoryTest(unittest.TestCase):
             paths=ProductFactoryPaths(jobs_dir=self.base_path / "jobs"),
         )
         job_paths = runner.job_paths(self.job)
+        self.memory.save_prompt_package(
+            {
+                "product_name": self.job.product_name,
+                "generation_mode": GENERATION_MODE_ORIGINAL,
+                "product_family": "STORYBOOK_SCENE",
+                "customer_product_family": "CLIPART",
+            },
+            package_id=self.job.id,
+        )
         for index in range(1, 5):
             path = job_paths.final_images_dir / f"current_{index}.png"
             path.parent.mkdir(parents=True, exist_ok=True)

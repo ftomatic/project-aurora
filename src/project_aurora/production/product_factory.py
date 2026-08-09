@@ -33,7 +33,6 @@ from project_aurora.production.watercolor_scope import resolve_watercolor_scope
 from project_aurora.production.product_image_family import (
     CLIPART,
     STORYBOOK_SCENE,
-    resolve_product_image_family,
 )
 from project_aurora.production.generation_plan import (
     GENERATION_MODE_BOTANICAL,
@@ -768,11 +767,7 @@ class DefaultProductFactoryStageRunner:
             prompt_package = self._memory.load_prompt_package(job.id)
         except FileNotFoundError:
             prompt_package = {}
-        image_family = resolve_product_image_family(
-            job.product_name,
-            str(prompt_package.get("product_type") or job.category),
-            job.category,
-        )
+        image_family = _prompt_package_product_family(job, prompt_package)
         service = EtsyDigitalFileService(
             config=self._etsy_config,
             memory=self._memory,
@@ -780,7 +775,7 @@ class DefaultProductFactoryStageRunner:
         png_result = service.sync_digital_files(
             listing_id=listing_id,
             final_images_dir=job_paths.final_images_dir,
-            product_family=image_family.family,
+            product_family=image_family,
         )
         if getattr(png_result, "status", "").upper() != "SUCCESS":
             return png_result
@@ -788,7 +783,7 @@ class DefaultProductFactoryStageRunner:
             final_images_dir=job_paths.final_images_dir,
             output_dir=job_paths.digital_downloads_dir,
             zip_filename=f"{_asset_filename_prefix(job)}.zip",
-            product_family=image_family.family,
+            product_family=image_family,
         ).build()
         if package.status != "SUCCESS" or not package.zip_path:
             raise ProductFactoryStageError(

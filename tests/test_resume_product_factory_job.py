@@ -505,6 +505,15 @@ class ResumeProductFactoryJobTest(unittest.TestCase):
 
     def test_resume_customer_download_upload_syncs_only_missing_files(self) -> None:
         self.save_failed_report_for_stage("customer_download_upload", draft_id=LISTING_ID)
+        self.memory.save_prompt_package(
+            {
+                "product_name": "Rabbit Flower Walk Original Watercolor Collection",
+                "generation_mode": "ORIGINAL",
+                "product_family": "STORYBOOK_SCENE",
+                "customer_product_family": "CLIPART",
+            },
+            package_id=JOB_ID,
+        )
         client = FakeResumeEtsyClient(
             existing_images=(),
             existing_files=(
