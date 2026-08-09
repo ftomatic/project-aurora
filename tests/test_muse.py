@@ -69,6 +69,21 @@ class MuseTest(unittest.TestCase):
         self.assertEqual(direction.rendering_family, "vector")
         self.assertIn("no watercolor bleed", direction.negative_style_constraints)
 
+    def test_original_collection_uses_storybook_category_playbook(self) -> None:
+        direction = self.engine.select_style(
+            product="Bunny Garden Tea Original Watercolor Collection",
+            audience="storybook and craft buyers",
+            season="Spring",
+            product_type="signature_storybook_animal_collection",
+        )
+
+        self.assertEqual(direction.recommended_style, "Storybook Watercolor")
+        self.assertEqual(direction.rendering_family, "watercolor")
+        self.assertEqual(
+            direction.composition,
+            "isolated storybook elements",
+        )
+
     def test_proven_winner_raises_related_coastal_style_score(self) -> None:
         direction = self.engine.select_style(
             product="Coastal Beach Wall Art",

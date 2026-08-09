@@ -114,6 +114,7 @@ class ProductFactoryResumeService:
             "image_qa",
             "commercial_export",
             "seo_generation",
+            "taxonomy_resolution",
             "etsy_draft",
             "listing_image_upload",
             "customer_download_upload",
@@ -666,6 +667,18 @@ class StageAwareResumeRunner(DefaultProductFactoryStageRunner):
         self._failed_stage = failed_stage
 
     def compose_prompts(self, job: ProductionJob) -> Any:
+        if self._failed_stage == "taxonomy_resolution":
+            try:
+                prompt_package = self._memory.load_prompt_package(job.id)
+            except FileNotFoundError:
+                prompt_package = {}
+            if prompt_package:
+                return SimpleNamespace(
+                    status="SUCCESS",
+                    final_prompt=str(prompt_package.get("image_prompt") or ""),
+                    warnings=("Reused persisted prompt package during taxonomy recovery.",),
+                    errors=(),
+                )
         result = super().compose_prompts(job)
         if self._failed_stage == "image_qa":
             try:

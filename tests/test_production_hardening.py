@@ -107,6 +107,18 @@ class ProductionHardeningTest(unittest.TestCase):
         self.assertEqual(result.taxonomy_id, 6844)
         self.assertEqual(result.taxonomy_name, "Clip Art & Image Files")
 
+    def test_original_storybook_collection_uses_clip_art_taxonomy(self) -> None:
+        result = EtsyTaxonomyResolver().resolve(
+            product_name="Bunny Garden Tea Original Watercolor Collection",
+            product_type="signature_storybook_animal_collection",
+            category="signature_storybook_animal_collection",
+        )
+
+        self.assertTrue(result.resolved)
+        self.assertEqual(result.validated_product_type, "clipart")
+        self.assertEqual(result.taxonomy_id, 6844)
+        self.assertEqual(result.taxonomy_name, "Clip Art & Image Files")
+
     def test_wedding_printable_scope_allows_invitation_name(self) -> None:
         result = resolve_watercolor_scope(
             "Wildflower Wedding Invitation",

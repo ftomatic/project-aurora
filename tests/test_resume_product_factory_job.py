@@ -17,6 +17,7 @@ sys.path.insert(0, str(PROJECT_ROOT))
 sys.path.insert(0, str(SRC_PATH))
 
 from project_aurora.integrations.etsy.etsy_config import EtsyConfig  # noqa: E402
+from project_aurora.image_generation.provider_registry import ImageProviderConfig  # noqa: E402
 from project_aurora.planning.production_queue_manager import (  # noqa: E402
     COMPLETED,
     FAILED,
@@ -29,6 +30,7 @@ from project_aurora.storage.csv_storage import CSVStorage  # noqa: E402
 from project_aurora.storage.memory_manager import MemoryManager  # noqa: E402
 from scripts.resume_product_factory_job import (  # noqa: E402
     ProductFactoryResumeService,
+    StageAwareResumeRunner,
     _archive_rejected_generated_images,
     main,
 )
@@ -310,6 +312,30 @@ class ResumeProductFactoryJobTest(unittest.TestCase):
         self.assertEqual(result.images_uploaded_now, 0)
         self.assertEqual(client.uploaded_images, [])
         self.assertEqual(result.final_status, "COMPLETED")
+
+    def test_taxonomy_resume_reuses_persisted_prompt_package(self) -> None:
+        self.memory.save_prompt_package(
+            {
+                "product_name": "Bunny Garden Tea Original Watercolor Collection",
+                "image_prompt": "Persisted original prompt.",
+                "generation_mode": "ORIGINAL",
+            },
+            package_id=JOB_ID,
+        )
+        runner = StageAwareResumeRunner(
+            memory=self.memory,
+            etsy_config=self.config,
+            client=FakeResumeEtsyClient(existing_images=()),
+            existing_draft_id=None,
+            image_config=ImageProviderConfig(provider="mock"),
+            failed_stage="taxonomy_resolution",
+        )
+
+        result = runner.compose_prompts(self.make_job())
+
+        self.assertEqual(result.status, "SUCCESS")
+        self.assertEqual(result.final_prompt, "Persisted original prompt.")
+        self.assertIn("Reused persisted prompt package", result.warnings[0])
 
     def test_resume_regenerates_listing_previews_when_deleted(self) -> None:
         for path in self.listing_dir.glob("*.png"):

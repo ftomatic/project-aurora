@@ -114,6 +114,12 @@ class EtsyTaxonomyResolver:
 
 def _taxonomy_key(*values: str) -> str:
     lowered = " ".join(values).casefold()
+    if (
+        "signature_storybook_animal_collection" in lowered
+        or "signature storybook animal collection" in lowered
+        or "original watercolor collection" in lowered
+    ):
+        return "clipart"
     if "digital paper" in lowered:
         return "digital paper"
     if "seamless" in lowered or "pattern" in lowered:
