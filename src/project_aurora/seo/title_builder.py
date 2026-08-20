@@ -37,23 +37,28 @@ class TitleBuilder:
         else:
             title_parts.append(product_type)
 
-        for keyword in keywords:
-            if len(title_parts) >= 4:
-                break
+        ordered_keywords = tuple(
+            keyword for keyword in keywords if " " in keyword.strip()
+        ) + tuple(keyword for keyword in keywords if " " not in keyword.strip())
+        for keyword in ordered_keywords:
             legacy_party_terms = {
                 "cupcake toppers",
                 "favor tags",
                 "girls party decor",
                 "summer berry invitation",
             }
-            if (
-                len(keyword) <= 32
-                and keyword.casefold() not in product_lower
-                and keyword.casefold() not in legacy_party_terms
-            ):
+            if len(keyword) <= 32 and keyword.casefold() not in legacy_party_terms:
                 title_parts.append(keyword.title())
 
-        title = ", ".join(title_parts)
-        if len(title) <= 140:
-            return title
-        return title[:137].rstrip(" ,") + "..."
+        selected: list[str] = []
+        seen: set[str] = set()
+        for part in title_parts:
+            normalized = " ".join(part.casefold().split())
+            if not normalized or normalized in seen:
+                continue
+            candidate = ", ".join((*selected, part))
+            if len(candidate) > 140:
+                continue
+            selected.append(part)
+            seen.add(normalized)
+        return ", ".join(selected)

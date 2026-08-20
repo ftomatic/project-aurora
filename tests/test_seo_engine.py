@@ -64,6 +64,21 @@ class SEOEngineTest(unittest.TestCase):
         self.assertNotIn("Cupcake Toppers", title)
         self.assertLessEqual(len(title), 140)
 
+    def test_title_builder_uses_available_etsy_seo_capacity(self) -> None:
+        package = SEOEngine().build_package(
+            {
+                "product_name": "Fox Garden Watercolor Clipart",
+                "product_type": "clipart",
+                "target_buyer": "crafters and digital printable buyers",
+            }
+        )
+
+        self.assertGreaterEqual(len(package.title), 120)
+        self.assertLessEqual(len(package.title), 140)
+        self.assertIn("Fox Garden", package.title)
+        self.assertIn("Watercolor Clipart", package.title)
+        self.assertFalse(package.title.endswith("..."))
+
     def test_description_builder_returns_required_description(self) -> None:
         description = DescriptionBuilder().build_description(
             product_name=SAMPLE_PRODUCT_DATA["product_name"],

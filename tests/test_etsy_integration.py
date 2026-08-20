@@ -498,6 +498,117 @@ class EtsyIntegrationTest(unittest.TestCase):
         self.assertNotIn("image_ids", payload)
         self.assertNotIn("digital_files", payload)
 
+    def test_craft_types_use_current_taxonomy_property_ids(self) -> None:
+        config = EtsyConfig(
+            mode="live",
+            shop_id="shop",
+            client_id="fake_keystring",
+            shared_secret="fake_shared_secret",
+            access_token="fake_access_token",
+            taxonomy_id=6844,
+            api_base_url="https://example.test/v3/application",
+        )
+        calls = []
+        responses = iter(
+            (
+                {
+                    "results": [
+                        {
+                            "property_id": 321,
+                            "display_name": "Craft type",
+                            "possible_values": [
+                                {"value_id": 11, "name": "Card making & Stationery"},
+                                {"value_id": 12, "name": "Collage"},
+                                {"value_id": 13, "name": "Kids' crafts"},
+                                {"value_id": 14, "name": "Scrapbooking"},
+                            ],
+                        }
+                    ]
+                },
+                {"property_id": 321},
+            )
+        )
+
+        def fake_urlopen(api_request, timeout: int):  # type: ignore[no-untyped-def]
+            calls.append(api_request)
+            return FakeResponse(next(responses))
+
+        result = EtsyClient(config, urlopen=fake_urlopen).update_listing_craft_types(
+            listing_id="987654",
+            taxonomy_id=6844,
+            craft_types=config.craft_types,
+        )
+
+        self.assertEqual(result["values"], list(config.craft_types))
+        self.assertEqual(len(calls), 2)
+        self.assertEqual(calls[0].get_method(), "GET")
+        self.assertTrue(
+            calls[0].full_url.endswith("/seller-taxonomy/nodes/6844/properties")
+        )
+        self.assertEqual(calls[1].get_method(), "PUT")
+        self.assertTrue(
+            calls[1].full_url.endswith("/shops/shop/listings/987654/properties/321")
+        )
+        self.assertEqual(
+            json.loads(calls[1].data.decode("utf-8")),
+            {
+                "value_ids": [11, 12, 13, 14],
+                "values": [
+                    "Card making & Stationery",
+                    "Collage",
+                    "Kids' crafts",
+                    "Scrapbooking",
+                ],
+            },
+        )
+
+    def test_live_draft_service_applies_configured_craft_types(self) -> None:
+        class FakeCraftTypeClient:
+            def __init__(self) -> None:
+                self.calls: list[tuple[str, int, tuple[str, ...]]] = []
+
+            def create_draft_listing(self, payload):  # type: ignore[no-untyped-def]
+                return EtsyDraftResult(
+                    status="DRAFT_CREATED",
+                    etsy_listing_id="987654",
+                    draft_url="https://www.etsy.com/listing/987654",
+                    metadata={"api_called": True},
+                )
+
+            def update_listing_craft_types(
+                self,
+                listing_id: str,
+                taxonomy_id: int,
+                craft_types: tuple[str, ...],
+            ) -> dict[str, object]:
+                self.calls.append((listing_id, taxonomy_id, craft_types))
+                return {"property_id": 321, "values": list(craft_types)}
+
+        config = EtsyConfig(
+            mode="live",
+            shop_id="shop",
+            client_id="key",
+            shared_secret="secret",
+            access_token="token",
+            taxonomy_id=6844,
+        )
+        client = FakeCraftTypeClient()
+        result = EtsyDraftService(
+            config=config,
+            memory=self.memory,
+            client=client,  # type: ignore[arg-type]
+        ).create_draft(
+            listing_package=make_listing_package(self.final_image_files),
+            seo_package=self.seo_package,
+        )
+
+        self.assertEqual(result.status, "DRAFT_CREATED")
+        self.assertEqual(
+            client.calls,
+            [("987654", 6844, config.craft_types)],
+        )
+        self.assertEqual(result.metadata["craft_types"]["property_id"], 321)
+
     def test_live_client_lists_only_shop_draft_listings(self) -> None:
         config = EtsyConfig(
             mode="live",

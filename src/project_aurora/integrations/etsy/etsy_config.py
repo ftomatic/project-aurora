@@ -7,6 +7,14 @@ from dataclasses import dataclass
 from pathlib import Path
 
 
+DEFAULT_CRAFT_TYPES = (
+    "Card making & Stationery",
+    "Collage",
+    "Kids' crafts",
+    "Scrapbooking",
+)
+
+
 @dataclass(frozen=True, slots=True)
 class EtsyConfig:
     """Runtime configuration for Etsy draft creation."""
@@ -22,6 +30,7 @@ class EtsyConfig:
     taxonomy_id: int | None = None
     processing_profile_id: int | None = None
     shipping_profile_id: int | None = None
+    craft_types: tuple[str, ...] = DEFAULT_CRAFT_TYPES
 
     @classmethod
     def from_file(cls, path: Path) -> "EtsyConfig":
@@ -64,6 +73,9 @@ class EtsyConfig:
                 os.getenv("ETSY_SHIPPING_PROFILE_ID")
                 or values.get("shipping_profile_id")
             ),
+            craft_types=_optional_list(
+                os.getenv("ETSY_CRAFT_TYPES") or values.get("craft_types")
+            ) or DEFAULT_CRAFT_TYPES,
         )
 
     @classmethod
@@ -89,6 +101,8 @@ class EtsyConfig:
             or base_config.processing_profile_id,
             shipping_profile_id=_optional_int(os.getenv("ETSY_SHIPPING_PROFILE_ID"))
             or base_config.shipping_profile_id,
+            craft_types=_optional_list(os.getenv("ETSY_CRAFT_TYPES"))
+            or base_config.craft_types,
         )
 
     def credential_diagnostics(self) -> dict[str, object]:
@@ -141,3 +155,10 @@ def _optional_float(value: str | None) -> float:
     if value is None or not value.strip():
         return 0.0
     return float(value)
+
+
+def _optional_list(value: str | None) -> tuple[str, ...]:
+    if value is None:
+        return ()
+    separator = "|" if "|" in value else ","
+    return tuple(item.strip() for item in value.split(separator) if item.strip())

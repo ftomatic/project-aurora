@@ -216,6 +216,94 @@ class EtsyClient:
             data=fields,
         )
 
+    def get_taxonomy_properties(self, taxonomy_id: int) -> tuple[dict[str, Any], ...]:
+        """Return current properties and allowed values for a seller taxonomy."""
+        response = self.get_json(
+            f"/seller-taxonomy/nodes/{taxonomy_id}/properties"
+        )
+        results = response.get("results", ())
+        if not isinstance(results, list):
+            return ()
+        return tuple(item for item in results if isinstance(item, dict))
+
+    def update_listing_property(
+        self,
+        listing_id: str,
+        property_id: int,
+        value_ids: tuple[int, ...],
+        values: tuple[str, ...],
+    ) -> dict[str, Any]:
+        """Set one taxonomy property on an existing Etsy draft."""
+        if not self._config.shop_id:
+            raise RuntimeError("ETSY_SHOP_ID is required.")
+        if not value_ids or len(value_ids) != len(values):
+            raise RuntimeError("Listing property values require matching value IDs.")
+        return self._request_json(
+            path=(
+                f"/shops/{self._config.shop_id}/listings/{listing_id}/"
+                f"properties/{property_id}"
+            ),
+            method="PUT",
+            data={"value_ids": list(value_ids), "values": list(values)},
+        )
+
+    def update_listing_craft_types(
+        self,
+        listing_id: str,
+        taxonomy_id: int,
+        craft_types: tuple[str, ...],
+    ) -> dict[str, Any]:
+        """Resolve and set Craft type values without hardcoded Etsy IDs."""
+        properties = self.get_taxonomy_properties(taxonomy_id)
+        craft_property = next(
+            (
+                item
+                for item in properties
+                if _normalized_label(
+                    str(item.get("display_name") or item.get("name") or "")
+                ) == "craft type"
+            ),
+            None,
+        )
+        if craft_property is None:
+            raise RuntimeError(
+                f"Etsy taxonomy {taxonomy_id} does not expose a Craft type property."
+            )
+        property_id = int(craft_property["property_id"])
+        possible_values = craft_property.get("possible_values", ())
+        available = {
+            _normalized_label(str(item.get("name") or item.get("value") or "")): item
+            for item in possible_values
+            if isinstance(item, dict)
+        }
+        selected_ids: list[int] = []
+        selected_names: list[str] = []
+        missing: list[str] = []
+        for requested in craft_types:
+            match = available.get(_normalized_label(requested))
+            value_id = match.get("value_id") if match else None
+            if value_id is None:
+                missing.append(requested)
+                continue
+            selected_ids.append(int(value_id))
+            selected_names.append(str(match.get("name") or requested))
+        if missing:
+            raise RuntimeError(
+                "Etsy taxonomy does not support requested Craft type values: "
+                + ", ".join(missing)
+            )
+        response = self.update_listing_property(
+            listing_id=listing_id,
+            property_id=property_id,
+            value_ids=tuple(selected_ids),
+            values=tuple(selected_names),
+        )
+        return {
+            "property_id": property_id,
+            "values": selected_names,
+            "response": response,
+        }
+
     def update_listing_renewal_default(
         self,
         listing_id: str,
@@ -434,3 +522,9 @@ def _is_json_request(headers: dict[str, str]) -> bool:
         or ""
     )
     return "application/json" in content_type.casefold()
+
+
+def _normalized_label(value: str) -> str:
+    return " ".join(
+        value.casefold().replace("’", "'").replace("&", " and ").split()
+    )

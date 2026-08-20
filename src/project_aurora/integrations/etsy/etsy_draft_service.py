@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
+
 from project_aurora.integrations.etsy.etsy_client import EtsyClient
 from project_aurora.integrations.etsy.etsy_config import EtsyConfig
 from project_aurora.integrations.etsy.etsy_listing_mapper import (
@@ -88,6 +90,34 @@ class EtsyDraftService:
                 return result
 
         result = self._client.create_draft_listing(payload)
+        if (
+            not self._config.is_mock_mode
+            and result.etsy_listing_id
+            and self._config.taxonomy_id is not None
+            and self._config.craft_types
+        ):
+            try:
+                property_result = self._client.update_listing_craft_types(
+                    listing_id=result.etsy_listing_id,
+                    taxonomy_id=self._config.taxonomy_id,
+                    craft_types=self._config.craft_types,
+                )
+                result = replace(
+                    result,
+                    metadata={
+                        **result.metadata,
+                        "craft_types": property_result,
+                    },
+                )
+            except RuntimeError as error:
+                result = replace(
+                    result,
+                    warnings=(*result.warnings, str(error)),
+                    metadata={
+                        **result.metadata,
+                        "craft_types": {"status": "NOT_APPLIED"},
+                    },
+                )
         self._save_result(result)
         return result
 

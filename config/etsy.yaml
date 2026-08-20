@@ -21,3 +21,5 @@ default_quantity: 999
 taxonomy_id: 1250
 processing_profile_id:
 shipping_profile_id:
+# Applied after draft creation using the current taxonomy's property/value IDs.
+craft_types: Card making & Stationery|Collage|Kids' crafts|Scrapbooking
