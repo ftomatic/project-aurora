@@ -60,6 +60,12 @@ class ListingFamilyDecisionEngineTest(unittest.TestCase):
     def test_planner_stickers_selects_clipart(self) -> None:
         self.assertEqual(self.decide(category="planner stickers"), LISTING_FAMILY_CLIPART)
 
+    def test_wedding_selects_clipart(self) -> None:
+        self.assertEqual(self.decide(category="wedding elements"), LISTING_FAMILY_CLIPART)
+
+    def test_back_to_school_selects_clipart(self) -> None:
+        self.assertEqual(self.decide(theme="back to school"), LISTING_FAMILY_CLIPART)
+
     def test_explicit_storybook_override(self) -> None:
         self.assertEqual(
             self.decide(override=LISTING_FAMILY_STORYBOOK, category="icons", scene=True),

@@ -3,10 +3,14 @@
 from __future__ import annotations
 
 import base64
+import json
 import os
 from pathlib import Path
 from time import perf_counter, sleep
+from types import SimpleNamespace
 from typing import Any, Callable
+from urllib.error import HTTPError, URLError
+from urllib.request import Request, urlopen
 
 from project_aurora.image_generation.image_provider import ImageProvider
 from project_aurora.image_generation.image_quality import validate_image_quality
@@ -119,14 +123,7 @@ class OpenAIImageProvider(ImageProvider):
         return "OpenAI GPT Image"
 
     def _build_client(self) -> Any:
-        try:
-            from openai import OpenAI
-        except ImportError as error:
-            raise RuntimeError(
-                "OpenAI image generation requires the openai package. "
-                "Install dependencies with python3.14 -m pip install -r requirements.txt."
-            ) from error
-        return OpenAI(api_key=self._api_key)
+        return _OpenAIImageHTTPClient(api_key=str(self._api_key))
 
     def _save_response_images(
         self,
@@ -175,3 +172,45 @@ class OpenAIImageProvider(ImageProvider):
             .replace("/", "_")
             .replace(" ", "_")
         )
+
+
+class _OpenAIImageHTTPError(RuntimeError):
+    """Sanitized OpenAI HTTP error compatible with Aurora retry handling."""
+
+    def __init__(self, status_code: int, body: str) -> None:
+        self.status_code = status_code
+        super().__init__(f"OpenAI image request failed with HTTP {status_code}: {body}")
+
+
+class _OpenAIImagesResource:
+    """Minimal adapter matching the SDK's client.images.generate contract."""
+
+    def __init__(self, api_key: str) -> None:
+        self._api_key = api_key
+
+    def generate(self, **payload: Any) -> Any:
+        request = Request(
+            "https://api.openai.com/v1/images/generations",
+            data=json.dumps(payload).encode("utf-8"),
+            headers={
+                "Authorization": f"Bearer {self._api_key}",
+                "Content-Type": "application/json",
+            },
+            method="POST",
+        )
+        try:
+            with urlopen(request, timeout=300) as response:  # noqa: S310
+                response_payload = json.loads(response.read().decode("utf-8"))
+        except HTTPError as error:
+            body = error.read().decode("utf-8", errors="replace")
+            raise _OpenAIImageHTTPError(error.code, body) from error
+        except URLError as error:
+            raise RuntimeError(f"OpenAI image request failed: {error.reason}") from error
+        return SimpleNamespace(data=response_payload.get("data", ()))
+
+
+class _OpenAIImageHTTPClient:
+    """Direct image API client that avoids importing unrelated SDK resources."""
+
+    def __init__(self, api_key: str) -> None:
+        self.images = _OpenAIImagesResource(api_key)

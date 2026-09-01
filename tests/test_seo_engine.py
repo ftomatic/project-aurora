@@ -64,7 +64,7 @@ class SEOEngineTest(unittest.TestCase):
         self.assertNotIn("Cupcake Toppers", title)
         self.assertLessEqual(len(title), 140)
 
-    def test_title_builder_uses_available_etsy_seo_capacity(self) -> None:
+    def test_title_builder_avoids_repeated_keyword_stuffing(self) -> None:
         package = SEOEngine().build_package(
             {
                 "product_name": "Fox Garden Watercolor Clipart",
@@ -73,11 +73,14 @@ class SEOEngineTest(unittest.TestCase):
             }
         )
 
-        self.assertGreaterEqual(len(package.title), 120)
         self.assertLessEqual(len(package.title), 140)
         self.assertIn("Fox Garden", package.title)
-        self.assertIn("Watercolor Clipart", package.title)
+        self.assertIn("Commercial Use PNG Bundle", package.title)
+        self.assertIn("Instant Digital Download", package.title)
         self.assertFalse(package.title.endswith("..."))
+        words = [word.strip(",").casefold() for word in package.title.split()]
+        self.assertEqual(len(words), len(set(words)))
+        self.assertLessEqual(len(words), 15)
 
     def test_description_builder_returns_required_description(self) -> None:
         description = DescriptionBuilder().build_description(

@@ -37,6 +37,11 @@ STORYBOOK_TERMS = (
 )
 
 CLIPART_TERMS = (
+    "wedding",
+    "bridal",
+    "back to school",
+    "school supplies",
+    "classroom elements",
     "digital paper",
     "floral elements",
     "botanical elements",

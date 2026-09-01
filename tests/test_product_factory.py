@@ -863,6 +863,54 @@ class ProductFactoryTest(unittest.TestCase):
         self.assertNotIn("rabbit baking bread", prompt)
         self.assertNotIn("fairy-garden characters", prompt)
 
+    def test_back_to_school_prompt_requires_human_transparent_assets(self) -> None:
+        job = ProductionJob(
+            id="school-job",
+            priority="High",
+            product_name="Bright Back to School Kids Clipart",
+            category="classroom elements",
+            style="Watercolor",
+            seasonal_theme="Back to School",
+            keywords=("school", "students", "supplies"),
+            confidence_score=0.95,
+            estimated_competition="Low",
+            estimated_demand="High",
+            estimated_revenue=100,
+            status=READY,
+        )
+
+        prompt = _product_family_prompt(job, "character clipart", "CHARACTERS")
+
+        self.assertIn("human school children", prompt)
+        self.assertIn("backpacks, books, pencils", prompt)
+        self.assertIn("No animals", prompt)
+        self.assertIn("true transparent background", prompt)
+
+    def test_wedding_prompt_requires_transparent_artifacts_without_animals(self) -> None:
+        job = ProductionJob(
+            id="wedding-elements-job",
+            priority="High",
+            product_name="Blue Hydrangea Wedding Elements",
+            category="wedding clipart",
+            style="Pressed Flowers",
+            seasonal_theme="Wedding Season",
+            keywords=("wedding", "hydrangea", "floral"),
+            confidence_score=0.95,
+            estimated_competition="Low",
+            estimated_demand="High",
+            estimated_revenue=100,
+            status=READY,
+        )
+
+        prompt = _product_family_prompt(job, "wedding elements", GENERATION_MODE_WEDDING)
+
+        self.assertIn("wedding clipart elements only", prompt)
+        self.assertIn("true transparent", prompt)
+        self.assertIn("blue hydrangea blooms", prompt)
+        self.assertIn("No woodland animals", prompt)
+        self.assertIn("No rabbit", prompt)
+        self.assertIn("No scene", prompt)
+
     def test_botanical_prompt_requires_one_complete_central_composition(self) -> None:
         botanical_job = ProductionJob(
             id="botanical-job",

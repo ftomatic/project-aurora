@@ -69,6 +69,12 @@ CLIPART_HINTS = (
     "commercial graphics",
 )
 CHARACTER_HINTS = (
+    "back to school",
+    "school kids",
+    "school children",
+    "students",
+    "student",
+    "classroom characters",
     "character",
     "characters",
     "girl",

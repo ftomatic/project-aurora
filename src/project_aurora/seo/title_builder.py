@@ -3,8 +3,12 @@
 from __future__ import annotations
 
 
+ETSY_TITLE_MAX_CHARACTERS = 140
+ETSY_TITLE_MAX_WORDS = 15
+
+
 class TitleBuilder:
-    """Build deterministic Etsy listing titles."""
+    """Build concise, readable Etsy titles without keyword repetition."""
 
     def build_title(
         self,
@@ -12,53 +16,78 @@ class TitleBuilder:
         product_type: str,
         keywords: tuple[str, ...],
     ) -> str:
-        """Return an Etsy-ready listing title."""
+        """Return a natural Etsy title using distinct buyer-intent phrases."""
         product_lower = product_name.casefold()
         type_lower = product_type.casefold()
-        title_parts = [product_name]
-        if "invitation" in product_lower and "birthday" not in product_lower:
-            title_parts.extend(("Floral Printable Invitation", "Digital Wedding Invite"))
-        elif "birthday" in product_lower or "party" in product_lower or "party" in type_lower:
-            title_parts.extend(("Party Printable Bundle", "Digital Party Download"))
-            if "strawberry" in product_lower:
-                title_parts.append("Berry Birthday Printable")
-        elif "clipart" in product_lower or "clipart" in type_lower:
-            title_parts.extend(("PNG Clipart Bundle", "Commercial Use Graphics"))
-        elif "sticker" in product_lower or "sticker" in type_lower:
-            title_parts.extend(("Printable Planner Stickers", "Digital Sticker Sheet"))
-        elif "paper" in product_lower or "digital paper" in type_lower:
-            title_parts.extend(("Digital Paper Pack", "Printable Scrapbook Paper"))
-        elif (
-            "wall art" in type_lower
-            or "print" in product_lower
-            or " art" in f" {product_lower} "
-        ):
-            title_parts.extend(("Printable Wall Art", "Digital Art Download"))
-        else:
-            title_parts.append(product_type)
+        candidates = self._descriptor_candidates(product_lower, type_lower)
 
-        ordered_keywords = tuple(
-            keyword for keyword in keywords if " " in keyword.strip()
-        ) + tuple(keyword for keyword in keywords if " " not in keyword.strip())
-        for keyword in ordered_keywords:
-            legacy_party_terms = {
-                "cupcake toppers",
-                "favor tags",
-                "girls party decor",
-                "summer berry invitation",
-            }
-            if len(keyword) <= 32 and keyword.casefold() not in legacy_party_terms:
-                title_parts.append(keyword.title())
-
-        selected: list[str] = []
-        seen: set[str] = set()
-        for part in title_parts:
-            normalized = " ".join(part.casefold().split())
-            if not normalized or normalized in seen:
+        selected = [product_name.strip()]
+        used_words = set(_meaningful_words(product_name))
+        for phrase in candidates:
+            phrase_words = _meaningful_words(phrase)
+            if not phrase_words or phrase_words & used_words:
                 continue
-            candidate = ", ".join((*selected, part))
-            if len(candidate) > 140:
+            proposed = ", ".join((*selected, phrase))
+            if len(proposed) > ETSY_TITLE_MAX_CHARACTERS:
                 continue
-            selected.append(part)
-            seen.add(normalized)
+            if len(proposed.split()) > ETSY_TITLE_MAX_WORDS:
+                continue
+            selected.append(phrase)
+            used_words.update(phrase_words)
+            if len(selected) == 4:
+                break
         return ", ".join(selected)
+
+    @staticmethod
+    def _descriptor_candidates(
+        product_name: str,
+        product_type: str,
+    ) -> tuple[str, ...]:
+        combined = f"{product_name} {product_type}"
+        if "invitation" in combined or "wedding" in combined:
+            return (
+                "Floral Printable",
+                "Editable Stationery",
+                "Instant Digital Download",
+            )
+        if "birthday" in combined or "party" in product_type:
+            return (
+                "Party Bundle",
+                "Kids Decor",
+                "Instant Digital Download",
+            )
+        if "clipart" in combined:
+            return (
+                "Commercial Use PNG Bundle",
+                "Printable Craft Graphics",
+                "Instant Digital Download",
+            )
+        if "sticker" in combined:
+            return (
+                "Printable Planner Set",
+                "Cricut Craft Graphics",
+                "Instant Digital Download",
+            )
+        if "paper" in combined:
+            return (
+                "Printable Scrapbook Pack",
+                "Seamless Craft Patterns",
+                "Instant Digital Download",
+            )
+        if "wall art" in product_type or "print" in product_name or " art" in f" {product_name} ":
+            return (
+                "Printable Home Decor",
+                "Gallery Design",
+                "Instant Digital Download",
+            )
+        return (product_type.title(), "Instant Digital Download")
+
+
+def _meaningful_words(value: str) -> frozenset[str]:
+    normalized = value.casefold().replace("&", " and ").replace("-", " ")
+    return frozenset(
+        word.strip("'.,/()")
+        for word in normalized.split()
+        if len(word.strip("'.,/()")) > 2
+        and word.strip("'.,/()") not in {"and", "the", "for", "with"}
+    )

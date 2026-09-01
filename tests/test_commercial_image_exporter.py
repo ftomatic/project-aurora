@@ -238,7 +238,24 @@ class CommercialImageExporterTest(unittest.TestCase):
             (),
         )
 
-    def test_wedding_exports_as_opaque_without_clipart_transparency_rule(self) -> None:
+    def test_wedding_exports_as_transparent_separated_assets(self) -> None:
+        self.write_valid_sources()
+
+        result = CommercialImageExporter(
+            source_dir=self.source_dir,
+            output_dir=self.output_dir,
+            product_family=GENERATION_MODE_WEDDING,
+        ).export()
+
+        self.assertEqual(result.status, "SUCCESS")
+        output = Path(result.exported_files[0])
+        self.assertLess(inspect_png(output).alpha_minimum, 255)
+        self.assertEqual(
+            validate_commercial_png(output, product_family=GENERATION_MODE_WEDDING),
+            (),
+        )
+
+    def test_wedding_rejects_opaque_stationery_page(self) -> None:
         for index in range(1, 5):
             write_png(
                 self.source_dir / f"wedding_{index:02d}.png",
@@ -252,8 +269,8 @@ class CommercialImageExporterTest(unittest.TestCase):
             product_family=GENERATION_MODE_WEDDING,
         ).export()
 
-        self.assertEqual(result.status, "SUCCESS")
-        self.assertEqual(validate_commercial_png(Path(result.exported_files[0]), product_family=GENERATION_MODE_WEDDING), ())
+        self.assertEqual(result.status, "FAILED")
+        self.assertTrue(result.errors)
 
     def test_product_family_resolves_clipart_storybook_scene_and_digital_paper(self) -> None:
         clipart = resolve_product_image_family(

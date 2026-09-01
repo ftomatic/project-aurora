@@ -612,7 +612,7 @@ def _job_matches_generation_mode(job: ProductionJob, generation_mode: str) -> bo
     if mode == GENERATION_MODE_BOTANICAL:
         return any(term in context for term in ("botanical", "floral", "flower", "tree", "blossom"))
     if mode == GENERATION_MODE_CHARACTERS:
-        return any(term in context for term in ("character", "characters", "kid", "kids", "children", "people", "fairy", "magical"))
+        return any(term in context for term in ("character", "characters", "kid", "kids", "children", "people", "fairy", "magical", "back to school", "student", "school"))
     if mode == GENERATION_MODE_STORYBOOK:
         return any(term in context for term in ("storybook", "woodland", "nursery", "tea party", "picnic", "garden", "bakery", "rabbit", "fox", "mouse", "bear", "hedgehog"))
     if mode == GENERATION_MODE_ORIGINAL:

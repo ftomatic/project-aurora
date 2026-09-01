@@ -91,6 +91,15 @@ class GenerationStrategyTest(unittest.TestCase):
             GENERATION_MODE_WEDDING,
         )
 
+    def test_auto_back_to_school_uses_transparent_character_family(self) -> None:
+        decision = GenerationStrategyResolver().resolve(
+            product_name="Bright Back to School Kids Clipart",
+            product_category="classroom elements",
+        )
+
+        self.assertEqual(decision.generation_mode, GENERATION_MODE_CHARACTERS)
+        self.assertEqual(decision.listing_family, GENERATION_MODE_CLIPART)
+
     def test_listing_family_mapping(self) -> None:
         self.assertEqual(
             listing_family_for_generation_mode(GENERATION_MODE_STORYBOOK),

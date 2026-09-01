@@ -1942,17 +1942,24 @@ def _wedding_prompt(
     canonical_product_type: str,
     art_package: ArtDirectionPackage | None = None,
 ) -> str:
+    subjects = _prompt_subjects(job, GENERATION_MODE_WEDDING)
     palette = _prompt_palette(job, GENERATION_MODE_WEDDING)
     art_descriptor = art_package.descriptor() if art_package else ""
     return (
-        "Create one polished wedding stationery printable design. "
+        "Create actual customer wedding clipart elements only. "
         f"Product: {job.product_name}. "
         f"Product type: {canonical_product_type}. "
+        f"Show: {subjects}. "
         f"Canonical art direction: {art_descriptor} "
         f"Palette: {palette}. "
-        "Elegant watercolor or pressed-flower styling, refined wedding composition, "
-        "commercial printable quality, full opaque paper background, balanced margins, "
-        "no cropped artwork, no mockup, no product label, no packaging preview."
+        "Elegant watercolor or pressed-flower styling with separated commercial-use artifacts. "
+        "Each element must be fully visible, clean edged, and isolated on a true transparent "
+        "RGBA background. Keep all artwork inside the central 70 percent of the canvas with at "
+        "least 15 percent transparent padding on every side. No woodland animals. No rabbit, "
+        "bunny, fox, bear, mouse, hedgehog, bird, pet, creature, animal bride, or animal groom. "
+        "No people unless the product explicitly requests people. No scene, room, landscape, "
+        "opaque paper, stationery page, invitation layout, menu layout, grid, frame, border, "
+        "mockup, product label, packaging preview, typography, text, logo, or watermark."
     )
 
 
@@ -1974,6 +1981,7 @@ def _family_requires_transparency(product_family: str) -> bool:
         CLIPART,
         GENERATION_MODE_CHARACTERS,
         GENERATION_MODE_BOTANICAL,
+        GENERATION_MODE_WEDDING,
     }
 
 
@@ -2195,10 +2203,10 @@ def _product_family_requirements(product_family: str) -> tuple[str, ...]:
         )
     if product_family == GENERATION_MODE_WEDDING:
         return (
-            "opaque wedding stationery printable",
-            "elegant full-canvas printable composition",
-            "no transparent cutout requirement",
-            "no mockup, product label, or packaging preview",
+            "transparent separated wedding artifacts",
+            "fully transparent background",
+            "no woodland animals or animal characters",
+            "no scene, stationery page, mockup, product label, or packaging preview",
         )
     return (
         "isolated watercolor clipart elements",
@@ -2352,8 +2360,10 @@ def _product_family_negative_prompt(product_family: str) -> str:
         )
     if product_family == GENERATION_MODE_WEDDING:
         return (
-            f"{common}, no product label, no packaging preview, no mockup, "
-            "no cropped florals, no cluttered typography"
+            f"{common}, no background, no opaque paper, no stationery page, no invitation layout, "
+            "no product label, no packaging preview, no mockup, no cropped florals, "
+            "no woodland animals, no rabbit, no bunny, no fox, no bear, no mouse, "
+            "no hedgehog, no bird, no pet, no creature, no animal bride, no animal groom"
         )
     return (
         f"{common}, no background, no paper texture, no watercolor paper, "
@@ -2366,6 +2376,12 @@ def _product_family_negative_prompt(product_family: str) -> str:
 def _prompt_subjects(job: ProductionJob, product_family: str = "") -> str:
     text = f"{job.product_name} {' '.join(job.keywords)}".casefold()
     if product_family.upper() == GENERATION_MODE_CHARACTERS:
+        if "back to school" in text or "school" in text or "student" in text:
+            return (
+                "separated full-body human school children with backpacks, books, pencils, "
+                "crayons, lunch boxes, rulers, notebooks, and bright classroom accessories; "
+                "human children only and no animals or fantasy anatomy"
+            )
         if "bak" in text:
             return "separated full-body human kid baker characters with aprons, mixing bowls, recipe cards, bread baskets, and cheerful bakery accessories"
         if "garden" in text:
@@ -2375,6 +2391,20 @@ def _prompt_subjects(job: ProductionJob, product_family: str = "") -> str:
         if "event" in text or "party" in text or "birthday" in text:
             return "separated full-body human kid party characters with balloons, cakes, wrapped gifts, banners, and cheerful event accessories"
         return "separated full-body human kid characters with colorful clothing, gentle expressions, craft props, flowers, and everyday storybook accessories"
+    if product_family.upper() == GENERATION_MODE_WEDDING:
+        if "hydrangea" in text:
+            floral = "blue hydrangea blooms and leaves"
+        elif "wildflower" in text:
+            floral = "colorful wildflower bouquets and delicate floral sprigs"
+        elif "rose" in text:
+            floral = "vintage rose blooms, rosebuds, and greenery"
+        else:
+            floral = "wedding flowers, botanical sprigs, and greenery"
+        return (
+            f"separated {floral}, ribbon bows, wedding rings, champagne glasses, cake details, "
+            "floral wreaths, table accents, and ceremony embellishments; artifacts only, "
+            "with no animals, woodland characters, or complete stationery page"
+        )
     if "bird" in text:
         return "song birds, nests, flowering tree branches, garden flowers, ribbons, and tiny nature props"
     if "fairy" in text or "magical" in text:
